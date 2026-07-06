@@ -1,0 +1,432 @@
+import {getAllServices, getSettings} from './service.js'
+import {getClientSubscriptions, isLowOnSpace, buildServiceSnapshot} from './snapshots.js'
+import {matchesText} from './intents.js'
+import {buildCommunicationsIndex} from './communications.js'
+import {buildChatContextFromSnapshots} from './context.js'
+import {handleRenewalsChat} from './chat.js'
+import {httpError} from '../../../utils/httpError.js'
+
+export async function summary(req, res) {
+  const token = req.auth.token
+  const {customerId} = req.query
+
+  const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const analysisPeriod = Number(settings.analysis_period ?? 30)
+  const now = new Date()
+  const limit = new Date(now.getTime() + analysisPeriod * 864e5)
+
+  const filtered = services.filter(s => (customerId ? s.customer?.id === customerId : true))
+
+  let inScadenza = 0
+  let spazioEsaurito = 0
+  let inEsaurimento = 0
+
+  for (const s of filtered) {
+    for (const sub of getClientSubscriptions(s)) {
+      if (!sub.endsOn) continue
+      const d = new Date(sub.endsOn)
+
+      if (d >= now && d <= limit) inScadenza++
+    }
+
+    const used = s?.pleskDomain?.statsDiskUsage?.totalSize || 0
+    const quota = s?.pleskDomain?.statsDiskUsage?.quota || 0
+
+    if (quota && used / quota >= 1) spazioEsaurito++
+    else if (isLowOnSpace(quota, (used / quota) * 100, settings.renewals_low_thresholds || [])) {
+      inEsaurimento++
+    }
+  }
+
+  res.json({
+    totale: filtered.length,
+    inScadenza,
+    spazioEsaurito,
+    inEsaurimento,
+  })
+}
+
+export async function todo(req, res) {
+  const token = req.auth.token
+  const {customerId} = req.query
+
+  const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const analysisPeriod = Number(settings.analysis_period ?? 30)
+  const thresholds = settings.renewals_low_thresholds || []
+  const now = new Date()
+  const todos = []
+
+  for (const s of services) {
+    if (customerId && s.customer?.id !== customerId) continue
+
+    const nome = s.name
+
+    for (const sub of getClientSubscriptions(s)) {
+      if (!sub.endsOn) continue
+
+      const d = new Date(sub.endsOn)
+      const giorni = (d - now) / 864e5
+
+      if (giorni >= 0 && giorni <= 7) {
+        todos.push({
+          tipo: 'rinnovo',
+          servizio: nome,
+          priorita: 'alta',
+          msg: `Rinnovo urgente (${Math.ceil(giorni)} giorni)`,
+        })
+      } else if (giorni > 7 && giorni <= analysisPeriod) {
+        todos.push({
+          tipo: 'rinnovo',
+          servizio: nome,
+          priorita: 'media',
+          msg: `Rinnovo entro ${d.toLocaleDateString('it-IT')}`,
+        })
+      }
+    }
+
+    const used = s?.pleskDomain?.statsDiskUsage?.totalSize || 0
+    const quota = s?.pleskDomain?.statsDiskUsage?.quota || 0
+
+    if (quota) {
+      const percent = (used / quota) * 100
+
+      if (percent >= 100) {
+        todos.push({
+          tipo: 'upgrade',
+          servizio: nome,
+          priorita: 'alta',
+          msg: 'Spazio esaurito',
+        })
+      } else if (isLowOnSpace(quota, percent, thresholds)) {
+        todos.push({
+          tipo: 'upgrade',
+          servizio: nome,
+          priorita: 'media',
+          msg: `Spazio in esaurimento (${percent.toFixed(1)}%)`,
+        })
+      }
+    }
+
+    if (s.dontRenew) {
+      todos.push({
+        tipo: 'verifica',
+        servizio: nome,
+        priorita: 'media',
+        msg: 'Servizio marcato NON RINNOVARE',
+      })
+    }
+  }
+
+  const priorityOrder = {alta: 1, media: 2, bassa: 3}
+  todos.sort((a, b) => priorityOrder[a.priorita] - priorityOrder[b.priorita])
+
+  res.json({
+    totale: todos.length,
+    items: todos.slice(0, 20),
+  })
+}
+
+export async function customerReport(req, res) {
+  const token = req.auth.token
+  const {customerId} = req.query
+
+  if (!customerId) {
+    throw httpError(400, 'customerId obbligatorio')
+  }
+
+  const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const analysisPeriod = Number(settings.analysis_period ?? 30)
+  const thresholds = settings.renewals_low_thresholds || []
+
+  const filtered = services.filter(s => String(s?.customer?.id) === String(customerId))
+  const snapshots = filtered.map(s => buildServiceSnapshot(s, thresholds, analysisPeriod))
+
+  const total = snapshots.length
+  const expiring = snapshots.filter(s => s.expiringCount > 0)
+  const urgent = snapshots.filter(s => s.urgentRenewalsCount > 0)
+  const full = snapshots.filter(s => s.isFull)
+  const low = snapshots.filter(s => s.isLow && !s.isFull)
+  const dontRenew = snapshots.filter(s => s.dontRenew)
+
+  const customerName = snapshots[0]?.customerName || '—'
+
+  const priorities = [
+    ...full.map(s => ({
+      tipo: 'upgrade',
+      priorita: 'alta',
+      servizio: s.name,
+      msg: 'Spazio esaurito',
+    })),
+    ...urgent.map(s => ({
+      tipo: 'rinnovo',
+      priorita: 'alta',
+      servizio: s.name,
+      msg: `Rinnovo urgente${s.nextRenewalDate ? ` entro ${s.nextRenewalDate}` : ''}`,
+    })),
+    ...low.map(s => ({
+      tipo: 'upgrade',
+      priorita: 'media',
+      servizio: s.name,
+      msg: `Spazio in esaurimento (${s.percent.toFixed(1)}%)`,
+    })),
+    ...dontRenew.map(s => ({
+      tipo: 'verifica',
+      priorita: 'media',
+      servizio: s.name,
+      msg: 'Servizio marcato NON RINNOVARE',
+    })),
+  ].slice(0, 10)
+
+  res.json({
+    customerId,
+    customerName,
+    analysisPeriod,
+    summary: {
+      total,
+      expiring: expiring.length,
+      urgent: urgent.length,
+      full: full.length,
+      low: low.length,
+      dontRenew: dontRenew.length,
+    },
+    priorities,
+    text:
+      `Cliente: ${customerName}\n` +
+      `Servizi totali: ${total}\n` +
+      `Rinnovi imminenti: ${expiring.length}\n` +
+      `Rinnovi urgenti: ${urgent.length}\n` +
+      `Spazio esaurito: ${full.length}\n` +
+      `Spazio in esaurimento: ${low.length}\n` +
+      `Non rinnovare: ${dontRenew.length}`,
+  })
+}
+
+export async function groupReport(req, res) {
+  const token = req.auth.token
+  const {groupId} = req.query
+
+  if (!groupId) {
+    throw httpError(400, 'groupId obbligatorio')
+  }
+
+  const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const analysisPeriod = Number(settings.analysis_period ?? 30)
+  const thresholds = settings.renewals_low_thresholds || []
+
+  const filtered = services.filter(s => String(s?.customer?.group?.id) === String(groupId))
+  const snapshots = filtered.map(s => buildServiceSnapshot(s, thresholds, analysisPeriod))
+
+  const total = snapshots.length
+  const expiring = snapshots.filter(s => s.expiringCount > 0)
+  const urgent = snapshots.filter(s => s.urgentRenewalsCount > 0)
+  const full = snapshots.filter(s => s.isFull)
+  const low = snapshots.filter(s => s.isLow && !s.isFull)
+  const dontRenew = snapshots.filter(s => s.dontRenew)
+
+  const groupName = snapshots[0]?.groupName || '—'
+
+  const priorities = [
+    ...full.map(s => ({
+      tipo: 'upgrade',
+      priorita: 'alta',
+      servizio: s.name,
+      cliente: s.customerName,
+      msg: 'Spazio esaurito',
+    })),
+    ...urgent.map(s => ({
+      tipo: 'rinnovo',
+      priorita: 'alta',
+      servizio: s.name,
+      cliente: s.customerName,
+      msg: `Rinnovo urgente${s.nextRenewalDate ? ` entro ${s.nextRenewalDate}` : ''}`,
+    })),
+    ...low.map(s => ({
+      tipo: 'upgrade',
+      priorita: 'media',
+      servizio: s.name,
+      cliente: s.customerName,
+      msg: `Spazio in esaurimento (${s.percent.toFixed(1)}%)`,
+    })),
+    ...dontRenew.map(s => ({
+      tipo: 'verifica',
+      priorita: 'media',
+      servizio: s.name,
+      cliente: s.customerName,
+      msg: 'Servizio marcato NON RINNOVARE',
+    })),
+  ].slice(0, 10)
+
+  res.json({
+    groupId,
+    groupName,
+    analysisPeriod,
+    summary: {
+      total,
+      expiring: expiring.length,
+      urgent: urgent.length,
+      full: full.length,
+      low: low.length,
+      dontRenew: dontRenew.length,
+    },
+    priorities,
+    text:
+      `Gruppo: ${groupName}\n` +
+      `Servizi totali: ${total}\n` +
+      `Rinnovi imminenti: ${expiring.length}\n` +
+      `Rinnovi urgenti: ${urgent.length}\n` +
+      `Spazio esaurito: ${full.length}\n` +
+      `Spazio in esaurimento: ${low.length}\n` +
+      `Non rinnovare: ${dontRenew.length}`,
+  })
+}
+
+export async function criticalServices(req, res) {
+  const token = req.auth.token
+  const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const analysisPeriod = Number(settings.analysis_period ?? 30)
+  const thresholds = settings.renewals_low_thresholds || []
+
+  const items = services
+    .map(s => buildServiceSnapshot(s, thresholds, analysisPeriod))
+    .flatMap(s => {
+      const out = []
+
+      if (s.isFull) {
+        out.push({
+          tipo: 'upgrade',
+          priorita: 'alta',
+          servizio: s.name,
+          cliente: s.customerName,
+          gruppo: s.groupName,
+          msg: 'Spazio esaurito',
+        })
+      }
+
+      if (s.urgentRenewalsCount > 0) {
+        out.push({
+          tipo: 'rinnovo',
+          priorita: 'alta',
+          servizio: s.name,
+          cliente: s.customerName,
+          gruppo: s.groupName,
+          msg: `Rinnovo urgente${s.nextRenewalDate ? ` entro ${s.nextRenewalDate}` : ''}`,
+        })
+      }
+
+      if (s.dontRenew && s.autoRenew) {
+        out.push({
+          tipo: 'anomalia',
+          priorita: 'alta',
+          servizio: s.name,
+          cliente: s.customerName,
+          gruppo: s.groupName,
+          msg: 'Servizio con NON RINNOVARE e RINNOVO AUTOMATICO attivi',
+        })
+      }
+
+      return out
+    })
+
+  res.json({
+    totale: items.length,
+    items: items.slice(0, 50),
+  })
+}
+
+export async function search(req, res) {
+  const token = req.auth.token
+  const {q} = req.query
+
+  if (!q || String(q).trim().length < 2) {
+    throw httpError(400, 'Parametro q obbligatorio, minimo 2 caratteri')
+  }
+
+  const services = await getAllServices()
+
+  const items = services
+    .filter(s => {
+      return (
+        matchesText(s?.name, q) ||
+        matchesText(s?.customer?.name, q) ||
+        matchesText(s?.customer?.group?.name, q) ||
+        matchesText(s?.customer?.businessName, q)
+      )
+    })
+    .map(s => ({
+      id: s.id,
+      servizio: s?.name || '—',
+      cliente: s?.customer?.name || '—',
+      gruppo: s?.customer?.group?.name || null,
+    }))
+    .slice(0, 50)
+
+  res.json({
+    totale: items.length,
+    items,
+  })
+}
+
+export async function chatContext(req, res) {
+  const token = req.auth.token
+  const {customerId, groupId} = req.query
+
+  const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const analysisPeriod = Number(settings.analysis_period ?? 30)
+  const thresholds = settings.renewals_low_thresholds || []
+
+  let filtered = services
+
+  if (customerId) {
+    filtered = filtered.filter(s => String(s?.customer?.id) === String(customerId))
+  }
+
+  if (groupId) {
+    filtered = filtered.filter(s => String(s?.customer?.group?.id) === String(groupId))
+  }
+
+  const snapshots = filtered.map(s => buildServiceSnapshot(s, thresholds, analysisPeriod))
+  const communications = buildCommunicationsIndex(filtered)
+
+  res.json({
+    ...buildChatContextFromSnapshots({
+      snapshots,
+      customerId,
+      groupId,
+      analysisPeriod,
+      communications,
+    }),
+  })
+}
+
+export async function chat(req, res) {
+  const token = req.auth.token
+  const {message, context = {}, customerId = null, groupId = null} = req.body || {}
+
+  const resolvedCustomerId = context.customerId || customerId || null
+  const resolvedGroupId = context.groupId || groupId || null
+  const resolvedServiceId = context.serviceId || null
+
+  if (!message || String(message).trim().length < 2) {
+    throw httpError(400, 'message obbligatorio, minimo 2 caratteri')
+  }
+
+  const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const result = await handleRenewalsChat({
+    message,
+    customerId: resolvedCustomerId,
+    groupId: resolvedGroupId,
+    serviceId: resolvedServiceId,
+    context,
+    services,
+    settings,
+  })
+
+  res.json(result)
+}

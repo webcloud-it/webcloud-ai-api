@@ -1,22 +1,37 @@
 import cors from 'cors'
-import dotenv from 'dotenv'
 import express from 'express'
 
-dotenv.config()
+import {env} from './config/env.js'
+import {errorHandler} from './middlewares/errorHandler.js'
+import {notFoundHandler} from './middlewares/notFoundHandler.js'
+import chatRouter from './routes/chat.js'
+import modulesRouter from './routes/modules.js'
+import {authToken} from './middlewares/authToken.js'
 
 const app = express()
-const port = process.env.PORT || 3000
 
-app.use(cors())
+app.use(
+  cors({
+    origin: env.corsOrigin,
+  })
+)
+
 app.use(express.json({limit: '2mb'}))
 
 app.get('/health', (req, res) => {
   res.json({
     ok: true,
     service: 'webcloud-ai-api',
+    env: env.nodeEnv,
   })
 })
 
-app.listen(port, () => {
-  console.log(`webcloud-ai-api listening on port ${port}`)
+app.use('/api/chat', authToken, chatRouter)
+app.use('/api/modules', authToken, modulesRouter)
+
+app.use(notFoundHandler)
+app.use(errorHandler)
+
+app.listen(env.port, () => {
+  console.log(`webcloud-ai-api listening on port ${env.port}`)
 })
