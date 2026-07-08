@@ -5,6 +5,8 @@ import {buildCommunicationsIndex} from './communications.js'
 import {buildChatContextFromSnapshots} from './context.js'
 import {handleRenewalsChat} from './chat.js'
 import {httpError} from '../../../utils/httpError.js'
+import {buildTodoPayloadFromServices} from './todos.js'
+import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 
 export async function summary(req, res) {
   const token = req.auth.token
@@ -48,83 +50,19 @@ export async function summary(req, res) {
 }
 
 export async function todo(req, res) {
-  const token = req.auth.token
   const {customerId} = req.query
 
   const [services, settings] = await Promise.all([getAllServices(), getSettings()])
 
-  const analysisPeriod = Number(settings.analysis_period ?? 30)
-  const thresholds = settings.renewals_low_thresholds || []
-  const now = new Date()
-  const todos = []
-
-  for (const s of services) {
-    if (customerId && s.customer?.id !== customerId) continue
-
-    const nome = s.name
-
-    for (const sub of getClientSubscriptions(s)) {
-      if (!sub.endsOn) continue
-
-      const d = new Date(sub.endsOn)
-      const giorni = (d - now) / 864e5
-
-      if (giorni >= 0 && giorni <= 7) {
-        todos.push({
-          tipo: 'rinnovo',
-          servizio: nome,
-          priorita: 'alta',
-          msg: `Rinnovo urgente (${Math.ceil(giorni)} giorni)`,
-        })
-      } else if (giorni > 7 && giorni <= analysisPeriod) {
-        todos.push({
-          tipo: 'rinnovo',
-          servizio: nome,
-          priorita: 'media',
-          msg: `Rinnovo entro ${d.toLocaleDateString('it-IT')}`,
-        })
-      }
-    }
-
-    const used = s?.pleskDomain?.statsDiskUsage?.totalSize || 0
-    const quota = s?.pleskDomain?.statsDiskUsage?.quota || 0
-
-    if (quota) {
-      const percent = (used / quota) * 100
-
-      if (percent >= 100) {
-        todos.push({
-          tipo: 'upgrade',
-          servizio: nome,
-          priorita: 'alta',
-          msg: 'Spazio esaurito',
-        })
-      } else if (isLowOnSpace(quota, percent, thresholds)) {
-        todos.push({
-          tipo: 'upgrade',
-          servizio: nome,
-          priorita: 'media',
-          msg: `Spazio in esaurimento (${percent.toFixed(1)}%)`,
-        })
-      }
-    }
-
-    if (s.dontRenew) {
-      todos.push({
-        tipo: 'verifica',
-        servizio: nome,
-        priorita: 'media',
-        msg: 'Servizio marcato NON RINNOVARE',
-      })
-    }
-  }
-
-  const priorityOrder = {alta: 1, media: 2, bassa: 3}
-  todos.sort((a, b) => priorityOrder[a.priorita] - priorityOrder[b.priorita])
+  const payload = buildTodoPayloadFromServices({
+    services,
+    settings,
+    customerId,
+  })
 
   res.json({
-    totale: todos.length,
-    items: todos.slice(0, 20),
+    totale: payload.totale,
+    items: payload.items,
   })
 }
 
@@ -405,8 +343,8 @@ export async function chatContext(req, res) {
 }
 
 export async function chat(req, res) {
-  const token = req.auth.token
-  const {message, context = {}, customerId = null, groupId = null} = req.body || {}
+  const startedAt = Date.now()
+  const {message, context = {}, customerId = null, groupId = null, history = []} = req.body || {}
 
   const resolvedCustomerId = context.customerId || customerId || null
   const resolvedGroupId = context.groupId || groupId || null
@@ -416,7 +354,39 @@ export async function chat(req, res) {
     throw httpError(400, 'message obbligatorio, minimo 2 caratteri')
   }
 
+  const directPlan = planChatRequest({
+    message,
+    context: {
+      ...context,
+      customerId: resolvedCustomerId,
+      groupId: resolvedGroupId,
+      serviceId: resolvedServiceId,
+    },
+  })
+
+  if (directPlan.type === 'direct') {
+    return res.json({
+      ok: true,
+      intent: directPlan.intent,
+      source: 'direct',
+      reply: directPlan.reply,
+      data: null,
+      meta: {
+        moduleId: 'facile.renewals',
+        source: 'direct',
+        intent: directPlan.intent,
+        planType: directPlan.type,
+        timings: {
+          dataLoadMs: 0,
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
+  }
+
+  const dataLoadStartedAt = Date.now()
   const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+  const dataLoadMs = Date.now() - dataLoadStartedAt
 
   const result = await handleRenewalsChat({
     message,
@@ -424,9 +394,25 @@ export async function chat(req, res) {
     groupId: resolvedGroupId,
     serviceId: resolvedServiceId,
     context,
+    history: Array.isArray(history) ? history : [],
     services,
     settings,
+    debug: {
+      dataLoadMs,
+      servicesCount: Array.isArray(services) ? services.length : null,
+    },
   })
 
-  res.json(result)
+  res.json({
+    ...result,
+    meta: {
+      ...(result.meta || {}),
+      timings: {
+        ...(result.meta?.timings || {}),
+        dataLoadMs,
+        totalMs: Date.now() - startedAt,
+      },
+      servicesCount: Array.isArray(services) ? services.length : null,
+    },
+  })
 }
