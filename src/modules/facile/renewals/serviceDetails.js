@@ -1,5 +1,5 @@
 import {buildServiceSnapshot, getClientSubscriptions} from './snapshots.js'
-import {matchesText} from './intents.js'
+import {matchesText} from '../../../utils/text.js'
 
 export function extractServiceDetailQuery(message = '') {
   const text = String(message || '').trim()

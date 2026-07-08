@@ -1,4 +1,4 @@
-import {normalizeText} from './intents.js'
+import {normalizeText} from '../../../utils/text.js'
 
 export function buildCommunicationsIndex(services = []) {
   return services.flatMap(service => {

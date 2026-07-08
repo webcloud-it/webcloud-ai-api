@@ -1,14 +1,6 @@
-export function normalizeText(value = '') {
-  return String(value || '')
-    .toLowerCase()
-    .trim()
-}
+import {matchesText, normalizeText} from '../../../utils/text.js'
 
-export function matchesText(value, q) {
-  return String(value || '')
-    .toLowerCase()
-    .includes(String(q || '').toLowerCase())
-}
+export {matchesText, normalizeText} from '../../../utils/text.js'
 
 function matchAny(text, patterns = []) {
   return patterns.some(pattern => pattern.test(text))
