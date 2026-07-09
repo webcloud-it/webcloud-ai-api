@@ -156,6 +156,57 @@ function extractLimit(message = '') {
   }
 }
 
+function restoreDateRange(dateRange = null) {
+  if (!dateRange) return null
+
+  const start = parseDateValue(dateRange.start)
+  const end = parseDateValue(dateRange.end)
+
+  if (!start || !end) {
+    return null
+  }
+
+  return {
+    ...dateRange,
+    start,
+    end,
+  }
+}
+
+function restoreServiceListFilters(filters = []) {
+  return (Array.isArray(filters) ? filters : []).map(filter => ({
+    ...filter,
+    dateRange: restoreDateRange(filter?.dateRange),
+  }))
+}
+
+function buildQueryFromPreviousState({
+  previousQuery = {},
+  pagination = {},
+  fallbackMessage = '',
+} = {}) {
+  const filters = restoreServiceListFilters(previousQuery.filters)
+  const fallbackLimit = clampLimit(previousQuery.limit, DEFAULT_LIMIT)
+  const limit = clampLimit(pagination.limit, fallbackLimit)
+  const offset = Math.max(Number(pagination.offset || 0), 0)
+
+  return {
+    type: 'service-list-query',
+    label: previousQuery.label || describeFilters(filters),
+    filters,
+    limit,
+    offset,
+    requestedLimit: Boolean(pagination.limit),
+    requestedAll: false,
+    requestedMore: pagination.direction === 'next',
+    requestedPrevious: pagination.direction === 'previous',
+    requestedFirst: pagination.direction === 'first',
+    sourceMessage: previousQuery.sourceMessage || compact(fallbackMessage),
+    includeDontRenew:
+      typeof previousQuery.includeDontRenew === 'boolean' ? previousQuery.includeDontRenew : null,
+  }
+}
+
 function parseDateValue(value) {
   if (!value) return null
 
@@ -1261,11 +1312,36 @@ function applyScope(services = [], {customerId = null, groupId = null, serviceId
 export function parseServiceListQuery({
   message = '',
   paginationMessage = '',
+  previousQuery = null,
+  pagination = null,
   settings = {},
   now = new Date(),
 } = {}) {
-  const limitInfo = extractLimit(paginationMessage || message)
+  if (previousQuery?.filters?.length) {
+    return buildQueryFromPreviousState({
+      previousQuery,
+      pagination,
+      fallbackMessage: message,
+    })
+  }
+
+  const limitInfo = extractLimit(pagination ? message : paginationMessage || message)
   const filters = buildFilters({message, settings, now})
+
+  if (pagination) {
+    return {
+      type: 'service-list-query',
+      label: describeFilters(filters),
+      filters,
+      limit: clampLimit(pagination.limit, limitInfo.limit),
+      offset: Math.max(Number(pagination.offset || 0), 0),
+      requestedLimit: Boolean(pagination.limit),
+      requestedAll: false,
+      requestedMore: pagination.direction !== 'previous',
+      requestedPrevious: pagination.direction === 'previous',
+      sourceMessage: compact(message),
+    }
+  }
 
   return {
     type: 'service-list-query',
@@ -1276,6 +1352,8 @@ export function parseServiceListQuery({
     requestedLimit: limitInfo.requestedLimit,
     requestedAll: limitInfo.requestedAll,
     requestedMore: limitInfo.requestedMore,
+    requestedPrevious: false,
+    sourceMessage: compact(message),
   }
 }
 
@@ -1284,18 +1362,30 @@ export function buildServiceListPayload({
   settings = {},
   message = '',
   paginationMessage = '',
+  previousQuery = null,
+  pagination = null,
   customerId = null,
   groupId = null,
   serviceId = null,
   now = new Date(),
 } = {}) {
-  const query = parseServiceListQuery({message, paginationMessage, settings, now})
-  const scoped = applyScope(services, {customerId, groupId, serviceId})
-  const includeDontRenew = shouldIncludeDontRenew({
+  const query = parseServiceListQuery({
     message,
-    filters: query.filters,
-    requestedAll: query.requestedAll,
+    paginationMessage,
+    previousQuery,
+    pagination,
+    settings,
+    now,
   })
+  const scoped = applyScope(services, {customerId, groupId, serviceId})
+  const includeDontRenew =
+    typeof query.includeDontRenew === 'boolean'
+      ? query.includeDontRenew
+      : shouldIncludeDontRenew({
+          message,
+          filters: query.filters,
+          requestedAll: query.requestedAll,
+        })
 
   const matched = scoped.filter(service => {
     if (!includeDontRenew && isDontRenewService(service)) {
@@ -1311,9 +1401,17 @@ export function buildServiceListPayload({
   )
   const groupedItems = groupServiceListItems(rawItems)
   const items = groupedItems.slice(query.offset, query.offset + query.limit)
+  const hasMore = groupedItems.length > query.offset + items.length
+  const previousOffset = query.offset > 0 ? Math.max(query.offset - query.limit, 0) : null
+  const nextOffset = hasMore ? query.offset + items.length : null
 
   return {
     type: 'service-list',
+    scope: {
+      customerId: customerId || null,
+      groupId: groupId || null,
+      serviceId: serviceId || null,
+    },
     query: {
       label: query.label,
       includeDontRenew,
@@ -1335,12 +1433,19 @@ export function buildServiceListPayload({
       requestedLimit: query.requestedLimit,
       requestedAll: query.requestedAll,
       requestedMore: query.requestedMore,
+      requestedPrevious: query.requestedPrevious,
+      requestedFirst: query.requestedFirst === true,
+      sourceMessage: query.sourceMessage,
     },
     totale: matched.length,
     groups: groupedItems.length,
     grouped: groupedItems.length !== rawItems.length,
     shown: items.length,
-    truncated: groupedItems.length > query.offset + items.length,
+    page: Math.floor(query.offset / Math.max(query.limit, 1)) + 1,
+    previousOffset,
+    nextOffset,
+    hasMore,
+    truncated: hasMore,
     items,
   }
 }

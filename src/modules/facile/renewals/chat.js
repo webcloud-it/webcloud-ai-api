@@ -36,11 +36,15 @@ export async function handleRenewalsChat({
     },
   })
 
-  const serviceListFollowUpMessage = isServiceListMoreFollowUp(message)
-    ? pickPreviousUserMessageByIntent(history, 'service-list', {customerId, groupId})
+  const serviceListPaginationRequest = parseServiceListPaginationRequest(message)
+  const previousServiceListState = serviceListPaginationRequest
+    ? pickPreviousServiceListState(history, {customerId, groupId, serviceId})
+    : null
+  const serviceListPagination = previousServiceListState
+    ? buildServiceListPagination(previousServiceListState, serviceListPaginationRequest)
     : null
 
-  const explicitIntent = serviceListFollowUpMessage
+  const explicitIntent = serviceListPaginationRequest
     ? 'service-list'
     : pickExplicitChatIntent(message, {customerId, groupId})
 
@@ -70,7 +74,52 @@ export async function handleRenewalsChat({
     },
   }
 
-  if (plan.type === 'direct' && !serviceListFollowUpMessage) {
+  if (serviceListPaginationRequest && !previousServiceListState) {
+    return {
+      ok: true,
+      intent: 'service-list',
+      source: 'tool-fast',
+      reply:
+        'Non ho una lista precedente da continuare. Chiedimi prima quali servizi vuoi vedere, poi posso mostrarti i risultati successivi.',
+      data: {
+        type: 'service-list-follow-up-missing',
+      },
+      meta: {
+        ...baseMeta,
+        source: 'tool-fast',
+      },
+    }
+  }
+
+  if (serviceListPagination?.blockedReason === 'no-more-results') {
+    return {
+      ok: true,
+      intent: 'service-list',
+      source: 'tool-fast',
+      reply: 'Non ci sono altri risultati da mostrare per questa lista.',
+      data: previousServiceListState?.data || null,
+      meta: {
+        ...baseMeta,
+        source: 'tool-fast',
+      },
+    }
+  }
+
+  if (serviceListPagination?.blockedReason === 'at-start') {
+    return {
+      ok: true,
+      intent: 'service-list',
+      source: 'tool-fast',
+      reply: 'Sei già all’inizio della lista.',
+      data: previousServiceListState?.data || null,
+      meta: {
+        ...baseMeta,
+        source: 'tool-fast',
+      },
+    }
+  }
+
+  if (plan.type === 'direct' && !serviceListPaginationRequest) {
     return {
       ok: true,
       intent: plan.intent,
@@ -110,7 +159,7 @@ export async function handleRenewalsChat({
       services,
       settings,
       message:
-        serviceListFollowUpMessage ||
+        serviceListPagination?.sourceMessage ||
         resolveServiceListPayloadMessage({
           message,
           history,
@@ -119,7 +168,9 @@ export async function handleRenewalsChat({
           customerId,
           groupId,
         }),
-      paginationMessage: serviceListFollowUpMessage ? String(message).trim() : '',
+      paginationMessage: serviceListPaginationRequest ? String(message).trim() : '',
+      previousQuery: previousServiceListState?.query || null,
+      pagination: serviceListPagination,
       customerId,
       groupId,
       serviceId,
@@ -493,16 +544,287 @@ function expandServiceListMessageForDetails(message = '') {
   return `mostrami tutti ${cleaned}`
 }
 
-function isServiceListMoreFollowUp(message = '') {
-  const text = String(message || '')
+function parseServiceListPaginationRequest(message = '') {
+  const text = normalizeFollowUpText(message)
+  if (!text) return null
+
+  const direction = isServiceListFirstPageFollowUpText(text)
+    ? 'first'
+    : isServiceListPreviousFollowUpText(text)
+      ? 'previous'
+      : isServiceListNextFollowUpText(text)
+        ? 'next'
+        : null
+
+  if (!direction) return null
+
+  return {
+    direction,
+    limit: extractServiceListFollowUpLimit(text),
+  }
+}
+
+function normalizeFollowUpText(message = '') {
+  return String(message || '')
     .trim()
     .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+}
 
+function isServiceListNextFollowUpText(text = '') {
   return (
     /\b(?:mostramene|dammene|elencamene)\s+(?:altr[ei]\s+)?\d{1,2}\b/i.test(text) ||
-    /\b(?:altr[ei]|successiv[ei]|prossim[ei]|seguent[ei])\s+\d{1,2}\b/i.test(text) ||
-    /\b(?:continua|avanti|ancora)\b/i.test(text)
+    /\b(?:altr[ei]|successiv[ei]|prossim[ei]|seguent[ei])(?:\s+\d{1,2})?\b/i.test(text) ||
+    /\b(?:continua|prosegui|vai avanti|avanti|ancora)\b/i.test(text) ||
+    /\b(?:pagina)\s+(?:dopo|successiva|seguente)\b/i.test(text) ||
+    /\b(?:mostra|mostrami|dammi|elenca|elencami)\s+(?:gli\s+|i\s+)?(?:altr[ei]|successiv[ei]|prossim[ei])(?:\s+\d{1,2})?(?:\s+(?:servizi|risultati|voci))?\b/i.test(
+      text
+    ) ||
+    /\bfammi\s+vedere\s+(?:gli\s+|i\s+)?(?:altr[ei]|successiv[ei]|prossim[ei])(?:\s+\d{1,2})?(?:\s+(?:servizi|risultati|voci))?\b/i.test(
+      text
+    )
   )
+}
+
+function isServiceListPreviousFollowUpText(text = '') {
+  return (
+    /\b(?:precedent[ei]|indietro)\b/i.test(text) ||
+    /\btorna\s+indietro\b/i.test(text) ||
+    /\bpagina\s+(?:precedente|prima)\b/i.test(text)
+  )
+}
+
+function isServiceListFirstPageFollowUpText(text = '') {
+  return (
+    /\b(?:mostrami|mostra|dammi|fammi vedere|elencami|elenca)?\s*(?:i\s+|le\s+)?prim[ei]\s+\d{1,2}\b/i.test(
+      text
+    ) ||
+    /\b(?:torna|riparti|ricomincia)\s+(?:da|dai|dalle)\s+(?:i\s+|le\s+)?prim[ei](?:\s+\d{1,2})?\b/i.test(
+      text
+    )
+  )
+}
+
+function extractServiceListFollowUpLimit(text = '') {
+  const patterns = [
+    /\b(?:mostrami|mostra|dammi|fammi vedere|elencami|elenca)?\s*(?:i\s+|le\s+)?prim[ei]\s+(\d{1,2})\b/i,
+    /\b(?:mostramene|dammene|elencamene)\s+(?:altr[ei]\s+)?(\d{1,2})\b/i,
+    /\b(?:altr[ei]|successiv[ei]|prossim[ei]|seguent[ei])\s+(\d{1,2})\b/i,
+    /\b(?:mostra|mostrami|dammi|elenca|elencami)\s+(?:gli\s+|i\s+)?(?:altr[ei]|successiv[ei]|prossim[ei])\s+(\d{1,2})\b/i,
+    /\bfammi\s+vedere\s+(?:gli\s+|i\s+)?(?:altr[ei]|successiv[ei]|prossim[ei])\s+(\d{1,2})\b/i,
+    /\b(?:ancora|altri)\s+(\d{1,2})\b/i,
+  ]
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern)
+    if (match?.[1]) {
+      return clampServiceListFollowUpLimit(match[1])
+    }
+  }
+
+  return null
+}
+
+function clampServiceListFollowUpLimit(value) {
+  const n = Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(n)) return null
+  return Math.min(Math.max(n, 1), 50)
+}
+
+function isServiceListMoreFollowUp(message = '') {
+  return parseServiceListPaginationRequest(message)?.direction === 'next'
+}
+
+function buildServiceListPagination(previousState, request) {
+  const limit = request.limit || previousState.limit || 20
+  const shown = previousState.shown || previousState.limit || limit
+  const currentOffset = previousState.offset || 0
+
+  if (request.direction === 'first') {
+    return {
+      direction: 'first',
+      limit,
+      offset: 0,
+      sourceMessage: previousState.sourceMessage,
+    }
+  }
+
+  if (request.direction === 'previous') {
+    if (currentOffset <= 0) {
+      return {
+        blockedReason: 'at-start',
+      }
+    }
+
+    return {
+      direction: 'previous',
+      limit,
+      offset: Math.max(currentOffset - limit, 0),
+      sourceMessage: previousState.sourceMessage,
+    }
+  }
+
+  if (previousState.hasMore === false) {
+    return {
+      blockedReason: 'no-more-results',
+    }
+  }
+
+  return {
+    direction: 'next',
+    limit,
+    offset: Number.isFinite(previousState.nextOffset)
+      ? previousState.nextOffset
+      : currentOffset + shown,
+    sourceMessage: previousState.sourceMessage,
+  }
+}
+
+function pickPreviousServiceListState(history = [], scope = {}) {
+  const items = Array.isArray(history) ? [...history].reverse() : []
+
+  for (const item of items) {
+    if (item?.role !== 'assistant') continue
+
+    const data = getHistoryItemData(item)
+    if (data?.type !== 'service-list') continue
+    if (!matchesServiceListStateScope(data, scope)) continue
+
+    const query = data.query || {}
+    const offset = toFiniteNumber(query.offset, 0)
+    const shown = toFiniteNumber(data.shown, Array.isArray(data.items) ? data.items.length : 0)
+    const limit = toFiniteNumber(query.limit, shown || 20)
+    const hasMore =
+      typeof data.hasMore === 'boolean'
+        ? data.hasMore
+        : typeof data.truncated === 'boolean'
+          ? data.truncated
+          : null
+
+    return {
+      data,
+      query,
+      sourceMessage:
+        query.sourceMessage || pickPreviousUserMessageByIntent(history, 'service-list', scope),
+      offset,
+      shown,
+      limit,
+      hasMore,
+      nextOffset: Number.isFinite(data.nextOffset) ? data.nextOffset : offset + shown,
+      previousOffset: Number.isFinite(data.previousOffset)
+        ? data.previousOffset
+        : Math.max(offset - limit, 0),
+    }
+  }
+
+  const sourceMessage = pickPreviousUserMessageByIntent(history, 'service-list', scope)
+  const textState = pickPreviousServiceListTextState(history)
+
+  if (!sourceMessage || !textState) {
+    return null
+  }
+
+  return {
+    data: null,
+    query: null,
+    sourceMessage,
+    ...textState,
+  }
+}
+
+function pickPreviousServiceListTextState(history = []) {
+  const items = Array.isArray(history) ? [...history].reverse() : []
+
+  for (const item of items) {
+    if (item?.role !== 'assistant') continue
+
+    const content = getHistoryContent(item)
+    const state = parseServiceListTextState(content)
+
+    if (state) return state
+  }
+
+  return null
+}
+
+function parseServiceListTextState(content = '') {
+  const text = String(content || '')
+  if (!/\b(?:servizi|risultati)\b/i.test(text)) return null
+
+  const range = text.match(/risultati\s+(\d+)\s*-\s*(\d+)/i)
+
+  if (range) {
+    const start = Number(range[1])
+    const end = Number(range[2])
+    const offset = Math.max(start - 1, 0)
+    const shown = Math.max(end - start + 1, 0)
+
+    return {
+      offset,
+      shown,
+      limit: shown || 20,
+      hasMore: !/non ci sono altri risultati/i.test(text),
+      nextOffset: offset + shown,
+      previousOffset: Math.max(offset - (shown || 20), 0),
+    }
+  }
+
+  const firstPage = text.match(/(?:i primi|le prime)\s+(\d+)/i)
+
+  if (firstPage && /ho trovato\s+\d+\s+servizi/i.test(text)) {
+    const shown = Number(firstPage[1])
+
+    return {
+      offset: 0,
+      shown,
+      limit: shown || 20,
+      hasMore: !/non ci sono altri risultati/i.test(text),
+      nextOffset: shown,
+      previousOffset: 0,
+    }
+  }
+
+  const examples = text.match(/ho trovato\s+\d+\s+servizi[\s\S]*?ti mostro\s+(\d+)\s+esempi/i)
+
+  if (examples?.[1]) {
+    const shown = Number(examples[1])
+
+    return {
+      offset: 0,
+      shown,
+      limit: shown || 20,
+      hasMore: !/non ci sono altri risultati/i.test(text),
+      nextOffset: shown,
+      previousOffset: 0,
+    }
+  }
+
+  return null
+}
+
+function getHistoryItemData(item = {}) {
+  return item?.data || item?.payload || item?.response?.data || item?.result?.data || null
+}
+
+function getHistoryContent(item = {}) {
+  return String(item?.content || item?.message || item?.text || item?.reply || '').trim()
+}
+
+function matchesServiceListStateScope(data = {}, scope = {}) {
+  if (!data.scope) return true
+
+  return (
+    String(data.scope.customerId || '') === String(scope.customerId || '') &&
+    String(data.scope.groupId || '') === String(scope.groupId || '') &&
+    String(data.scope.serviceId || '') === String(scope.serviceId || '')
+  )
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : fallback
 }
 
 function pickPreviousUserMessageByIntent(history = [], expectedIntent, scope = {}) {
@@ -511,10 +833,10 @@ function pickPreviousUserMessageByIntent(history = [], expectedIntent, scope = {
   for (const item of items) {
     if (item?.role !== 'user') continue
 
-    const content = String(item?.content || '').trim()
+    const content = getHistoryContent(item)
 
     if (!content) continue
-    if (isServiceListMoreFollowUp(content)) continue
+    if (parseServiceListPaginationRequest(content)) continue
     if (isDetailsFollowUp(content)) continue
 
     const intent = pickChatIntent(content, scope)
@@ -554,7 +876,7 @@ function pickPreviousIntentFromHistory(history = [], scope = {}) {
   const items = Array.isArray(history) ? [...history].reverse() : []
 
   for (const item of items) {
-    const content = String(item?.content || '').trim()
+    const content = getHistoryContent(item)
 
     if (!content) continue
 

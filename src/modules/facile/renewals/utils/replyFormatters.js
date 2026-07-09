@@ -183,6 +183,10 @@ function buildFastServiceListReply(payload) {
   const label = payload?.query?.label || 'servizi'
 
   if (!items.length) {
+    if (payload?.query?.requestedMore || payload?.query?.requestedPrevious) {
+      return 'Non ci sono risultati da mostrare per questa pagina.'
+    }
+
     return `Non ho trovato ${label}.`
   }
 
@@ -213,7 +217,10 @@ function buildServiceListIntro(payload, {detailed = false} = {}) {
   const total = payload?.totale ?? 0
   const shown = payload?.shown ?? payload?.items?.length ?? 0
   const offset = Number(payload?.query?.offset || 0)
+
   const requestedMore = payload?.query?.requestedMore === true
+  const requestedPrevious = payload?.query?.requestedPrevious === true
+  const requestedFirst = payload?.query?.requestedFirst === true
   const rangeLabel = offset > 0 && shown > 0 ? ` i risultati ${offset + 1}-${offset + shown}` : null
   const requestedLimit = payload?.query?.requestedLimit === true
   const requestedAll = payload?.query?.requestedAll === true
@@ -223,10 +230,19 @@ function buildServiceListIntro(payload, {detailed = false} = {}) {
   const groups = payload?.groups ?? shown
   const groupedNote = grouped ? `, raggruppati in ${groups} righe` : ''
   const note = excludedDontRenew ? ' Sono esclusi i servizi marcati NON RINNOVARE.' : ''
+  const endNote = !truncated ? ' Non ci sono altri risultati.' : ''
   const shownLabel = grouped ? `le prime ${shown} righe` : `i primi ${shown}`
 
-  if (requestedMore && rangeLabel) {
-    return `Ho trovato ${total} ${label}. Ti mostro${rangeLabel}.${note}`
+  if (requestedFirst && shown > 0) {
+    return `Ti mostro i primi ${shown} risultati.${endNote}${note}`
+  }
+
+  if ((requestedMore || requestedPrevious) && rangeLabel) {
+    return `Ti mostro${rangeLabel}.${endNote}${note}`
+  }
+
+  if (requestedPrevious && shown > 0) {
+    return `Ti mostro i primi ${shown}.${note}`
   }
 
   if (requestedLimit) {
