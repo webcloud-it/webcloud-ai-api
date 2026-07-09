@@ -1,4 +1,4 @@
-import {getAllServices, getSettings} from './service.js'
+import {getAllServices, getSettings, getPanelCounts} from './service.js'
 import {getClientSubscriptions, isLowOnSpace, buildServiceSnapshot} from './snapshots.js'
 import {matchesText} from './intents.js'
 import {buildCommunicationsIndex} from './communications.js'
@@ -386,6 +386,15 @@ export async function chat(req, res) {
 
   const dataLoadStartedAt = Date.now()
   const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+  const analysisPeriod = Number(settings.analysis_period ?? 30)
+
+  const panelCounts = await getPanelCounts({
+    analysisPeriod,
+    customerId: resolvedCustomerId,
+    groupId: resolvedGroupId,
+  })
+
   const dataLoadMs = Date.now() - dataLoadStartedAt
 
   const result = await handleRenewalsChat({
@@ -397,6 +406,7 @@ export async function chat(req, res) {
     history: Array.isArray(history) ? history : [],
     services,
     settings,
+    panelCounts,
     debug: {
       dataLoadMs,
       servicesCount: Array.isArray(services) ? services.length : null,

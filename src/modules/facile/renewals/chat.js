@@ -8,6 +8,7 @@ import {buildCommunicationsContext, buildCommunicationsIndex} from './communicat
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {buildServiceDetailPayload} from './serviceDetails.js'
+import {buildServiceListPayload} from './serviceQueries.js'
 import {buildDetailedFastToolReply, buildFastToolReply} from './utils/replyFormatters.js'
 
 export async function handleRenewalsChat({
@@ -19,6 +20,7 @@ export async function handleRenewalsChat({
   history = [],
   services = [],
   settings = {},
+  panelCounts = null,
   debug = {},
 }) {
   const analysisPeriod = Number(settings.analysis_period ?? 30)
@@ -34,7 +36,14 @@ export async function handleRenewalsChat({
     },
   })
 
-  const explicitIntent = pickExplicitChatIntent(message, {customerId, groupId})
+  const serviceListFollowUpMessage = isServiceListMoreFollowUp(message)
+    ? pickPreviousUserMessageByIntent(history, 'service-list', {customerId, groupId})
+    : null
+
+  const explicitIntent = serviceListFollowUpMessage
+    ? 'service-list'
+    : pickExplicitChatIntent(message, {customerId, groupId})
+
   const parsedIntent = explicitIntent || pickChatIntent(message, {customerId, groupId})
   const isDetailRequest = isDetailsFollowUp(message)
   const isStandaloneDetailRequest = isDetailRequest && !explicitIntent
@@ -44,7 +53,7 @@ export async function handleRenewalsChat({
     : null
 
   const plannerIntent = plan.type === 'tool' ? plan.intent : null
-  const intent = previousIntent || explicitIntent || plannerIntent || parsedIntent
+  const intent = explicitIntent || previousIntent || plannerIntent || parsedIntent
 
   const baseMeta = {
     moduleId: 'facile.renewals',
@@ -61,7 +70,7 @@ export async function handleRenewalsChat({
     },
   }
 
-  if (plan.type === 'direct') {
+  if (plan.type === 'direct' && !serviceListFollowUpMessage) {
     return {
       ok: true,
       intent: plan.intent,
@@ -92,6 +101,25 @@ export async function handleRenewalsChat({
       services,
       settings,
       message: String(message).trim(),
+      customerId,
+      groupId,
+      serviceId,
+    })
+  } else if (intent === 'service-list') {
+    payload = buildServiceListPayload({
+      services,
+      settings,
+      message:
+        serviceListFollowUpMessage ||
+        resolveServiceListPayloadMessage({
+          message,
+          history,
+          isStandaloneDetailRequest,
+          previousIntent,
+          customerId,
+          groupId,
+        }),
+      paginationMessage: serviceListFollowUpMessage ? String(message).trim() : '',
       customerId,
       groupId,
       serviceId,
@@ -205,6 +233,44 @@ export async function handleRenewalsChat({
           totale: items.length,
           items,
         }
+      } else if (intent === 'to-renew') {
+        const items = snapshots
+          .filter(s => s.toRenew)
+          .map(s => ({
+            tipo: 'rinnovo',
+            priorita: s.urgentRenewalsCount > 0 ? 'alta' : 'media',
+            servizio: s.name,
+            cliente: s.customerName,
+            gruppo: s.groupName,
+            msg: s.nextRenewalDate
+              ? `Servizio marcato DA RINNOVARE, prossima scadenza ${s.nextRenewalDate}`
+              : 'Servizio marcato DA RINNOVARE',
+          }))
+
+        payload = {
+          type: 'to-renew',
+          totale: items.length,
+          items,
+        }
+      } else if (intent === 'to-transfer') {
+        const items = snapshots
+          .filter(s => Boolean(s.toTransfer))
+          .map(s => ({
+            tipo: 'trasferimento',
+            priorita: s.urgentRenewalsCount > 0 ? 'alta' : 'media',
+            servizio: s.name,
+            cliente: s.customerName,
+            gruppo: s.groupName,
+            msg: s.nextRenewalDate
+              ? `Servizio marcato DA TRASFERIRE, prossima scadenza ${s.nextRenewalDate}`
+              : 'Servizio marcato DA TRASFERIRE',
+          }))
+
+        payload = {
+          type: 'to-transfer',
+          totale: items.length,
+          items,
+        }
       } else if (intent === 'anomalies') {
         const items = snapshots
           .filter(s => s.dontRenew && s.autoRenew)
@@ -280,6 +346,7 @@ export async function handleRenewalsChat({
               customerId,
               analysisPeriod,
               communications,
+              panelCounts,
             }),
           }
         } else if (intent === 'group-report') {
@@ -290,6 +357,7 @@ export async function handleRenewalsChat({
               groupId,
               analysisPeriod,
               communications,
+              panelCounts,
             }),
           }
         } else {
@@ -301,6 +369,7 @@ export async function handleRenewalsChat({
               groupId,
               analysisPeriod,
               communications,
+              panelCounts,
             }),
           }
         }
@@ -376,12 +445,86 @@ function shouldUseFastToolReply(plan, intent) {
     'critical',
     'todo',
     'search',
+    'service-list',
     'space-full',
     'space-low',
     'dont-renew',
+    'to-renew',
+    'to-transfer',
     'anomalies',
     'service-detail',
   ].includes(intent)
+}
+
+function resolveServiceListPayloadMessage({
+  message = '',
+  history = [],
+  isStandaloneDetailRequest = false,
+  previousIntent = null,
+  customerId = null,
+  groupId = null,
+} = {}) {
+  if (!isStandaloneDetailRequest || previousIntent !== 'service-list') {
+    return String(message).trim()
+  }
+
+  const previousMessage = pickPreviousUserMessageByIntent(history, 'service-list', {
+    customerId,
+    groupId,
+  })
+
+  if (!previousMessage) {
+    return String(message).trim()
+  }
+
+  return expandServiceListMessageForDetails(previousMessage)
+}
+
+function expandServiceListMessageForDetails(message = '') {
+  const cleaned = String(message || '')
+    .replace(
+      /\b(fammi|dammi|mostrami|elencami|voglio|solo|soltanto|al massimo|massimo|primi|prime|i primi|le prime)\s+\d{1,2}\b/gi,
+      ' '
+    )
+    .replace(/\b\d{1,2}\s+(esempi|servizi|risultati|voci)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return `mostrami tutti ${cleaned}`
+}
+
+function isServiceListMoreFollowUp(message = '') {
+  const text = String(message || '')
+    .trim()
+    .toLowerCase()
+
+  return (
+    /\b(?:mostramene|dammene|elencamene)\s+(?:altr[ei]\s+)?\d{1,2}\b/i.test(text) ||
+    /\b(?:altr[ei]|successiv[ei]|prossim[ei]|seguent[ei])\s+\d{1,2}\b/i.test(text) ||
+    /\b(?:continua|avanti|ancora)\b/i.test(text)
+  )
+}
+
+function pickPreviousUserMessageByIntent(history = [], expectedIntent, scope = {}) {
+  const items = Array.isArray(history) ? [...history].reverse() : []
+
+  for (const item of items) {
+    if (item?.role !== 'user') continue
+
+    const content = String(item?.content || '').trim()
+
+    if (!content) continue
+    if (isServiceListMoreFollowUp(content)) continue
+    if (isDetailsFollowUp(content)) continue
+
+    const intent = pickChatIntent(content, scope)
+
+    if (intent === expectedIntent) {
+      return content
+    }
+  }
+
+  return null
 }
 
 function isDetailsFollowUp(message = '') {
@@ -399,6 +542,8 @@ function pickAssistantIntentFromText(message = '') {
 
   if (/attivit[aà] prioritarie/.test(text)) return 'todo'
   if (/criticità principali|criticita principali/.test(text)) return 'critical'
+  if (/servizi da rinnovare|marcati .*da rinnovare/.test(text)) return 'to-renew'
+  if (/servizi da trasferire|marcati .*da trasferire/.test(text)) return 'to-transfer'
   if (/ho trovato .* risultati/.test(text)) return 'search'
   if (/riepilogo rapido/.test(text)) return 'summary'
 

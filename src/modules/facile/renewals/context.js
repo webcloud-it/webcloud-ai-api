@@ -6,6 +6,7 @@ export function buildChatContextFromSnapshots({
   groupId = null,
   analysisPeriod = 30,
   communications = [],
+  panelCounts = null,
 }) {
   const total = snapshots.length
   const expiring = snapshots.filter(s => s.expiringCount > 0)
@@ -88,6 +89,7 @@ export function buildChatContextFromSnapshots({
       groupId: groupId || null,
     },
     analysisPeriod,
+    panelCounts,
     summary: {
       total,
       expiring: expiring.length,

@@ -62,7 +62,15 @@ export function buildFastToolReply(intent, payload, options = {}) {
     ].join('\n')
   }
 
-  if (['space-full', 'space-low', 'dont-renew', 'anomalies'].includes(intent)) {
+  if (intent === 'service-list') {
+    return buildFastServiceListReply(payload)
+  }
+
+  if (
+    ['space-full', 'space-low', 'dont-renew', 'to-renew', 'to-transfer', 'anomalies'].includes(
+      intent
+    )
+  ) {
     return buildFastOperationalListReply(intent, payload, {message})
   }
 
@@ -88,6 +96,10 @@ export function buildFastToolReply(intent, payload, options = {}) {
 }
 
 export function buildDetailedFastToolReply(intent, payload) {
+  if (intent === 'service-list') {
+    return buildDetailedServiceListReply(payload)
+  }
+
   if (intent === 'todo') {
     const items = payload?.todo || payload?.items || []
 
@@ -166,8 +178,207 @@ export function buildDetailedFastToolReply(intent, payload) {
   return buildFastToolReply(intent, payload)
 }
 
+function buildFastServiceListReply(payload) {
+  const items = payload?.items || []
+  const label = payload?.query?.label || 'servizi'
+
+  if (!items.length) {
+    return `Non ho trovato ${label}.`
+  }
+
+  return [
+    buildServiceListIntro(payload),
+    '',
+    ...items.map(item => formatServiceListItem(item)),
+  ].join('\n')
+}
+
+function buildDetailedServiceListReply(payload) {
+  const items = payload?.items || []
+  const label = payload?.query?.label || 'servizi'
+
+  if (!items.length) {
+    return `Non ho trovato ${label} da dettagliare.`
+  }
+
+  return [
+    buildServiceListIntro(payload, {detailed: true}),
+    '',
+    ...items.map(item => formatServiceListItem(item, {detailed: true})),
+  ].join('\n')
+}
+
+function buildServiceListIntro(payload, {detailed = false} = {}) {
+  const label = payload?.query?.label || 'servizi'
+  const total = payload?.totale ?? 0
+  const shown = payload?.shown ?? payload?.items?.length ?? 0
+  const offset = Number(payload?.query?.offset || 0)
+  const requestedMore = payload?.query?.requestedMore === true
+  const rangeLabel = offset > 0 && shown > 0 ? ` i risultati ${offset + 1}-${offset + shown}` : null
+  const requestedLimit = payload?.query?.requestedLimit === true
+  const requestedAll = payload?.query?.requestedAll === true
+  const truncated = payload?.truncated === true
+  const excludedDontRenew = payload?.query?.excludedDontRenew === true
+  const grouped = payload?.grouped === true
+  const groups = payload?.groups ?? shown
+  const groupedNote = grouped ? `, raggruppati in ${groups} righe` : ''
+  const note = excludedDontRenew ? ' Sono esclusi i servizi marcati NON RINNOVARE.' : ''
+  const shownLabel = grouped ? `le prime ${shown} righe` : `i primi ${shown}`
+
+  if (requestedMore && rangeLabel) {
+    return `Ho trovato ${total} ${label}. Ti mostro${rangeLabel}.${note}`
+  }
+
+  if (requestedLimit) {
+    return `Ho trovato ${total} ${label}${groupedNote}. Ti mostro ${shown} esempi.${note}`
+  }
+
+  if (requestedAll && truncated) {
+    return `Ho trovato ${total} ${label}${groupedNote}. Ti mostro ${shownLabel}.${note}`
+  }
+
+  if (truncated) {
+    return detailed
+      ? `Ho trovato ${total} ${label}${groupedNote}. Ti mostro ${shownLabel} con più dettagli.${note}`
+      : `Ho trovato ${total} ${label}${groupedNote}. Ti mostro ${shownLabel}.${note}`
+  }
+
+  return `Ho trovato ${total} ${label}${groupedNote}.${note}`
+}
+
+function formatServiceListItem(item, {detailed = false} = {}) {
+  const countLabel = item.count > 1 ? ` (${item.count} occorrenze)` : ''
+  const title = `- [${item.priorita || '—'}] ${item.servizio || '—'}${countLabel}`
+  const parts = []
+
+  const customer = [item.cliente, item.gruppo].filter(Boolean).join(' / ')
+  if (customer) parts.push(customer)
+
+  if (item.piano) {
+    parts.push(`piano ${item.piano}`)
+  }
+
+  if (item.scadenzaScaduta) {
+    parts.push(`scaduto il ${formatDate(item.scadenzaScaduta)}`)
+  } else if (item.scadenzaFormattata) {
+    parts.push(`scadenza ${item.scadenzaFormattata}`)
+  }
+
+  if (item.spazio?.quota && (item.spazio.isFull || item.spazio.isLow)) {
+    parts.push(`spazio ${formatSpaceStatus(item.spazio)}`)
+  }
+
+  if (item.hasPlesk) {
+    parts.push('Plesk collegato')
+  } else if (item.hasPlesk === false) {
+    parts.push('Plesk non collegato')
+  }
+
+  const flags = formatServiceListFlags(item)
+  if (flags) parts.push(flags)
+
+  const reason = formatServiceListReason(item)
+  if (reason) {
+    parts.push(reason)
+  }
+
+  if (!detailed) {
+    return `${title}: ${parts.join(' | ')}`
+  }
+
+  const details = [
+    `  Cliente: ${item.cliente || '—'}${item.gruppo ? ` | Gruppo: ${item.gruppo}` : ''}`,
+    item.tipologie?.length ? `  Tipologie: ${item.tipologie.join(', ')}` : null,
+    item.piani?.length ? `  Piani: ${formatServiceListPlans(item.piani)}` : null,
+    item.scadenzaFormattata ? `  Scadenza cliente: ${item.scadenzaFormattata}` : null,
+    item.scadenzaFornitore ? `  Scadenza fornitore: ${formatDate(item.scadenzaFornitore)}` : null,
+    item.invoiceDate ? `  Fatturazione: ${formatDate(item.invoiceDate)}` : null,
+    item.spazio?.quota ? `  Spazio: ${formatSpaceStatus(item.spazio)}` : null,
+    `  Plesk: ${item.hasPlesk ? 'collegato' : 'non collegato'}`,
+    `  Record dominio: ${item.hasDomainRecord ? 'presente' : 'assente'}`,
+    `  Piani Plesk: ${item.pleskPlansSync ? 'sincronizzati' : 'non sincronizzati'}`,
+    flags ? `  Flag: ${flags}` : null,
+    item.fornitori?.length ? `  Fornitori: ${item.fornitori.join(', ')}` : null,
+    item.totalTraffic ? `  Traffico: ${formatBytes(item.totalTraffic)}` : null,
+    item.lastCommunicationDate
+      ? `  Ultima comunicazione: ${formatDateTime(item.lastCommunicationDate)}`
+      : null,
+    reason ? `  Motivo: ${reason}` : null,
+  ].filter(Boolean)
+
+  return [title, ...details].join('\n')
+}
+
+function formatServiceListReason(item = {}) {
+  const reason = String(item.motivo || '').trim()
+  if (!reason) return ''
+
+  const normalized = reason.toLowerCase()
+
+  if (
+    item.scadenzaFormattata &&
+    normalized === `scadenza ${item.scadenzaFormattata}`.toLowerCase()
+  ) {
+    return ''
+  }
+
+  if (
+    item.scadenzaScaduta &&
+    normalized === `scaduto il ${formatDate(item.scadenzaScaduta)}`.toLowerCase()
+  ) {
+    return ''
+  }
+
+  if ((item.spazio?.isFull || item.spazio?.isLow) && normalized.startsWith('spazio ')) {
+    return ''
+  }
+
+  return reason
+}
+
+function formatServiceListPlans(plans = []) {
+  return plans
+    .map(plan => {
+      const parts = []
+
+      parts.push(plan.name || 'piano non indicato')
+      if (plan.supplier) parts.push(`fornitore ${plan.supplier}`)
+      if (plan.missingPrice) parts.push('prezzo mancante')
+
+      return parts.join(' | ')
+    })
+    .join('; ')
+}
+
+function formatServiceListFlags(item = {}) {
+  const flags = []
+
+  if (item.autoRenew) flags.push('rinnovo automatico')
+  if (item.dontRenew) flags.push('NON RINNOVARE')
+  if (item.toRenew) flags.push('DA RINNOVARE')
+  if (item.toTransfer) flags.push('DA TRASFERIRE')
+
+  return flags.join(', ')
+}
+
 function buildFastSummaryReply(payload) {
   const summary = payload?.summary || {}
+  const panelCounts = payload?.panelCounts || null
+
+  if (panelCounts && panelCounts.all !== null && panelCounts.tableAll !== null) {
+    return [
+      'Ecco il riepilogo rapido dei rinnovi.',
+      '',
+      `Servizi totali: ${panelCounts.all} (${panelCounts.tableAll} rinnovabili)`,
+      `Rinnovi imminenti: ${panelCounts.renewal ?? '—'}`,
+      `Rinnovi automatici: ${panelCounts.autoRenew ?? '—'}`,
+      `Spazio esaurito: ${panelCounts.fullSpace ?? '—'}`,
+      `Spazio in esaurimento: ${panelCounts.lowSpace ?? '—'}`,
+      `Fornitori: ${panelCounts.providers ?? '—'}`,
+      `Fatturazione: ${panelCounts.billing ?? '—'}`,
+      `Non rinnovare: ${panelCounts.dontRenew ?? '—'}`,
+    ].join('\n')
+  }
 
   return [
     'Ecco il riepilogo rapido dei rinnovi.',
@@ -286,6 +497,14 @@ function buildFastOperationalListReply(intent, payload, {message = ''} = {}) {
     'dont-renew': {
       empty: 'Non risultano servizi marcati NON RINNOVARE.',
       found: 'servizi marcati NON RINNOVARE',
+    },
+    'to-renew': {
+      empty: 'Non risultano servizi marcati DA RINNOVARE.',
+      found: 'servizi da rinnovare',
+    },
+    'to-transfer': {
+      empty: 'Non risultano servizi marcati DA TRASFERIRE.',
+      found: 'servizi da trasferire',
     },
     'anomalies': {
       empty: 'Non risultano anomalie tra NON RINNOVARE e RINNOVO AUTOMATICO.',

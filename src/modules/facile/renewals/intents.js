@@ -46,6 +46,24 @@ const intentRules = [
     ],
   },
   {
+    intent: 'to-renew',
+    patterns: [
+      /\bda rinnovare\b/i,
+      /(servizi|domini).{0,40}(da rinnovare|da rinnovarsi)/i,
+      /(marcati|segnati).{0,40}(da rinnovare)/i,
+      /\bto[_ -]?renew\b/i,
+    ],
+  },
+  {
+    intent: 'to-transfer',
+    patterns: [
+      /\bda trasferire\b/i,
+      /(servizi|domini).{0,40}(da trasferire|da migrare|da spostare)/i,
+      /(marcati|segnati).{0,40}(da trasferire|da migrare)/i,
+      /\bto[_ -]?transfer\b/i,
+    ],
+  },
+  {
     intent: 'critical',
     patterns: [
       /(criticit|critici|critico|anomali|anomalie|problemi principali)/i,
@@ -72,6 +90,17 @@ const intentRules = [
     ],
   },
   {
+    intent: 'service-list',
+    patterns: [
+      /\b(servizi|domini)\b.{0,120}\b(rinnovi imminenti|rinnovo automatico|rinnovi automatici|in scadenza|scadono|scaduti|spazio esaurito|spazio in esaurimento|non rinnovare|da rinnovare|da trasferire|no sync|sincronizzat[oi]|plesk|pian[oi]|plan|abbonament[oi]|fornitor[ei]|provider|supplier|fatturazione|auth code|comunicazioni|traffico|prezzo mancante|record dominio|cliente|gruppo|tipo)\b/i,
+      /\b(rinnovi imminenti|rinnovi automatici|servizi scaduti|servizi in scadenza|servizi con spazio|servizi senza spazio)\b/i,
+      /\bservizi?\s+di\s+(?!tipo\b|piano\b|spazio\b|fornitore\b)[a-z0-9._@/+ -]{2,}/i,
+      /\bservizi?\s+(?:con|senza|collegat[oi]|non collegat[oi]|marcat[oi])\b/i,
+      /\b(?:fammi|mostrami|elencami|dammi)\s+\d{1,2}\s+(?:esempi\s+di\s+)?servizi\b/i,
+      /\bservizi?\s+(?:hosting|pec|email|mail|backup|licenze?|server|vps|cloud|domini?)\b/i,
+    ],
+  },
+  {
     intent: 'service-detail',
     patterns: [
       /(dettagli|dettaglio|scheda|analizza|analisi|controlla|verifica|informazioni|info).{0,30}(su|di|del|della|per)\s+["“”']?[a-z0-9._@ -]{2,}/i,
@@ -79,6 +108,7 @@ const intentRules = [
       /^scheda\s+(servizio|dominio|cliente)?\s*["“”']?[a-z0-9._@ -]{2,}/i,
     ],
   },
+
   {
     intent: 'search',
     patterns: [
@@ -120,8 +150,29 @@ export function pickCommunicationIntent(message = '') {
   return matchAny(text, rule?.patterns || []) ? 'communications' : null
 }
 
+function isDontRenewInclusionQuery(text = '') {
+  return (
+    /\b(includi|includendo|anche|compresi|comprese|con)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/i.test(
+      text
+    ) ||
+    /\b(non rinnovare|da non rinnovare)\b.{0,50}\b(inclusi|incluse|compresi|comprese|anche)\b/i.test(
+      text
+    )
+  )
+}
+
+function isOperationalServiceListQuery(text = '') {
+  return /\b(rinnovi?\s+imminenti|in scadenza|scadenze|scadono|scaduti|scadute|spazio esaurito|spazio in esaurimento|fatturazione|da fatturare)\b/i.test(
+    text
+  )
+}
+
 export function pickExplicitChatIntent(message = '', scope = {}) {
   const text = normalizeText(message)
+
+  if (isDontRenewInclusionQuery(text) && isOperationalServiceListQuery(text)) {
+    return 'service-list'
+  }
 
   for (const rule of intentRules) {
     if (matchAny(text, rule.patterns)) {
