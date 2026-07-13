@@ -95,6 +95,8 @@ const intentRules = [
       /\b(servizi|domini)\b.{0,120}\b(rinnovi imminenti|rinnovo automatico|rinnovi automatici|in scadenza|scadono|scaduti|spazio esaurito|spazio in esaurimento|non rinnovare|da rinnovare|da trasferire|no sync|sincronizzat[oi]|plesk|pian[oi]|plan|abbonament[oi]|fornitor[ei]|provider|supplier|fatturazione|auth code|comunicazioni|traffico|prezzo mancante|record dominio|cliente|gruppo|tipo)\b/i,
       /\b(rinnovi imminenti|rinnovi automatici|servizi scaduti|servizi in scadenza|servizi con spazio|servizi senza spazio)\b/i,
       /\bservizi?\s+di\s+(?!tipo\b|piano\b|spazio\b|fornitore\b)[a-z0-9._@/+ -]{2,}/i,
+      /\b(?:servizi|domini)\s+(?!di\b|con\b|senza\b|collegat[oi]\b|non\b|marcat[oi]\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b|rinnovi?\b|scadenze?\b|scadut[oi]\b|in\b|da\b|auth\b|record\b|fatturazione\b|traffico\b)[a-z0-9._@/+ -]{2,}/i,
+      /\b(?:elenco|lista)\s+(?:servizi|domini)?\s*(?:di\s+)?(?!con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b)[a-z0-9._@/+ -]{2,}/i,
       /\bservizi?\s+(?:con|senza|collegat[oi]|non collegat[oi]|marcat[oi])\b/i,
       /\b(?:fammi|mostrami|elencami|dammi)\s+\d{1,2}\s+(?:esempi\s+di\s+)?servizi\b/i,
       /\bservizi?\s+(?:hosting|pec|email|mail|backup|licenze?|server|vps|cloud|domini?)\b/i,
@@ -152,7 +154,7 @@ export function pickCommunicationIntent(message = '') {
 
 function isDontRenewInclusionQuery(text = '') {
   return (
-    /\b(includi|includendo|anche|compresi|comprese|con)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/i.test(
+    /\b(includi|includendo|anche|compresi|comprese|inclusi|incluse)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/i.test(
       text
     ) ||
     /\b(non rinnovare|da non rinnovare)\b.{0,50}\b(inclusi|incluse|compresi|comprese|anche)\b/i.test(
@@ -211,4 +213,116 @@ export function extractSearchQuery(message = '') {
     .trim()
 
   return cleaned.length >= 2 ? cleaned : null
+}
+
+function normalizeGuardText(message = '') {
+  return normalizeText(message)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+}
+
+function isExplicitSummaryRequest(message = '') {
+  const text = normalizeGuardText(message)
+
+  return /\b(riepilogo|riassunto|situazione|panoramica|overview|come siamo messi|stato generale)\b/i.test(
+    text
+  )
+}
+
+export function isPossiblyOperationalRenewalsRequest(message = '') {
+  const text = normalizeGuardText(message)
+
+  if (!text || isExplicitSummaryRequest(text)) {
+    return false
+  }
+
+  return (
+    /\b(servizi|servizio|domini|dominio|piani|piano|plan|abbonamenti|abbonamento)\b/i.test(text) ||
+    /\b(rinnovi|rinnovo|scadenze|scadenza|scadono|scaduti|in scadenza|imminenti)\b/i.test(text) ||
+    /\b(spazio|quota|disco|plesk|fornitore|fornitori|provider|supplier|fatturazione)\b/i.test(
+      text
+    ) ||
+    /\b(non rinnovare|da non rinnovare|da rinnovare|da trasferire|da migrare)\b/i.test(text) ||
+    /\b(auth code|codice auth|record dominio|traffico|comunicazioni|mail|email)\b/i.test(text) ||
+    /\b(altri|altre|prossimi|successivi|precedenti|continua|prosegui|avanti|indietro|ancora)\b/i.test(
+      text
+    ) ||
+    /\b(dettagli|dettaglio|approfondisci|dimmi di piu|entra nel dettaglio)\b/i.test(text) ||
+    /\b(no|non|sbagliato|correggi|intendevo|volevo dire|invece)\b/i.test(text)
+  )
+}
+
+const BARE_ENTITY_STOP_WORDS = new Set([
+  'ciao',
+  'buongiorno',
+  'buonasera',
+  'salve',
+  'grazie',
+  'ok',
+  'bene',
+  'come',
+  'cosa',
+  'quali',
+  'quanto',
+  'quando',
+  'perché',
+  'perche',
+  'riepilogo',
+  'riassunto',
+  'situazione',
+  'panoramica',
+])
+
+export function isLikelyBareRenewalsEntity(message = '') {
+  const original = String(message || '').trim()
+  const text = normalizeGuardText(original)
+
+  if (!text || isExplicitSummaryRequest(text)) {
+    return false
+  }
+
+  if (/[?]/.test(original)) {
+    return false
+  }
+
+  if (
+    /\b(servizi|servizio|domini|dominio|rinnovi|rinnovo|scadenze|scadenza|spazio|plesk)\b/i.test(
+      text
+    )
+  ) {
+    return false
+  }
+
+  if (/\b(no|non|senza|con|da|in|quelli|questi|altro|altri|prossimi|precedenti)\b/i.test(text)) {
+    return false
+  }
+
+  if (/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(text)) {
+    return true
+  }
+
+  if (/\b[a-z0-9.-]+\.[a-z]{2,}\b/i.test(text)) {
+    return true
+  }
+
+  const words = text
+    .split(/\s+/)
+    .map(word => word.trim())
+    .filter(Boolean)
+
+  if (words.length < 2 || words.length > 6) {
+    return false
+  }
+
+  if (words.some(word => BARE_ENTITY_STOP_WORDS.has(word))) {
+    return false
+  }
+
+  return words.every(word => /^[a-z0-9._@/+ -]{2,}$/.test(word))
+}
+
+export function buildBareRenewalsEntityServiceListMessage(message = '') {
+  const text = String(message || '').trim()
+
+  return isLikelyBareRenewalsEntity(text) ? `servizi di ${text}` : null
 }

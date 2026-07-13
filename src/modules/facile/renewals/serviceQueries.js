@@ -83,6 +83,22 @@ function cleanTerm(value = '') {
 function stripAfterKnownTail(value = '') {
   return compact(value)
     .replace(
+      /\b(?:senza|escludi|escludendo|esclusi|escluse|tranne|eccetto)\b.{0,60}\b(?:i\s+|gli\s+)?(?:da\s+)?non\s+rinnovare\b.*$/i,
+      ''
+    )
+    .replace(
+      /\bnon\s+(?:includere|includi|considerare|considera)\b.{0,60}\b(?:i\s+|gli\s+)?(?:da\s+)?non\s+rinnovare\b.*$/i,
+      ''
+    )
+    .replace(
+      /\b(?:includi|includendo|anche|compresi|comprese|inclusi|incluse)\b.{0,60}\b(?:i\s+|gli\s+)?(?:da\s+)?non\s+rinnovare\b.*$/i,
+      ''
+    )
+    .replace(
+      /\b(?:da\s+non\s+rinnovare|non\s+rinnovare)\b.{0,60}\b(?:inclusi|incluse|compresi|comprese|anche|esclusi|escluse|da\s+escludere|non\s+inclusi|non\s+incluse)\b.*$/i,
+      ''
+    )
+    .replace(
       /\b(con dettagli|dettagli|con dettaglio|mostrami|mostra|elencami|elenca|elencando|fammi|dimmi|solo|soltanto|al massimo|massimo|i primi|le prime|primi|prime|esempi?|servizi?|domini?)\b.*$/i,
       ''
     )
@@ -94,6 +110,23 @@ function clampLimit(value, fallback = DEFAULT_LIMIT) {
   const n = Number.parseInt(String(value ?? ''), 10)
   if (!Number.isFinite(n)) return fallback
   return Math.min(Math.max(n, 1), MAX_LIMIT)
+}
+
+function isReservedBareServiceTerm(value = '') {
+  const text = normalizeQueryText(value)
+  if (!text) return true
+
+  if (
+    /^(con|senza|di|tipo|piano|plan|spazio|fornitore|provider|supplier|collegato|collegati|non|marcato|marcati|da|in)\b/.test(
+      text
+    )
+  ) {
+    return true
+  }
+
+  return /^(hosting|web hosting|pec|casella pec|dominio|domini|email|mail|backup|licenza|licenze|server|vps|cloud|plesk|rinnovo|rinnovi|scadenza|scadenze|scaduto|scaduti|fatturazione|auth code|record dominio|traffico|spazio)\b/.test(
+    text
+  )
 }
 
 function extractLimit(message = '') {
@@ -185,25 +218,29 @@ function buildQueryFromPreviousState({
   pagination = {},
   fallbackMessage = '',
 } = {}) {
-  const filters = restoreServiceListFilters(previousQuery.filters)
-  const fallbackLimit = clampLimit(previousQuery.limit, DEFAULT_LIMIT)
-  const limit = clampLimit(pagination.limit, fallbackLimit)
-  const offset = Math.max(Number(pagination.offset || 0), 0)
+  const safePreviousQuery = previousQuery || {}
+  const safePagination = pagination || {}
+  const filters = restoreServiceListFilters(safePreviousQuery.filters)
+  const fallbackLimit = clampLimit(safePreviousQuery.limit, DEFAULT_LIMIT)
+  const limit = clampLimit(safePagination.limit, fallbackLimit)
+  const offset = Math.max(Number(safePagination.offset || 0), 0)
 
   return {
     type: 'service-list-query',
-    label: previousQuery.label || describeFilters(filters),
+    label: safePreviousQuery.label || describeFilters(filters),
     filters,
     limit,
     offset,
-    requestedLimit: Boolean(pagination.limit),
+    requestedLimit: Boolean(safePagination.limit),
     requestedAll: false,
-    requestedMore: pagination.direction === 'next',
-    requestedPrevious: pagination.direction === 'previous',
-    requestedFirst: pagination.direction === 'first',
-    sourceMessage: previousQuery.sourceMessage || compact(fallbackMessage),
+    requestedMore: safePagination.direction === 'next',
+    requestedPrevious: safePagination.direction === 'previous',
+    requestedFirst: safePagination.direction === 'first',
+    sourceMessage: safePreviousQuery.sourceMessage || compact(fallbackMessage),
     includeDontRenew:
-      typeof previousQuery.includeDontRenew === 'boolean' ? previousQuery.includeDontRenew : null,
+      typeof safePreviousQuery.includeDontRenew === 'boolean'
+        ? safePreviousQuery.includeDontRenew
+        : null,
   }
 }
 
@@ -535,17 +572,43 @@ function isDontRenewService(service) {
   return service?.dontRenew === true || service?.dont_renew === true
 }
 
-function hasExplicitDontRenewInclusion(message = '') {
+function getDontRenewInclusionMode(message = '') {
   const text = normalizeQueryText(message)
 
-  return (
-    /\b(includi|includendo|anche|compresi|comprese|con)\b.{0,40}\b(non rinnovare|da non rinnovare)\b/.test(
+  if (
+    /\b(senza|escludi|escludendo|esclusi|escluse|tranne|eccetto)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/.test(
       text
     ) ||
-    /\b(non rinnovare|da non rinnovare)\b.{0,40}\b(inclusi|incluse|compresi|comprese|anche)\b/.test(
+    /\b(non rinnovare|da non rinnovare)\b.{0,50}\b(esclusi|escluse|da escludere|non inclusi|non incluse)\b/.test(
+      text
+    ) ||
+    /\bnon\s+(includere|includi|considerare|considera)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/.test(
       text
     )
-  )
+  ) {
+    return false
+  }
+
+  if (
+    /\b(includi|includendo|inclusi|incluse|compresi|comprese|anche)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/.test(
+      text
+    ) ||
+    /\b(non rinnovare|da non rinnovare)\b.{0,50}\b(inclusi|incluse|compresi|comprese|anche)\b/.test(
+      text
+    )
+  ) {
+    return true
+  }
+
+  return null
+}
+
+function hasExplicitDontRenewInclusion(message = '') {
+  return getDontRenewInclusionMode(message) === true
+}
+
+function hasExplicitDontRenewExclusion(message = '') {
+  return getDontRenewInclusionMode(message) === false
 }
 
 function isOperationalQuery(filters = []) {
@@ -563,9 +626,12 @@ function isOperationalQuery(filters = []) {
 }
 
 function shouldIncludeDontRenew({message = '', filters = [], requestedAll = false} = {}) {
+  const dontRenewMode = getDontRenewInclusionMode(message)
+
   if (hasFilter(filters, 'dont-renew')) return true
+  if (dontRenewMode === true) return true
+  if (dontRenewMode === false) return false
   if (!isOperationalQuery(filters)) return true
-  if (hasExplicitDontRenewInclusion(message)) return true
   if (requestedAll) return true
 
   return false
@@ -718,6 +784,30 @@ function extractCustomerOrGroupTerm(message = '') {
     return cleanTerm(stripAfterKnownTail(servicesOf[1]))
   }
 
+  const terseServicesOf = text.match(
+    /\b(?:servizi|domini)\s+(?!di\b|con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b|collegat[oi]\b|non\b|marcat[oi]\b|rinnovi?\b|scadenze?\b|scadut[oi]\b|in\b|da\b|auth\b|record\b|fatturazione\b|traffico\b)([a-z0-9._@/+ -]{2,})/i
+  )
+
+  if (terseServicesOf?.[1]) {
+    const term = cleanTerm(stripAfterKnownTail(terseServicesOf[1]))
+
+    if (term && !isReservedBareServiceTerm(term)) {
+      return term
+    }
+  }
+
+  const listOf = text.match(
+    /\b(?:elenco|lista)\s+(?:servizi|domini)?\s*(?:di\s+)?(?!con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b)([a-z0-9._@/+ -]{2,})/i
+  )
+
+  if (listOf?.[1]) {
+    const term = cleanTerm(stripAfterKnownTail(listOf[1]))
+
+    if (term && !isReservedBareServiceTerm(term)) {
+      return term
+    }
+  }
+
   return null
 }
 
@@ -741,7 +831,8 @@ function detectBooleanFilters(message = '') {
 
   if (
     /\bda non rinnovare\b|\bnon rinnovare\b|\bnon rinnovo\b/.test(text) &&
-    !hasExplicitDontRenewInclusion(message)
+    !hasExplicitDontRenewInclusion(message) &&
+    !hasExplicitDontRenewExclusion(message)
   ) {
     filters.push({kind: 'dont-renew', label: 'marcati NON RINNOVARE'})
   }
@@ -1337,8 +1428,9 @@ export function parseServiceListQuery({
       offset: Math.max(Number(pagination.offset || 0), 0),
       requestedLimit: Boolean(pagination.limit),
       requestedAll: false,
-      requestedMore: pagination.direction !== 'previous',
+      requestedMore: pagination.direction === 'next',
       requestedPrevious: pagination.direction === 'previous',
+      requestedFirst: pagination.direction === 'first',
       sourceMessage: compact(message),
     }
   }
@@ -1353,6 +1445,7 @@ export function parseServiceListQuery({
     requestedAll: limitInfo.requestedAll,
     requestedMore: limitInfo.requestedMore,
     requestedPrevious: false,
+    requestedFirst: false,
     sourceMessage: compact(message),
   }
 }
@@ -1364,6 +1457,7 @@ export function buildServiceListPayload({
   paginationMessage = '',
   previousQuery = null,
   pagination = null,
+  includeDontRenewOverride = null,
   customerId = null,
   groupId = null,
   serviceId = null,
@@ -1377,23 +1471,31 @@ export function buildServiceListPayload({
     settings,
     now,
   })
+  const explicitDontRenewMode =
+    typeof includeDontRenewOverride === 'boolean'
+      ? includeDontRenewOverride
+      : getDontRenewInclusionMode(message)
   const scoped = applyScope(services, {customerId, groupId, serviceId})
   const includeDontRenew =
-    typeof query.includeDontRenew === 'boolean'
-      ? query.includeDontRenew
-      : shouldIncludeDontRenew({
-          message,
-          filters: query.filters,
-          requestedAll: query.requestedAll,
-        })
+    typeof explicitDontRenewMode === 'boolean'
+      ? explicitDontRenewMode
+      : typeof query.includeDontRenew === 'boolean'
+        ? query.includeDontRenew
+        : shouldIncludeDontRenew({
+            message,
+            filters: query.filters,
+            requestedAll: query.requestedAll,
+          })
 
-  const matched = scoped.filter(service => {
-    if (!includeDontRenew && isDontRenewService(service)) {
-      return false
-    }
-
+  const matchedBeforeDontRenewExclusion = scoped.filter(service => {
     return query.filters.every(filter => filterService(service, filter, {settings, now}))
   })
+
+  const dontRenewMatches = matchedBeforeDontRenewExclusion.filter(isDontRenewService).length
+
+  const matched = includeDontRenew
+    ? matchedBeforeDontRenewExclusion
+    : matchedBeforeDontRenewExclusion.filter(service => !isDontRenewService(service))
 
   const sorted = sortServices(matched, query.filters, settings, now)
   const rawItems = sorted.map(service =>
@@ -1404,6 +1506,16 @@ export function buildServiceListPayload({
   const hasMore = groupedItems.length > query.offset + items.length
   const previousOffset = query.offset > 0 ? Math.max(query.offset - query.limit, 0) : null
   const nextOffset = hasMore ? query.offset + items.length : null
+  const emptySuggestion =
+    matched.length === 0 &&
+    includeDontRenew === false &&
+    explicitDontRenewMode === null &&
+    dontRenewMatches > 0
+      ? {
+          kind: 'include-dont-renew',
+          count: dontRenewMatches,
+        }
+      : null
 
   return {
     type: 'service-list',
@@ -1415,7 +1527,20 @@ export function buildServiceListPayload({
     query: {
       label: query.label,
       includeDontRenew,
-      excludedDontRenew: isOperationalQuery(query.filters) && !includeDontRenew,
+      excludedDontRenew:
+        !includeDontRenew && (isOperationalQuery(query.filters) || explicitDontRenewMode === false),
+      dontRenew: {
+        explicitMode:
+          typeof explicitDontRenewMode === 'boolean'
+            ? explicitDontRenewMode
+              ? 'include'
+              : 'exclude'
+            : null,
+        matchedInRequest: dontRenewMatches,
+        included: includeDontRenew,
+        excludedCount: includeDontRenew ? 0 : dontRenewMatches,
+      },
+      suggestion: emptySuggestion,
       filters: query.filters.map(filter => ({
         kind: filter.kind,
         label: filter.label,

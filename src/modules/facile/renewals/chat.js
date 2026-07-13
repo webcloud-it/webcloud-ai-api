@@ -2,13 +2,23 @@ import {callOllamaChat} from '../../../core/providers/ollamaProvider.js'
 import {buildRenewalsChatMessages} from './prompt.js'
 import {buildServiceSnapshot} from './snapshots.js'
 import {buildChatContextFromSnapshots} from './context.js'
-import {extractSearchQuery, pickChatIntent, pickExplicitChatIntent} from './intents.js'
+import {
+  buildBareRenewalsEntityServiceListMessage,
+  extractSearchQuery,
+  pickChatIntent,
+  pickExplicitChatIntent,
+} from './intents.js'
 import {matchesText} from '../../../utils/text.js'
 import {buildCommunicationsContext, buildCommunicationsIndex} from './communications.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {buildServiceDetailPayload} from './serviceDetails.js'
-import {buildServiceListPayload} from './serviceQueries.js'
+import {buildServiceListPayload, parseServiceListQuery} from './serviceQueries.js'
+import {planServiceListRequest} from './serviceQueryPlanner.js'
+import {
+  parseServiceListReferenceRequest,
+  resolveServiceListReference,
+} from './serviceListReferences.js'
 import {buildDetailedFastToolReply, buildFastToolReply} from './utils/replyFormatters.js'
 
 export async function handleRenewalsChat({
@@ -37,16 +47,52 @@ export async function handleRenewalsChat({
   })
 
   const serviceListPaginationRequest = parseServiceListPaginationRequest(message)
-  const previousServiceListState = serviceListPaginationRequest
-    ? pickPreviousServiceListState(history, {customerId, groupId, serviceId})
-    : null
-  const serviceListPagination = previousServiceListState
-    ? buildServiceListPagination(previousServiceListState, serviceListPaginationRequest)
-    : null
+  const previousServiceListState = pickPreviousServiceListState(
+    history,
+    {
+      customerId,
+      groupId,
+      serviceId,
+    },
+    settings,
+    message
+  )
+  const serviceListReferenceRequest = parseServiceListReferenceRequest(message, {
+    allowBarePosition: Boolean(previousServiceListState),
+  })
 
-  const explicitIntent = serviceListPaginationRequest
-    ? 'service-list'
-    : pickExplicitChatIntent(message, {customerId, groupId})
+  const serviceListReference = serviceListReferenceRequest
+    ? resolvePreviousServiceListReference({
+        request: serviceListReferenceRequest,
+        previousState: previousServiceListState,
+        services,
+        settings,
+        customerId,
+        groupId,
+        serviceId,
+      })
+    : null
+  const serviceListPagination =
+    previousServiceListState && serviceListPaginationRequest
+      ? buildServiceListPagination(previousServiceListState, serviceListPaginationRequest)
+      : null
+  const serviceListPlan =
+    serviceListPaginationRequest || serviceListReferenceRequest
+      ? null
+      : planServiceListRequest({
+          message,
+          previousState: previousServiceListState,
+          settings,
+        })
+  const explicitIntent = serviceListReferenceRequest
+    ? serviceListReference?.status === 'resolved'
+      ? 'service-detail'
+      : 'clarification'
+    : serviceListPaginationRequest || serviceListPlan?.intent === 'service-list'
+      ? 'service-list'
+      : serviceListPlan?.intent === 'clarification'
+        ? 'clarification'
+        : pickExplicitChatIntent(message, {customerId, groupId})
 
   const parsedIntent = explicitIntent || pickChatIntent(message, {customerId, groupId})
   const isDetailRequest = isDetailsFollowUp(message)
@@ -67,11 +113,108 @@ export async function handleRenewalsChat({
     plannerIntent,
     previousIntent,
     planType: plan.type,
+    serviceListPlan: serviceListPlan
+      ? {
+          mode: serviceListPlan.mode,
+          confidence: serviceListPlan.confidence,
+        }
+      : null,
+    serviceListReference: serviceListReferenceRequest
+      ? {
+          status: serviceListReference?.status || null,
+          selector: serviceListReferenceRequest.selector,
+        }
+      : null,
     isStandaloneDetailRequest,
     servicesCount: debug.servicesCount ?? (Array.isArray(services) ? services.length : null),
     timings: {
       dataLoadMs: debug.dataLoadMs ?? null,
     },
+  }
+
+  if (serviceListPlan?.intent === 'clarification') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: serviceListPlan.clarification.question,
+      data: {
+        type: 'clarification',
+        reason: serviceListPlan.clarification.reason,
+      },
+      meta: {
+        ...baseMeta,
+        intent: 'clarification',
+        source: 'tool-fast',
+        guard: serviceListPlan.clarification.reason,
+      },
+    }
+  }
+
+  if (serviceListReferenceRequest && serviceListReference?.status !== 'resolved') {
+    const reason = `service-list-reference-${serviceListReference?.status || 'unresolved'}`
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildServiceListReferenceClarification(serviceListReference),
+      data: {
+        type: 'clarification',
+        reason,
+      },
+      meta: {
+        ...baseMeta,
+        intent: 'clarification',
+        source: 'tool-fast',
+        guard: reason,
+      },
+    }
+  }
+
+  if (
+    shouldStopUnsafeSummaryFallback({
+      message,
+      intent,
+      explicitIntent,
+      previousIntent,
+      plannerIntent,
+      plan,
+      serviceListPaginationRequest,
+    })
+  ) {
+    const previousList = pickPreviousServiceListState(
+      history,
+      {customerId, groupId, serviceId},
+      settings,
+      message
+    )
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildUnsafeSummaryFallbackReply({hasPreviousList: Boolean(previousList)}),
+      data: {
+        type: 'clarification',
+        reason: 'unsafe-summary-fallback',
+        previousList: previousList
+          ? {
+              label: previousList.query?.label || null,
+              offset: previousList.offset,
+              shown: previousList.shown,
+              limit: previousList.limit,
+              hasMore: previousList.hasMore,
+            }
+          : null,
+      },
+      meta: {
+        ...baseMeta,
+        intent: 'clarification',
+        source: 'tool-fast',
+        guard: 'unsafe-summary-fallback',
+      },
+    }
   }
 
   if (serviceListPaginationRequest && !previousServiceListState) {
@@ -119,7 +262,12 @@ export async function handleRenewalsChat({
     }
   }
 
-  if (plan.type === 'direct' && !serviceListPaginationRequest) {
+  if (
+    plan.type === 'direct' &&
+    !serviceListPaginationRequest &&
+    !serviceListPlan &&
+    !serviceListReferenceRequest
+  ) {
     return {
       ok: true,
       intent: plan.intent,
@@ -146,31 +294,46 @@ export async function handleRenewalsChat({
       }),
     }
   } else if (intent === 'service-detail') {
+    const referencedItem = serviceListReference?.item || null
+    const referencedServiceIds = getReferencedServiceIds(referencedItem)
+
     payload = buildServiceDetailPayload({
       services,
       settings,
-      message: String(message).trim(),
-      customerId,
-      groupId,
-      serviceId,
+      message: referencedItem?.servizio || referencedItem?.dominio || String(message).trim(),
+      customerId: referencedItem?.customerId || customerId,
+      groupId: referencedItem?.groupId || groupId,
+      serviceId:
+        referencedServiceIds.length === 1
+          ? referencedServiceIds[0]
+          : referencedItem
+            ? null
+            : serviceId,
+      serviceIds: referencedServiceIds.length > 1 ? referencedServiceIds : [],
     })
   } else if (intent === 'service-list') {
+    const serviceListPayloadMessage =
+      serviceListPlan?.sourceMessage ??
+      serviceListPagination?.sourceMessage ??
+      resolveServiceListPayloadMessage({
+        message,
+        history,
+        isStandaloneDetailRequest,
+        previousIntent,
+        customerId,
+        groupId,
+      })
+
     payload = buildServiceListPayload({
       services,
       settings,
-      message:
-        serviceListPagination?.sourceMessage ||
-        resolveServiceListPayloadMessage({
-          message,
-          history,
-          isStandaloneDetailRequest,
-          previousIntent,
-          customerId,
-          groupId,
-        }),
+      message: serviceListPayloadMessage,
       paginationMessage: serviceListPaginationRequest ? String(message).trim() : '',
-      previousQuery: previousServiceListState?.query || null,
-      pagination: serviceListPagination,
+      previousQuery:
+        serviceListPlan?.previousQuery ??
+        (serviceListPaginationRequest ? previousServiceListState?.query || null : null),
+      pagination: serviceListPlan?.pagination ?? serviceListPagination,
+      includeDontRenewOverride: serviceListPlan?.includeDontRenewOverride ?? null,
       customerId,
       groupId,
       serviceId,
@@ -484,6 +647,45 @@ export async function handleRenewalsChat({
   }
 }
 
+function shouldStopUnsafeSummaryFallback({
+  intent = null,
+  explicitIntent = null,
+  previousIntent = null,
+  plannerIntent = null,
+  plan = {},
+  serviceListPaginationRequest = null,
+} = {}) {
+  if (intent !== 'summary') return false
+
+  if (explicitIntent || previousIntent || serviceListPaginationRequest) {
+    return false
+  }
+
+  if (plan?.type === 'direct') {
+    return false
+  }
+
+  if (plan?.type === 'tool' && plannerIntent === 'summary') {
+    return false
+  }
+
+  return true
+}
+
+function buildUnsafeSummaryFallbackReply({hasPreviousList = false} = {}) {
+  if (hasPreviousList) {
+    return [
+      'Non ho capito cosa vuoi fare adesso.',
+      'Vuoi approfondire il riepilogo, tornare alla lista precedente oppure fare una nuova ricerca?',
+    ].join(' ')
+  }
+
+  return [
+    'Non ho capito la richiesta.',
+    'Puoi indicare un cliente o gruppo, un piano, uno stato, un problema di spazio, Plesk o una scadenza.',
+  ].join(' ')
+}
+
 function shouldUseFastToolReply(plan, intent) {
   if (plan.type === 'tool' && plan.useLlm === false) {
     return true
@@ -638,6 +840,8 @@ function isServiceListMoreFollowUp(message = '') {
 }
 
 function buildServiceListPagination(previousState, request) {
+  if (!previousState || !request) return null
+
   const limit = request.limit || previousState.limit || 20
   const shown = previousState.shown || previousState.limit || limit
   const currentOffset = previousState.offset || 0
@@ -682,71 +886,381 @@ function buildServiceListPagination(previousState, request) {
   }
 }
 
-function pickPreviousServiceListState(history = [], scope = {}) {
-  const items = Array.isArray(history) ? [...history].reverse() : []
+function findCurrentHistoryMessageIndex(history = [], currentMessage = '') {
+  const expectedMessage = normalizeFollowUpText(currentMessage)
 
-  for (const item of items) {
-    if (item?.role !== 'assistant') continue
+  if (!expectedMessage) {
+    return -1
+  }
 
-    const data = getHistoryItemData(item)
-    if (data?.type !== 'service-list') continue
-    if (!matchesServiceListStateScope(data, scope)) continue
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const item = history[index]
+    const role = item?.role
+    const content = getHistoryContent(item)
 
-    const query = data.query || {}
-    const offset = toFiniteNumber(query.offset, 0)
-    const shown = toFiniteNumber(data.shown, Array.isArray(data.items) ? data.items.length : 0)
-    const limit = toFiniteNumber(query.limit, shown || 20)
-    const hasMore =
-      typeof data.hasMore === 'boolean'
-        ? data.hasMore
-        : typeof data.truncated === 'boolean'
-          ? data.truncated
-          : null
+    if (!content || !['user', 'assistant'].includes(role)) {
+      continue
+    }
 
+    // Il messaggio corrente può essere escluso soltanto se è
+    // l'ultimo turno conversazionale presente nella cronologia.
+    if (role !== 'user') {
+      return -1
+    }
+
+    return normalizeFollowUpText(content) === expectedMessage ? index : -1
+  }
+
+  return -1
+}
+
+function resolvePreviousServiceListReference({
+  request,
+  previousState,
+  services = [],
+  settings = {},
+  customerId = null,
+  groupId = null,
+  serviceId = null,
+} = {}) {
+  if (!previousState?.query?.filters?.length) {
     return {
-      data,
-      query,
-      sourceMessage:
-        query.sourceMessage || pickPreviousUserMessageByIntent(history, 'service-list', scope),
-      offset,
-      shown,
-      limit,
-      hasMore,
-      nextOffset: Number.isFinite(data.nextOffset) ? data.nextOffset : offset + shown,
-      previousOffset: Number.isFinite(data.previousOffset)
-        ? data.previousOffset
-        : Math.max(offset - limit, 0),
+      status: 'missing-list',
     }
   }
 
-  const sourceMessage = pickPreviousUserMessageByIntent(history, 'service-list', scope)
-  const textState = pickPreviousServiceListTextState(history)
+  const currentItems = Array.isArray(previousState?.data?.items)
+    ? previousState.data.items
+    : buildServiceListPayload({
+        services,
+        settings,
+        message: previousState.sourceMessage || previousState.query.sourceMessage || '',
+        previousQuery: previousState.query,
+        pagination: {
+          direction: 'current',
+          limit: previousState.limit || previousState.query.limit || 20,
+          offset: previousState.offset || previousState.query.offset || 0,
+        },
+        includeDontRenewOverride:
+          typeof previousState.query.includeDontRenew === 'boolean'
+            ? previousState.query.includeDontRenew
+            : null,
+        customerId,
+        groupId,
+        serviceId,
+      }).items
 
-  if (!sourceMessage || !textState) {
+  return resolveServiceListReference({
+    request,
+    items: currentItems,
+  })
+}
+
+function getReferencedServiceIds(item = null) {
+  if (!item) {
+    return []
+  }
+
+  return [...new Set([...(item.ids || []), item.id].filter(Boolean).map(String))]
+}
+
+function buildServiceListReferenceClarification(resolution = {}) {
+  if (resolution.status === 'missing-list') {
+    return [
+      'Non ho una lista precedente da cui selezionare il servizio.',
+      'Chiedimi prima quali servizi vuoi vedere.',
+    ].join(' ')
+  }
+
+  if (resolution.status === 'empty-list') {
+    return 'La lista precedente non contiene servizi selezionabili.'
+  }
+
+  if (resolution.status === 'out-of-range') {
+    return [
+      `La pagina corrente contiene ${resolution.available || 0} servizi.`,
+      `Indica una posizione compresa tra 1 e ${resolution.available || 0}.`,
+    ].join(' ')
+  }
+
+  if (resolution.status === 'not-found') {
+    return [
+      `Non trovo nella pagina corrente un servizio corrispondente a "${resolution.term || ''}".`,
+      'Puoi indicare il numero della riga o un nome più preciso.',
+    ].join(' ')
+  }
+
+  if (resolution.status === 'ambiguous') {
+    const options = (resolution.candidates || []).slice(0, 5).map(candidate => {
+      const item = candidate.item || {}
+      const customer = item.cliente ? ` — ${item.cliente}` : ''
+      const plan = item.piano ? ` | piano ${item.piano}` : ''
+
+      return `${candidate.index + 1}. ${
+        item.servizio || item.dominio || 'Servizio'
+      }${customer}${plan}`
+    })
+
+    return [
+      `Ho trovato più servizi corrispondenti a "${resolution.term || ''}". Indica il numero della riga:`,
+      ...options,
+    ].join('\n')
+  }
+
+  return [
+    'Non sono riuscito a identificare il servizio nella lista precedente.',
+    'Indica il numero della riga o il nome del servizio.',
+  ].join(' ')
+}
+
+function pickPreviousServiceListState(
+  history = [],
+  scope = {},
+  settings = {},
+  currentMessage = ''
+) {
+  const items = Array.isArray(history) ? history : []
+  let state = null
+  const currentHistoryMessageIndex = findCurrentHistoryMessageIndex(items, currentMessage)
+
+  for (const [index, item] of items.entries()) {
+    if (index === currentHistoryMessageIndex) {
+      continue
+    }
+    const role = item?.role
+    const content = getHistoryContent(item)
+
+    if (role === 'user') {
+      if (!content) continue
+
+      const historyIntent = pickExplicitChatIntent(content, scope)
+
+      if (
+        parseServiceListReferenceRequest(content, {
+          allowBarePosition: Boolean(state),
+        }) ||
+        historyIntent === 'service-detail' ||
+        (state && isDetailsFollowUp(content))
+      ) {
+        continue
+      }
+
+      const paginationRequest = parseServiceListPaginationRequest(content)
+
+      if (paginationRequest && state) {
+        const pagination = buildServiceListPagination(state, paginationRequest)
+
+        if (pagination && !pagination.blockedReason) {
+          state = applyServiceListPaginationToState(state, pagination)
+        }
+
+        continue
+      }
+
+      const listPlan = planServiceListRequest({
+        message: content,
+        previousState: state,
+        settings,
+      })
+
+      if (listPlan?.intent === 'service-list') {
+        state = buildServiceListStateFromPlan({
+          plan: listPlan,
+          message: content,
+          previousState: state,
+          settings,
+        })
+      }
+
+      continue
+    }
+
+    if (role !== 'assistant') continue
+
+    const data = getHistoryItemData(item)
+
+    if (data?.type === 'service-list' && matchesServiceListStateScope(data, scope)) {
+      state = buildServiceListStateFromData(data, state?.sourceMessage || null)
+      continue
+    }
+
+    if (!state || !content) continue
+
+    const suggestion = parseServiceListSuggestion(content)
+
+    if (suggestion) {
+      state = {
+        ...state,
+        query: {
+          ...(state.query || {}),
+          suggestion,
+        },
+        data: {
+          ...(state.data || {}),
+          type: 'service-list',
+          query: {
+            ...(state.data?.query || state.query || {}),
+            suggestion,
+          },
+        },
+      }
+
+      continue
+    }
+
+    const textState = parseServiceListTextState(content)
+
+    if (textState) {
+      state = {
+        ...state,
+        ...textState,
+        query: {
+          ...(state.query || {}),
+          offset: textState.offset,
+          limit: textState.limit,
+        },
+      }
+    }
+  }
+
+  return state
+}
+
+function buildServiceListStateFromPlan({
+  plan,
+  message = '',
+  previousState = null,
+  settings = {},
+} = {}) {
+  const sourceMessage = plan?.sourceMessage || message
+  let query = null
+
+  if (plan?.previousQuery?.filters?.length) {
+    const pagination = plan.pagination || {}
+    const limit = toFiniteNumber(
+      pagination.limit,
+      toFiniteNumber(plan.previousQuery.limit, previousState?.limit || 20)
+    )
+    const offset = Math.max(toFiniteNumber(pagination.offset, 0), 0)
+
+    query = {
+      ...plan.previousQuery,
+      limit,
+      offset,
+      requestedLimit: Boolean(pagination.limit),
+      requestedAll: false,
+      requestedMore: pagination.direction === 'next',
+      requestedPrevious: pagination.direction === 'previous',
+      requestedFirst: pagination.direction === 'first',
+      sourceMessage: plan.previousQuery.sourceMessage || sourceMessage,
+    }
+  } else {
+    query = parseServiceListQuery({
+      message: sourceMessage,
+      settings,
+    })
+  }
+
+  if (typeof plan?.includeDontRenewOverride === 'boolean') {
+    query = {
+      ...query,
+      includeDontRenew: plan.includeDontRenewOverride,
+    }
+  }
+
+  const offset = toFiniteNumber(query?.offset, 0)
+  const limit = toFiniteNumber(query?.limit, previousState?.limit || 20)
+
+  return {
+    data: null,
+    query,
+    sourceMessage: query?.sourceMessage || sourceMessage,
+    offset,
+    shown: 0,
+    limit,
+    hasMore: null,
+    nextOffset: offset + limit,
+    previousOffset: offset > 0 ? Math.max(offset - limit, 0) : null,
+  }
+}
+
+function buildServiceListStateFromData(data = {}, fallbackSourceMessage = null) {
+  const query = data.query || {}
+  const offset = toFiniteNumber(query.offset, 0)
+  const shown = toFiniteNumber(data.shown, Array.isArray(data.items) ? data.items.length : 0)
+  const limit = toFiniteNumber(query.limit, shown || 20)
+  const hasMore =
+    typeof data.hasMore === 'boolean'
+      ? data.hasMore
+      : typeof data.truncated === 'boolean'
+        ? data.truncated
+        : null
+
+  return {
+    data,
+    query,
+    sourceMessage: query.sourceMessage || fallbackSourceMessage,
+    offset,
+    shown,
+    limit,
+    hasMore,
+    nextOffset: Number.isFinite(data.nextOffset) ? data.nextOffset : offset + shown,
+    previousOffset: Number.isFinite(data.previousOffset)
+      ? data.previousOffset
+      : offset > 0
+        ? Math.max(offset - limit, 0)
+        : null,
+  }
+}
+
+function applyServiceListPaginationToState(state, pagination) {
+  const limit = toFiniteNumber(pagination.limit, state.limit || 20)
+  const offset = Math.max(toFiniteNumber(pagination.offset, 0), 0)
+
+  return {
+    ...state,
+    data: null,
+    query: {
+      ...(state.query || {}),
+      limit,
+      offset,
+      requestedLimit: Boolean(pagination.limit),
+      requestedAll: false,
+      requestedMore: pagination.direction === 'next',
+      requestedPrevious: pagination.direction === 'previous',
+      requestedFirst: pagination.direction === 'first',
+      sourceMessage: state.query?.sourceMessage || pagination.sourceMessage || state.sourceMessage,
+    },
+    sourceMessage: pagination.sourceMessage || state.sourceMessage,
+    offset,
+    shown: 0,
+    limit,
+    hasMore: null,
+    nextOffset: offset + limit,
+    previousOffset: offset > 0 ? Math.max(offset - limit, 0) : null,
+  }
+}
+
+function parseServiceListSuggestion(content = '') {
+  const text = String(content || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+
+  if (!/\bvuoi che li mostr/i.test(text)) {
+    return null
+  }
+
+  const match = text.match(/\bho (?:pero\s+)?trovato\s+(\d+)\s+servizi?\b[\s\S]*\bnon rinnovare\b/i)
+
+  if (!match?.[1]) {
     return null
   }
 
   return {
-    data: null,
-    query: null,
-    sourceMessage,
-    ...textState,
+    kind: 'include-dont-renew',
+    count: Number(match[1]),
   }
-}
-
-function pickPreviousServiceListTextState(history = []) {
-  const items = Array.isArray(history) ? [...history].reverse() : []
-
-  for (const item of items) {
-    if (item?.role !== 'assistant') continue
-
-    const content = getHistoryContent(item)
-    const state = parseServiceListTextState(content)
-
-    if (state) return state
-  }
-
-  return null
 }
 
 function parseServiceListTextState(content = '') {
@@ -773,7 +1287,7 @@ function parseServiceListTextState(content = '') {
 
   const firstPage = text.match(/(?:i primi|le prime)\s+(\d+)/i)
 
-  if (firstPage && /ho trovato\s+\d+\s+servizi/i.test(text)) {
+  if (firstPage) {
     const shown = Number(firstPage[1])
 
     return {
@@ -838,6 +1352,13 @@ function pickPreviousUserMessageByIntent(history = [], expectedIntent, scope = {
     if (!content) continue
     if (parseServiceListPaginationRequest(content)) continue
     if (isDetailsFollowUp(content)) continue
+    if (expectedIntent === 'service-list') {
+      const bareServiceMessage = buildBareRenewalsEntityServiceListMessage(content)
+
+      if (bareServiceMessage) {
+        return bareServiceMessage
+      }
+    }
 
     const intent = pickChatIntent(content, scope)
 

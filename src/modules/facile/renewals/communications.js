@@ -16,6 +16,7 @@ export function buildCommunicationsIndex(services = []) {
         groupId: service?.customer?.group?.id || null,
         groupName,
         type: item?.type || null,
+        typeLabel: latest.typeLabel,
         communicationDate: item.communicationDate,
       }))
   })
@@ -97,6 +98,7 @@ export function buildCommunicationsContext({
       ? {
           communicationDate: latest.communicationDate,
           type: latest.type,
+          typeLabel: latest.typeLabel,
           serviceName: latest.serviceName,
           customerName: latest.customerName,
           groupName: latest.groupName,
@@ -105,6 +107,7 @@ export function buildCommunicationsContext({
     items: ordered.slice(0, 15).map(item => ({
       communicationDate: item.communicationDate,
       type: item.type,
+      typeLabel: item?.typeLabel || null,
       serviceName: item.serviceName,
       customerName: item.customerName,
       groupName: item.groupName,

@@ -25,6 +25,7 @@ export function buildServiceDetailPayload({
   customerId = null,
   groupId = null,
   serviceId = null,
+  serviceIds = [],
   limit = 20,
 } = {}) {
   const analysisPeriod = Number(settings.analysis_period ?? 30)
@@ -33,8 +34,18 @@ export function buildServiceDetailPayload({
 
   let filtered = services
 
-  if (serviceId) {
-    filtered = filtered.filter(s => String(s?.id) === String(serviceId))
+  const selectedServiceIds = new Set(
+    (Array.isArray(serviceIds) ? serviceIds : []).filter(Boolean).map(String)
+  )
+
+  if (selectedServiceIds.size > 0) {
+    filtered = filtered.filter(service => {
+      return selectedServiceIds.has(String(service?.id))
+    })
+  } else if (serviceId) {
+    filtered = filtered.filter(service => {
+      return String(service?.id) === String(serviceId)
+    })
   } else {
     if (customerId) {
       filtered = filtered.filter(s => String(s?.customer?.id) === String(customerId))
@@ -108,6 +119,7 @@ function buildServiceDetailItem(service, {thresholds, analysisPeriod}) {
     .filter(item => item?.communicationDate)
     .map(item => ({
       type: item?.type || null,
+      typeLabel: item?.typeLabel || null,
       communicationDate: item.communicationDate,
     }))
     .sort((a, b) => {

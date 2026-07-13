@@ -187,7 +187,24 @@ function buildFastServiceListReply(payload) {
       return 'Non ci sono risultati da mostrare per questa pagina.'
     }
 
-    return `Non ho trovato ${label}.`
+    const suggestion = payload?.query?.suggestion || null
+
+    if (suggestion?.kind === 'include-dont-renew') {
+      const count = Number(suggestion.count || 0)
+      const countLabel =
+        count === 1 ? '1 servizio marcato NON RINNOVARE' : `${count} servizi marcati NON RINNOVARE`
+
+      return [
+        `Non ho trovato ${label} tra i servizi rinnovabili.`,
+        `Ho però trovato ${countLabel} che corrispondono alla richiesta.`,
+        'Vuoi che li mostri includendo anche questi servizi?',
+      ].join(' ')
+    }
+
+    return [
+      `Non ho trovato ${label}.`,
+      'Vuoi modificare o rimuovere uno dei filtri per ampliare la ricerca?',
+    ].join(' ')
   }
 
   return [
@@ -229,7 +246,37 @@ function buildServiceListIntro(payload, {detailed = false} = {}) {
   const grouped = payload?.grouped === true
   const groups = payload?.groups ?? shown
   const groupedNote = grouped ? `, raggruppati in ${groups} righe` : ''
-  const note = excludedDontRenew ? ' Sono esclusi i servizi marcati NON RINNOVARE.' : ''
+  const dontRenewInfo = payload?.query?.dontRenew || null
+  const explicitDontRenewMode = dontRenewInfo?.explicitMode || null
+  const dontRenewMatches = Number(dontRenewInfo?.matchedInRequest || 0)
+
+  const noteParts = []
+  const dontRenewLabel =
+    dontRenewMatches === 1
+      ? '1 servizio marcato NON RINNOVARE'
+      : `${dontRenewMatches} servizi marcati NON RINNOVARE`
+
+  if (explicitDontRenewMode === 'include') {
+    if (dontRenewMatches > 0) {
+      noteParts.push(`Sono inclusi ${dontRenewLabel} per questa richiesta.`)
+    } else {
+      noteParts.push(
+        'Per questa richiesta non risultano servizi marcati NON RINNOVARE da includere.'
+      )
+    }
+  } else if (explicitDontRenewMode === 'exclude') {
+    if (dontRenewMatches > 0) {
+      noteParts.push(`Sono esclusi ${dontRenewLabel} per questa richiesta.`)
+    } else {
+      noteParts.push(
+        'Per questa richiesta non risultano servizi marcati NON RINNOVARE da escludere.'
+      )
+    }
+  } else if (excludedDontRenew && dontRenewMatches > 0) {
+    noteParts.push('Sono esclusi i servizi marcati NON RINNOVARE.')
+  }
+
+  const note = noteParts.length ? ` ${noteParts.join(' ')}` : ''
   const endNote = !truncated ? ' Non ci sono altri risultati.' : ''
   const shownLabel = grouped ? `le prime ${shown} righe` : `i primi ${shown}`
 
@@ -246,7 +293,10 @@ function buildServiceListIntro(payload, {detailed = false} = {}) {
   }
 
   if (requestedLimit) {
-    return `Ho trovato ${total} ${label}${groupedNote}. Ti mostro ${shown} esempi.${note}`
+    const limitLabel =
+      offset > 0 && shown > 0 ? `i risultati ${offset + 1}-${offset + shown}` : shownLabel
+
+    return `Ho trovato ${total} ${label}${groupedNote}. Ti mostro ${limitLabel}.${note}`
   }
 
   if (requestedAll && truncated) {
@@ -614,8 +664,9 @@ function formatServiceDetailItem(item) {
     lines.push(
       `  Ultime comunicazioni: ${item.comunicazioniRecenti
         .map(item => {
-          const type = item.type ? `tipo ${item.type}` : 'tipo non specificato'
-          return `${formatDateTime(item.communicationDate)} (${type})`
+          const typeLabel = item.typeLabel || 'Comunicazione'
+
+          return `${formatDateTime(item.communicationDate)} (${typeLabel})`
         })
         .join(', ')}`
     )
