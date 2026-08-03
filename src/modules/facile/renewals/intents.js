@@ -1,4 +1,5 @@
 import {matchesText, normalizeText} from '../../../utils/text.js'
+import {isMonthExpression} from './utils/dateExpressions.js'
 
 export {matchesText, normalizeText} from '../../../utils/text.js'
 
@@ -276,6 +277,10 @@ const BARE_ENTITY_STOP_WORDS = new Set([
 export function isLikelyBareRenewalsEntity(message = '') {
   const original = String(message || '').trim()
   const text = normalizeGuardText(original)
+
+  if (isMonthExpression(text)) {
+    return false
+  }
 
   if (!text || isExplicitSummaryRequest(text)) {
     return false

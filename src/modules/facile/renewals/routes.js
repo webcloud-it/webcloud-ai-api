@@ -7,6 +7,16 @@ import {handleRenewalsChat} from './chat.js'
 import {httpError} from '../../../utils/httpError.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
+import {
+  buildRecentRenewalsActionUndoPreview,
+  buildServiceFlagActionPreview,
+  handlePendingRenewalsActionClarification,
+  handlePendingRenewalsActionDecisionMessage,
+  hasPendingRenewalsActionClarification,
+  handleRenewalsActionDecision,
+  isRecentRenewalsActionUndoRequest,
+  parseServiceFlagAction,
+} from './actions.js'
 
 export async function summary(req, res) {
   const token = req.auth.token
@@ -344,14 +354,164 @@ export async function chatContext(req, res) {
 
 export async function chat(req, res) {
   const startedAt = Date.now()
-  const {message, context = {}, customerId = null, groupId = null, history = []} = req.body || {}
+  const {
+    message,
+    context = {},
+    customerId = null,
+    groupId = null,
+    history = [],
+    action = null,
+  } = req.body || {}
 
   const resolvedCustomerId = context.customerId || customerId || null
   const resolvedGroupId = context.groupId || groupId || null
   const resolvedServiceId = context.serviceId || null
 
+  if (action) {
+    const result = await handleRenewalsActionDecision({
+      action,
+      actorToken: req.auth.token,
+    })
+
+    return res.json({
+      ...result,
+      meta: {
+        ...(result.meta || {}),
+        timings: {
+          ...(result.meta?.timings || {}),
+          dataLoadMs: 0,
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
+  }
+
   if (!message || String(message).trim().length < 2) {
     throw httpError(400, 'message obbligatorio, minimo 2 caratteri')
+  }
+
+  const pendingDecisionResult = await handlePendingRenewalsActionDecisionMessage({
+    message,
+    actorToken: req.auth.token,
+  })
+
+  if (pendingDecisionResult) {
+    return res.json({
+      ...pendingDecisionResult,
+      meta: {
+        ...(pendingDecisionResult.meta || {}),
+        timings: {
+          ...(pendingDecisionResult.meta?.timings || {}),
+          dataLoadMs: 0,
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
+  }
+
+  if (isRecentRenewalsActionUndoRequest(message)) {
+    const dataLoadStartedAt = Date.now()
+
+    const services = await getAllServices()
+
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+
+    const undoResult = buildRecentRenewalsActionUndoPreview({
+      services,
+      actorToken: req.auth.token,
+    })
+
+    return res.json({
+      ...undoResult,
+
+      meta: {
+        ...(undoResult.meta || {}),
+
+        timings: {
+          ...(undoResult.meta?.timings || {}),
+
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+
+        servicesCount: Array.isArray(services) ? services.length : null,
+      },
+    })
+  }
+
+  const actionRequest = parseServiceFlagAction(message)
+
+  if (
+    !actionRequest &&
+    hasPendingRenewalsActionClarification({
+      actorToken: req.auth.token,
+    })
+  ) {
+    const dataLoadStartedAt = Date.now()
+
+    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+
+    const clarificationResult = handlePendingRenewalsActionClarification({
+      message,
+      services,
+      settings,
+      history: Array.isArray(history) ? history : [],
+      scope: {
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+        serviceId: resolvedServiceId,
+      },
+      actorToken: req.auth.token,
+    })
+
+    if (clarificationResult) {
+      return res.json({
+        ...clarificationResult,
+        meta: {
+          ...(clarificationResult.meta || {}),
+          timings: {
+            ...(clarificationResult.meta?.timings || {}),
+            dataLoadMs,
+            totalMs: Date.now() - startedAt,
+          },
+          servicesCount: Array.isArray(services) ? services.length : null,
+        },
+      })
+    }
+  }
+
+  if (actionRequest) {
+    const dataLoadStartedAt = Date.now()
+    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+
+    const result = buildServiceFlagActionPreview({
+      request: actionRequest,
+      services,
+      settings,
+      history: Array.isArray(history) ? history : [],
+      scope: {
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+        serviceId: resolvedServiceId,
+      },
+      actorToken: req.auth.token,
+    })
+
+    return res.json({
+      ...result,
+      meta: {
+        ...(result.meta || {}),
+        timings: {
+          ...(result.meta?.timings || {}),
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+        servicesCount: Array.isArray(services) ? services.length : null,
+      },
+    })
   }
 
   const directPlan = planChatRequest({

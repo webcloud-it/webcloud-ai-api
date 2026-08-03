@@ -1,3 +1,5 @@
+import {normalizeComparableText, normalizeSearchText} from '../../../utils/text.js'
+
 const ORDINALS = new Map([
   ['primo', 1],
   ['prima', 1],
@@ -21,30 +23,14 @@ const ORDINALS = new Map([
   ['decima', 10],
 ])
 
-function normalizeText(value = '') {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-}
-
-function normalizeComparable(value = '') {
-  return normalizeText(value)
-    .replace(/[^a-z0-9@]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 function hasDetailOperation(message = '') {
   return /\b(dettagli|dettaglio|scheda|approfondisci|dimmi di piu|informazioni|info|analizza|controlla|verifica)\b/i.test(
-    normalizeText(message)
+    normalizeSearchText(message)
   )
 }
 
 function extractPositionSelector(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   if (/\bultimo\b/i.test(text)) {
     return {
@@ -105,13 +91,17 @@ function extractTextSelector(message = '') {
 }
 
 function isBarePositionReference(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   return /^(?:(?:il|la)\s+)?(?:numero|n\.?|riga|posizione)?\s*\d{1,2}(?:\s*[°º])?$/.test(text)
 }
 
+export function parseServiceListSelector(message = '') {
+  return extractPositionSelector(message) || extractTextSelector(message)
+}
+
 export function parseServiceListReferenceRequest(message = '', {allowBarePosition = false} = {}) {
-  const selector = extractPositionSelector(message) || extractTextSelector(message)
+  const selector = parseServiceListSelector(message)
 
   if (!selector) {
     return null
@@ -147,8 +137,8 @@ function getItemSearchFields(item = {}) {
 }
 
 function scoreField(value, term, weight = 0) {
-  const field = normalizeComparable(value)
-  const needle = normalizeComparable(term)
+  const field = normalizeComparableText(value)
+  const needle = normalizeComparableText(term)
 
   if (!field || !needle) return 0
   if (field === needle) return 100 + weight

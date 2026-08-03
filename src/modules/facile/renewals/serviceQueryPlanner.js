@@ -1,5 +1,7 @@
 import {buildBareRenewalsEntityServiceListMessage} from './intents.js'
 import {parseServiceListQuery} from './serviceQueries.js'
+import {normalizeMonthExpression} from './utils/dateExpressions.js'
+import {compactText, normalizeSearchText} from '../../../utils/text.js'
 
 const FILTER_FAMILIES = {
   'customer-or-group': 'scope',
@@ -34,24 +36,9 @@ const FILTER_FAMILIES = {
   'supplier-expires-in-range': 'supplier-expiry',
 }
 
-function normalizeText(value = '') {
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\s+/g, ' ')
-}
-
-function compact(value = '') {
-  return String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
 function isExplicitSummaryRequest(message = '') {
   return /\b(riepilogo|riassunto|situazione|panoramica|overview|come siamo messi|stato generale)\b/i.test(
-    normalizeText(message)
+    normalizeSearchText(message)
   )
 }
 
@@ -68,7 +55,7 @@ function hasAnyQueryAnchor(message = '') {
 }
 
 function hasContextReference(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   return (
     /^(quelli|quelle|questi|queste|solo|soltanto|di\b|tra questi|fra questi)\b/i.test(text) ||
@@ -78,12 +65,12 @@ function hasContextReference(message = '') {
 
 function hasRepairPrefix(message = '') {
   return /\b(non questi|non queste|non quelli|non quelle|sbagliato|correggi|intendevo|volevo dire|invece)\b/i.test(
-    normalizeText(message)
+    normalizeSearchText(message)
   )
 }
 
 function stripRepairPrefix(message = '') {
-  return compact(
+  return compactText(
     String(message || '')
       .replace(
         /^.*?\b(non questi|non queste|non quelli|non quelle|sbagliato|correggi|intendevo|volevo dire|invece)\b[,:;\s-]*/i,
@@ -94,7 +81,7 @@ function stripRepairPrefix(message = '') {
 }
 
 function getDontRenewOverride(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   if (
     /\b(senza|escludi|escludendo|esclusi|escluse|tranne|eccetto)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/i.test(
@@ -122,7 +109,7 @@ function getDontRenewOverride(message = '') {
 }
 
 function findCompoundScopeSplit(message = '') {
-  const text = compact(message)
+  const text = compactText(message)
 
   const match = text.match(
     /^(.+?)\s+((?:solo|soltanto)\b|(?:con|senza)\b|(?:da\s+non\s+rinnovare|non\s+rinnovare)\b|(?:includi|escludi)\b)([\s\S]*)$/i
@@ -137,7 +124,7 @@ function findCompoundScopeSplit(message = '') {
 }
 
 function normalizeServiceListMessage(message = '') {
-  const original = compact(message)
+  const original = compactText(message)
   if (!original) return original
 
   if (/^di\s+\S+/i.test(original)) {
@@ -213,7 +200,7 @@ function buildMergedQuery(
     requestedMore: false,
     requestedPrevious: false,
     requestedFirst: true,
-    sourceMessage: compact(message) || previousQuery.sourceMessage || '',
+    sourceMessage: compactText(message) || previousQuery.sourceMessage || '',
   }
 }
 
@@ -230,7 +217,7 @@ function buildReplacementQuery(currentQuery = {}, message = '') {
     requestedMore: false,
     requestedPrevious: false,
     requestedFirst: true,
-    sourceMessage: compact(message),
+    sourceMessage: compactText(message),
   }
 }
 
@@ -249,7 +236,7 @@ function buildClarification(reason, question, previousState = null) {
 }
 
 function isOnlyContextReference(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   return /^(quelli|quelle|questi|queste|solo questi|solo queste|solo quelli|solo quelle)$/.test(
     text
@@ -257,7 +244,7 @@ function isOnlyContextReference(message = '') {
 }
 
 function isContextualDontRenewOnly(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   return /^(solo|soltanto)\s+(?:i\s+|gli\s+)?(?:da\s+)?non\s+rinnovare\b/i.test(text)
 }
@@ -267,7 +254,7 @@ function getPendingSuggestion(previousState = null) {
 }
 
 function isSuggestionAcceptance(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
     .replace(/[.,!?;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -277,13 +264,59 @@ function isSuggestionAcceptance(message = '') {
   )
 }
 
+function getPreviousDateRangeFilter(previousQuery = null) {
+  const filters = meaningfulFilters(previousQuery?.filters)
+
+  return (
+    filters.find(filter => filter.kind === 'supplier-expires-in-range') ||
+    filters.find(filter => filter.kind === 'expires-in-range') ||
+    null
+  )
+}
+
+function getDateRangeYear(filter = null) {
+  const start = filter?.dateRange?.start
+
+  if (!start) {
+    return null
+  }
+
+  const date = new Date(start)
+
+  return Number.isNaN(date.getTime()) ? null : date.getFullYear()
+}
+
+function buildContextualDateRangeMessage(message = '', previousQuery = null) {
+  const previousFilter = getPreviousDateRangeFilter(previousQuery)
+
+  if (!previousFilter) {
+    return null
+  }
+
+  const text = normalizeMonthExpression(message)
+
+  if (!text) {
+    return null
+  }
+
+  const hasExplicitYear = /\b20\d{2}\b/.test(text)
+  const previousYear = getDateRangeYear(previousFilter)
+
+  const dateLabel = !hasExplicitYear && previousYear ? `${text} ${previousYear}` : text
+
+  const target =
+    previousFilter.kind === 'supplier-expires-in-range' ? 'scadenza fornitore' : 'scadenza'
+
+  return `servizi con ${target} ${dateLabel}`
+}
+
 export function planServiceListRequest({
   message = '',
   previousState = null,
   settings = {},
   now = new Date(),
 } = {}) {
-  const originalMessage = compact(message)
+  const originalMessage = compactText(message)
   if (!originalMessage || isExplicitSummaryRequest(originalMessage)) return null
 
   const pendingSuggestion = getPendingSuggestion(previousState)
@@ -326,18 +359,9 @@ export function planServiceListRequest({
 
   const repair = hasRepairPrefix(originalMessage)
   const parseMessage = repair ? stripRepairPrefix(originalMessage) : originalMessage
+
   const normalizedMessage = normalizeServiceListMessage(parseMessage)
-  const currentQuery = parseServiceListQuery({
-    message: normalizedMessage,
-    settings,
-    now,
-  })
-  const currentFilters = meaningfulFilters(currentQuery.filters)
-  const dontRenewOverride = getDontRenewOverride(originalMessage)
-  const explicitListAnchor = hasExplicitListAnchor(originalMessage)
-  const explicitScopeAnchor = hasExplicitScopeAnchor(originalMessage)
-  const contextualReference = hasContextReference(originalMessage)
-  const inferredMessage = normalizedMessage !== parseMessage
+
   const previousQuery = previousState?.query?.filters?.length
     ? previousState.query
     : previousState?.sourceMessage
@@ -347,6 +371,33 @@ export function planServiceListRequest({
           now,
         })
       : null
+
+  const contextualDateRangeMessage = buildContextualDateRangeMessage(
+    normalizedMessage,
+    previousQuery
+  )
+
+  const queryMessage = contextualDateRangeMessage || normalizedMessage
+
+  const currentQuery = parseServiceListQuery({
+    message: queryMessage,
+    settings,
+    now,
+  })
+
+  const currentFilters = meaningfulFilters(currentQuery.filters)
+
+  const dontRenewOverride = getDontRenewOverride(originalMessage)
+
+  const explicitListAnchor = hasExplicitListAnchor(originalMessage)
+
+  const explicitScopeAnchor = hasExplicitScopeAnchor(originalMessage)
+
+  const contextualReference = hasContextReference(originalMessage)
+
+  const inferredMessage = normalizedMessage !== parseMessage
+
+  const dateRangeFollowUp = Boolean(contextualDateRangeMessage)
 
   if (isOnlyContextReference(originalMessage)) {
     return buildClarification(
@@ -377,14 +428,14 @@ export function planServiceListRequest({
       )
     }
 
-    const replacementQuery = buildReplacementQuery(currentQuery, normalizedMessage)
+    const replacementQuery = buildReplacementQuery(currentQuery, queryMessage)
 
     return {
       type: 'service-list-plan',
       intent: 'service-list',
       mode: 'repair',
       confidence: 'high',
-      sourceMessage: normalizedMessage,
+      sourceMessage: queryMessage,
       previousQuery: replacementQuery,
       pagination: {
         direction: 'first',
@@ -399,6 +450,7 @@ export function planServiceListRequest({
   const isFollowUp = Boolean(
     previousQuery &&
     (contextualReference ||
+      dateRangeFollowUp ||
       dontRenewOverride !== null ||
       /^di\s+/i.test(originalMessage) ||
       (!explicitListAnchor && currentFilters.length > 0 && !inferredMessage))
@@ -413,7 +465,7 @@ export function planServiceListRequest({
       )
     }
 
-    const mergedQuery = buildMergedQuery(previousQuery, currentQuery, normalizedMessage, {
+    const mergedQuery = buildMergedQuery(previousQuery, currentQuery, queryMessage, {
       dontRenewOverride,
     })
 
@@ -422,7 +474,7 @@ export function planServiceListRequest({
       intent: 'service-list',
       mode: 'follow-up',
       confidence: 'high',
-      sourceMessage: normalizedMessage,
+      sourceMessage: queryMessage,
       previousQuery: mergedQuery,
       pagination: {
         direction: 'first',
@@ -454,7 +506,7 @@ export function planServiceListRequest({
     intent: 'service-list',
     mode: 'new',
     confidence: 'high',
-    sourceMessage: normalizedMessage,
+    sourceMessage: queryMessage,
     previousQuery: null,
     pagination: null,
     includeDontRenewOverride: dontRenewOverride,

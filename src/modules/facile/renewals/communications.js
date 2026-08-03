@@ -16,7 +16,7 @@ export function buildCommunicationsIndex(services = []) {
         groupId: service?.customer?.group?.id || null,
         groupName,
         type: item?.type || null,
-        typeLabel: latest.typeLabel,
+        typeLabel: item?.typeLabel || null,
         communicationDate: item.communicationDate,
       }))
   })

@@ -1,5 +1,5 @@
 import {formatDate} from '../../../utils/formatters.js'
-import {normalizeText} from '../../../utils/text.js'
+import {compactText, normalizeSearchText} from '../../../utils/text.js'
 import {getClientSubscriptions, getServiceSpaceInfo} from './snapshots.js'
 
 const DEFAULT_LIMIT = 20
@@ -41,32 +41,23 @@ const STOP_WORDS = [
   'una',
 ]
 
-function normalizeQueryText(value = '') {
-  return normalizeText(value)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-}
-
 function includesText(value, q) {
-  const needle = normalizeQueryText(q)
-  if (!needle) return false
+  const needle = normalizeSearchText(q)
 
-  return normalizeQueryText(value).includes(needle)
-}
+  if (!needle) {
+    return false
+  }
 
-function compact(value = '') {
-  return String(value || '')
-    .replace(/\s+/g, ' ')
-    .trim()
+  return normalizeSearchText(value).includes(needle)
 }
 
 function cleanTerm(value = '') {
-  let text = compact(value)
+  let text = compactText(value)
     .replace(/[?.!,;:]+$/g, '')
     .replace(/^['"“”]+|['"“”]+$/g, '')
     .trim()
 
-  const lower = normalizeQueryText(text)
+  const lower = normalizeSearchText(text)
   const words = lower.split(' ')
 
   while (words.length && STOP_WORDS.includes(words[0])) {
@@ -77,11 +68,11 @@ function cleanTerm(value = '') {
     text = words.join(' ')
   }
 
-  return compact(text)
+  return compactText(text)
 }
 
 function stripAfterKnownTail(value = '') {
-  return compact(value)
+  return compactText(value)
     .replace(
       /\b(?:senza|escludi|escludendo|esclusi|escluse|tranne|eccetto)\b.{0,60}\b(?:i\s+|gli\s+)?(?:da\s+)?non\s+rinnovare\b.*$/i,
       ''
@@ -113,7 +104,7 @@ function clampLimit(value, fallback = DEFAULT_LIMIT) {
 }
 
 function isReservedBareServiceTerm(value = '') {
-  const text = normalizeQueryText(value)
+  const text = normalizeSearchText(value)
   if (!text) return true
 
   if (
@@ -130,7 +121,7 @@ function isReservedBareServiceTerm(value = '') {
 }
 
 function extractLimit(message = '') {
-  const text = normalizeQueryText(message)
+  const text = normalizeSearchText(message)
 
   const morePatterns = [
     /\b(?:mostramene|dammene|elencamene)\s+(?:altr[ei]\s+)?(\d{1,2})\b/i,
@@ -236,7 +227,7 @@ function buildQueryFromPreviousState({
     requestedMore: safePagination.direction === 'next',
     requestedPrevious: safePagination.direction === 'previous',
     requestedFirst: safePagination.direction === 'first',
-    sourceMessage: safePreviousQuery.sourceMessage || compact(fallbackMessage),
+    sourceMessage: safePreviousQuery.sourceMessage || compactText(fallbackMessage),
     includeDontRenew:
       typeof safePreviousQuery.includeDontRenew === 'boolean'
         ? safePreviousQuery.includeDontRenew
@@ -280,7 +271,7 @@ function resolveMonthYear(monthIndex, explicitYear = null, now = new Date()) {
 
 function extractDateRange(message = '', now = new Date()) {
   const original = String(message || '')
-  const text = normalizeQueryText(original)
+  const text = normalizeSearchText(original)
 
   const numericDate = text.match(/\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b/)
 
@@ -439,13 +430,13 @@ function pushCleanName(out, value) {
   if (!value) return
 
   if (typeof value === 'string') {
-    const text = compact(value)
+    const text = compactText(value)
     if (text) out.push(text)
     return
   }
 
   if (typeof value === 'object') {
-    const text = compact(value.name || value.label || '')
+    const text = compactText(value.name || value.label || '')
     if (text) out.push(text)
   }
 }
@@ -492,10 +483,10 @@ function getPlanRefsFromSubscription(sub) {
 function getPlanRefKey(plan = {}) {
   return [
     plan.id || '',
-    normalizeQueryText(plan.name || ''),
-    normalizeQueryText(plan.description || ''),
-    normalizeQueryText(plan.supplier || ''),
-    normalizeQueryText(plan.source || ''),
+    normalizeSearchText(plan.name || ''),
+    normalizeSearchText(plan.description || ''),
+    normalizeSearchText(plan.supplier || ''),
+    normalizeSearchText(plan.source || ''),
     plan.missingPrice ? 'missing-price' : '',
   ].join('|')
 }
@@ -573,7 +564,7 @@ function isDontRenewService(service) {
 }
 
 function getDontRenewInclusionMode(message = '') {
-  const text = normalizeQueryText(message)
+  const text = normalizeSearchText(message)
 
   if (
     /\b(senza|escludi|escludendo|esclusi|escluse|tranne|eccetto)\b.{0,50}\b(non rinnovare|da non rinnovare)\b/.test(
@@ -734,7 +725,7 @@ function extractSupplierTerm(message = '') {
 
 function extractServiceTypeTerm(message = '') {
   const text = String(message || '')
-  const normalized = normalizeQueryText(text)
+  const normalized = normalizeSearchText(text)
 
   const explicit = text.match(
     /\b(?:tipo(?:logia)?(?:\s+di\s+servizio)?|servizi?\s+di\s+tipo)\b\s*(?:servizio)?\s*([a-z0-9._@/+ -]{2,})/i
@@ -812,7 +803,7 @@ function extractCustomerOrGroupTerm(message = '') {
 }
 
 function detectBooleanFilters(message = '') {
-  const text = normalizeQueryText(message)
+  const text = normalizeSearchText(message)
   const filters = []
 
   if (
@@ -917,7 +908,7 @@ function detectBooleanFilters(message = '') {
 }
 
 function detectExpiryFilters(message = '', dateRange = null) {
-  const text = normalizeQueryText(message)
+  const text = normalizeSearchText(message)
   const filters = []
 
   if (/\b(scadut[oi]|scadenza passata|gia scadut[oi])\b/.test(text)) {
@@ -932,8 +923,18 @@ function detectExpiryFilters(message = '', dateRange = null) {
     return filters
   }
 
-  if (dateRange && /\b(scad|scadenz|rinnov|rinnovi|rinnovo|terminano|termina)\b/.test(text)) {
-    filters.push({kind: 'expires-in-range', label: `con scadenza ${dateRange.label}`, dateRange})
+  if (
+    dateRange &&
+    /\b(scadenza|scadenze|scade|scadono|scadra|scadranno|rinnovo|rinnovi|rinnovano|termina|terminano)\b/.test(
+      text
+    )
+  ) {
+    filters.push({
+      kind: 'expires-in-range',
+      label: `con scadenza ${dateRange.label}`,
+      dateRange,
+    })
+
     return filters
   }
 
@@ -1032,7 +1033,7 @@ function filterService(service, filter, {settings, now}) {
 function buildFilters({message, settings, now}) {
   const dateRange = extractDateRange(message, now)
   const filters = [...detectBooleanFilters(message), ...detectExpiryFilters(message, dateRange)]
-  const text = normalizeQueryText(message)
+  const text = normalizeSearchText(message)
 
   const planTerm = extractPlanTerm(message)
   if (planTerm) {
@@ -1051,7 +1052,7 @@ function buildFilters({message, settings, now}) {
   if (
     dateRange &&
     /\b(fornitor[ei]|supplier|provider)\b/i.test(message) &&
-    /\b(scad|scadenz)\b/i.test(message)
+    /\b(scadenza|scadenze|scade|scadono|scadra|scadranno)\b/.test(text)
   ) {
     filters.push({
       kind: 'supplier-expires-in-range',
@@ -1263,10 +1264,10 @@ function getTransferKey(value) {
 
 function getServiceItemGroupKey(item = {}) {
   return [
-    normalizeQueryText(item.servizio || ''),
-    normalizeQueryText(item.cliente || ''),
-    normalizeQueryText(item.gruppo || ''),
-    normalizeQueryText(item.piano || ''),
+    normalizeSearchText(item.servizio || ''),
+    normalizeSearchText(item.cliente || ''),
+    normalizeSearchText(item.gruppo || ''),
+    normalizeSearchText(item.piano || ''),
     item.scadenza || '',
     item.scadenzaScaduta || '',
     item.scadenzaFornitore || '',
@@ -1283,9 +1284,9 @@ function uniquePlanItems(plans = []) {
   for (const plan of plans || []) {
     const key = [
       plan.id || '',
-      normalizeQueryText(plan.name || ''),
-      normalizeQueryText(plan.source || ''),
-      normalizeQueryText(plan.supplier || ''),
+      normalizeSearchText(plan.name || ''),
+      normalizeSearchText(plan.source || ''),
+      normalizeSearchText(plan.supplier || ''),
       plan.missingPrice ? 'missing-price' : '',
     ].join('|')
 
@@ -1431,7 +1432,7 @@ export function parseServiceListQuery({
       requestedMore: pagination.direction === 'next',
       requestedPrevious: pagination.direction === 'previous',
       requestedFirst: pagination.direction === 'first',
-      sourceMessage: compact(message),
+      sourceMessage: compactText(message),
     }
   }
 
@@ -1446,7 +1447,7 @@ export function parseServiceListQuery({
     requestedMore: limitInfo.requestedMore,
     requestedPrevious: false,
     requestedFirst: false,
-    sourceMessage: compact(message),
+    sourceMessage: compactText(message),
   }
 }
 
