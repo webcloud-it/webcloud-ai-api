@@ -17,6 +17,9 @@ import {handleRenewalsChat} from './chat.js'
 import {httpError} from '../../../utils/httpError.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
+import {planReadQuery} from './readQueryPlanner.js'
+import {executeReadQuery} from './readQueryExecutor.js'
+import {buildReadQueryReply} from './readQueryFormatters.js'
 import {
   buildCopySupplierExpiryToCustomerActionPreview,
   buildRecentRenewalsActionUndoPreview,
@@ -1304,6 +1307,45 @@ export async function chat(req, res) {
         ...(result.meta || {}),
         timings: {
           ...(result.meta?.timings || {}),
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+        servicesCount: Array.isArray(services) ? services.length : null,
+      },
+    })
+  }
+
+  const readQueryPlan = await planReadQuery({
+    message,
+    history: Array.isArray(history) ? history : [],
+  })
+
+  if (readQueryPlan) {
+    const dataLoadStartedAt = Date.now()
+    const [services, serviceOptions] = await Promise.all([
+      getAllServices(),
+      getServiceOptions(),
+    ])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+    const readResult = executeReadQuery({
+      plan: readQueryPlan,
+      services,
+      options: serviceOptions,
+    })
+
+    return res.json({
+      ok: true,
+      intent: 'read-query',
+      source: readQueryPlan.source === 'semantic' ? 'tool-semantic' : 'tool-fast',
+      reply: buildReadQueryReply(readResult),
+      data: readResult,
+      meta: {
+        moduleId: 'facile.renewals',
+        intent: 'read-query',
+        entity: readQueryPlan.entity,
+        operation: readQueryPlan.operation,
+        plannerSource: readQueryPlan.source,
+        timings: {
           dataLoadMs,
           totalMs: Date.now() - startedAt,
         },
