@@ -45,6 +45,21 @@ function isExplicitSummaryRequest(message = '') {
   )
 }
 
+function isLikelyMutationRequest(message = '') {
+  const text = normalizeSearchText(message)
+
+  const hasMutationVerb =
+    /\b(?:segna|segnala|marca|imposta|attiva|abilita|aggiungi|metti|sposta|assegna|rimuovi|togli|disattiva|disabilita|leva|elimina|cancella|revoca|azzera|resetta|modifica|cambia|aggiorna|proroga|posticipa|anticipa|copia|allinea|sincronizza|usa|utilizza|salva|inserisci|registra|sostituisci)\b/i.test(
+      text
+    )
+
+  if (!hasMutationVerb) return false
+
+  return /\b(?:non\s+rinnovare|rinnovo\s+automatico|da\s+rinnovare|da\s+trasferire|data\s+di\s+fatturazione|fatturazione|scadenza\s+(?:cliente|fornitore)|scadenza\s+della?\s+sottoscrizione|sincronizzazione\s+(?:del\s+)?piano\s+plesk|no\s*sync\s+piano|auth\s*code|codice\s+(?:epp|auth|di\s+autorizzazione|di\s+trasferimento))\b/i.test(
+    text
+  )
+}
+
 function hasExplicitListAnchor(message = '') {
   return /\b(servizi?|domini?|elenco|lista)\b/i.test(message)
 }
@@ -321,6 +336,7 @@ export function planServiceListRequest({
 } = {}) {
   const originalMessage = compactText(message)
   if (!originalMessage || isExplicitSummaryRequest(originalMessage)) return null
+  if (isLikelyMutationRequest(originalMessage)) return null
 
   /*
    * Il planner delle liste non deve reinterpretare richieste con un intento

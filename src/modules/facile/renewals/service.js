@@ -583,6 +583,59 @@ function updateSubscriptionEndDateInCache(serviceId, subscriptionId, endsOn) {
   }
 }
 
+function updateSubscriptionRenewalInCache(
+  serviceId,
+  subscriptionId,
+  {startsOn = null, endsOn = null, lastRenewalDate = null} = {}
+) {
+  if (!Array.isArray(servicesCache.value)) return
+
+  const service = servicesCache.value.find(item => String(item?.id) === String(serviceId))
+  if (!service) return
+
+  const targetId = String(subscriptionId || '')
+  const seen = new Set()
+
+  const visit = subscription => {
+    if (!subscription || seen.has(subscription)) return false
+    seen.add(subscription)
+
+    if (String(subscription?.id || '') === targetId) {
+      if (startsOn !== undefined) {
+        subscription.startsOn = startsOn || null
+        subscription.starts_on = startsOn || null
+      }
+      if (endsOn !== undefined) {
+        subscription.endsOn = endsOn || null
+        subscription.ends_on = endsOn || null
+      }
+      if (lastRenewalDate !== undefined) {
+        subscription.lastRenewalDate = lastRenewalDate || null
+        subscription.last_renewal_date = lastRenewalDate || null
+      }
+      return true
+    }
+
+    const children = [
+      ...(subscription?.suppliersSubscriptions || []),
+      ...(subscription?.supplierSubscriptions || []),
+      ...(subscription?.suppliers_subscriptions || []),
+      ...(subscription?.suppliersSubscriptionsChildren || []),
+      ...(subscription?.suppliers_subscriptions_children || []),
+    ]
+
+    for (const child of children) {
+      if (visit(child?.related_subscriptions_id || child)) return true
+    }
+
+    return false
+  }
+
+  for (const subscription of Array.isArray(service?.subscriptions) ? service.subscriptions : []) {
+    if (visit(subscription)) return
+  }
+}
+
 function validateNullableDate(value, fieldName) {
   if (value === null) return
 
@@ -753,3 +806,270 @@ export async function copySupplierExpiryToCustomer({
   return result
 }
 
+
+export async function renewCustomerSubscription({
+  serviceId,
+  subscriptionId,
+  expectedStartDate = null,
+  expectedEndDate,
+  newEndDate,
+  expectedPlanId = null,
+  expectedDurationMonths = null,
+  expectedDontRenew = false,
+  expectedToRenew = false,
+  expectedPleskConnected = false,
+  expectedPleskIntegrationId = null,
+  actionId = null,
+} = {}) {
+  if (!serviceId) throw new Error('serviceId obbligatorio')
+  if (!subscriptionId) throw new Error('subscriptionId obbligatorio')
+
+  validateNullableDate(expectedStartDate, 'expectedStartDate')
+  validateNullableDate(expectedEndDate, 'expectedEndDate')
+  validateNullableDate(newEndDate, 'newEndDate')
+
+  if (!expectedEndDate) throw new Error('expectedEndDate obbligatorio')
+  if (!newEndDate) throw new Error('newEndDate obbligatorio')
+  if (typeof expectedDontRenew !== 'boolean') {
+    throw new Error('expectedDontRenew deve essere booleano')
+  }
+  if (typeof expectedToRenew !== 'boolean') {
+    throw new Error('expectedToRenew deve essere booleano')
+  }
+  if (typeof expectedPleskConnected !== 'boolean') {
+    throw new Error('expectedPleskConnected deve essere booleano')
+  }
+
+  const result = await fetchJson(
+    joinUrl(
+      env.renewalsApiBaseUrl,
+      `/services/${encodeURIComponent(serviceId)}/subscriptions/${encodeURIComponent(
+        subscriptionId
+      )}/renew`
+    ),
+    {
+      method: 'POST',
+      headers: {
+        ...authHeaders(env.crmToken),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        actionId,
+        expectedStartDate,
+        expectedEndDate,
+        newEndDate,
+        expectedPlanId,
+        expectedDurationMonths,
+        expectedDontRenew,
+        expectedToRenew,
+        expectedPleskConnected,
+        expectedPleskIntegrationId,
+      }),
+      timeoutMs: Math.max(DEFAULT_TIMEOUT_MS, 120000),
+    },
+    'Errore esecuzione rinnovo sottoscrizione'
+  )
+
+  updateSubscriptionEndDateInCache(
+    serviceId,
+    subscriptionId,
+    result?.subscription?.endsOn ?? newEndDate
+  )
+
+  if (result?.subscription?.startsOn && Array.isArray(servicesCache.value)) {
+    const service = servicesCache.value.find(item => String(item?.id) === String(serviceId))
+    const targetId = String(subscriptionId)
+
+    const visit = subscription => {
+      if (!subscription) return false
+
+      if (String(subscription?.id || '') === targetId) {
+        subscription.startsOn = result.subscription.startsOn
+        subscription.starts_on = result.subscription.startsOn
+        subscription.lastRenewalDate = result.subscription.lastRenewalDate || null
+        subscription.last_renewal_date = result.subscription.lastRenewalDate || null
+        return true
+      }
+
+      for (const child of subscription?.suppliersSubscriptions || []) {
+        if (visit(child)) return true
+      }
+
+      return false
+    }
+
+    for (const subscription of service?.subscriptions || []) {
+      if (visit(subscription)) break
+    }
+  }
+
+  if (result?.service?.flags) {
+    updateServiceFlagsInCache(serviceId, result.service.flags)
+  } else {
+    updateServiceFlagsInCache(serviceId, {toRenew: false})
+  }
+
+  invalidateRenewalsPanelCountsCache()
+
+  return result
+}
+
+export async function renewSupplierSubscription({
+  serviceId,
+  subscriptionId,
+  mode = 'renew-by-plan-duration',
+  expectedStartDate = null,
+  expectedEndDate,
+  newEndDate,
+  expectedPlanId = null,
+  expectedDurationMonths = null,
+  expectedDontRenew = false,
+  expectedToTransferId = null,
+  expectedCustomerSubscriptionId = null,
+  expectedCustomerEndDate = null,
+  actionId = null,
+} = {}) {
+  if (!serviceId) throw new Error('serviceId obbligatorio')
+  if (!subscriptionId) throw new Error('subscriptionId obbligatorio')
+
+  validateNullableDate(expectedStartDate, 'expectedStartDate')
+  validateNullableDate(expectedEndDate, 'expectedEndDate')
+  validateNullableDate(newEndDate, 'newEndDate')
+  validateNullableDate(expectedCustomerEndDate, 'expectedCustomerEndDate')
+
+  if (!expectedEndDate) throw new Error('expectedEndDate obbligatorio')
+  if (!newEndDate) throw new Error('newEndDate obbligatorio')
+  if (!['renew-by-plan-duration', 'align-customer-expiry'].includes(mode)) {
+    throw new Error('mode non supportata')
+  }
+  if (typeof expectedDontRenew !== 'boolean') {
+    throw new Error('expectedDontRenew deve essere booleano')
+  }
+
+  const result = await fetchJson(
+    joinUrl(
+      env.renewalsApiBaseUrl,
+      `/services/${encodeURIComponent(serviceId)}/subscriptions/${encodeURIComponent(
+        subscriptionId
+      )}/renew-supplier`
+    ),
+    {
+      method: 'POST',
+      headers: {
+        ...authHeaders(env.crmToken),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        actionId,
+        mode,
+        expectedStartDate,
+        expectedEndDate,
+        newEndDate,
+        expectedPlanId,
+        expectedDurationMonths,
+        expectedDontRenew,
+        expectedToTransferId,
+        expectedCustomerSubscriptionId,
+        expectedCustomerEndDate,
+      }),
+      timeoutMs: Math.max(DEFAULT_TIMEOUT_MS, 120000),
+    },
+    'Errore esecuzione rinnovo sottoscrizione fornitore'
+  )
+
+  updateSubscriptionRenewalInCache(serviceId, subscriptionId, {
+    startsOn: result?.subscription?.startsOn ?? expectedEndDate,
+    endsOn: result?.subscription?.endsOn ?? newEndDate,
+    lastRenewalDate: result?.subscription?.lastRenewalDate ?? expectedEndDate,
+  })
+
+  invalidateRenewalsPanelCountsCache()
+
+  return result
+}
+
+
+export async function renewFullService({
+  serviceId,
+  customer = {},
+  supplier = {},
+  expectedDontRenew = false,
+  actionId = null,
+} = {}) {
+  if (!serviceId) throw new Error('serviceId obbligatorio')
+  if (!customer?.subscriptionId) throw new Error('customer.subscriptionId obbligatorio')
+  if (!supplier?.subscriptionId) throw new Error('supplier.subscriptionId obbligatorio')
+
+  validateNullableDate(customer.expectedStartDate ?? null, 'customer.expectedStartDate')
+  validateNullableDate(customer.expectedEndDate ?? null, 'customer.expectedEndDate')
+  validateNullableDate(customer.newEndDate ?? null, 'customer.newEndDate')
+  validateNullableDate(supplier.expectedStartDate ?? null, 'supplier.expectedStartDate')
+  validateNullableDate(supplier.expectedEndDate ?? null, 'supplier.expectedEndDate')
+  validateNullableDate(supplier.newEndDate ?? null, 'supplier.newEndDate')
+  validateNullableDate(
+    supplier.expectedCustomerEndDate ?? null,
+    'supplier.expectedCustomerEndDate'
+  )
+
+  if (typeof expectedDontRenew !== 'boolean') {
+    throw new Error('expectedDontRenew deve essere booleano')
+  }
+
+  const result = await fetchJson(
+    joinUrl(env.renewalsApiBaseUrl, `/services/${encodeURIComponent(serviceId)}/renew-full`),
+    {
+      method: 'POST',
+      headers: {
+        ...authHeaders(env.crmToken),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        actionId,
+        expectedDontRenew,
+        customer,
+        supplier,
+      }),
+      timeoutMs: Math.max(DEFAULT_TIMEOUT_MS, 120000),
+    },
+    'Errore esecuzione rinnovo completo del servizio'
+  )
+
+  const customerResult = result?.customer || null
+  const supplierResult = result?.supplier || null
+
+  if (supplierResult?.subscription) {
+    updateSubscriptionRenewalInCache(serviceId, supplier.subscriptionId, {
+      startsOn:
+        supplierResult.subscription.startsOn ??
+        supplierResult.subscription.previousEndDate ??
+        supplier.expectedEndDate,
+      endsOn: supplierResult.subscription.endsOn ?? supplier.newEndDate,
+      lastRenewalDate:
+        supplierResult.subscription.lastRenewalDate ?? supplier.expectedEndDate,
+    })
+  }
+
+  if (customerResult?.subscription) {
+    updateSubscriptionRenewalInCache(serviceId, customer.subscriptionId, {
+      startsOn:
+        customerResult.subscription.startsOn ??
+        customerResult.subscription.previousEndDate ??
+        customer.expectedEndDate,
+      endsOn: customerResult.subscription.endsOn ?? customer.newEndDate,
+      lastRenewalDate:
+        customerResult.subscription.lastRenewalDate ?? customer.expectedEndDate,
+    })
+  }
+
+  if (result?.service?.flags) {
+    updateServiceFlagsInCache(serviceId, result.service.flags)
+  } else if (customerResult?.service?.flags) {
+    updateServiceFlagsInCache(serviceId, customerResult.service.flags)
+  } else {
+    updateServiceFlagsInCache(serviceId, {toRenew: false})
+  }
+
+  invalidateRenewalsPanelCountsCache()
+
+  return result
+}

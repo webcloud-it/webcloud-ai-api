@@ -291,7 +291,7 @@ export function isLikelyBareRenewalsEntity(message = '') {
   }
 
   if (
-    /\b(servizi|servizio|domini|dominio|rinnovi|rinnovo|scadenze|scadenza|spazio|plesk)\b/i.test(
+    /\b(servizi|servizio|domini|dominio|rinnovi|rinnovo|scadenze|scadenza|scade|scadono|scadra|scadranno|scaduti|scadute|imminente|imminenti|spazio|plesk)\b/i.test(
       text
     )
   ) {

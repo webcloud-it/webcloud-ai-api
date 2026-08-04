@@ -80,6 +80,7 @@ function extractTextSelector(message = '') {
 
   const term = String(match?.[1] || '')
     .replace(/[?.!,;:]+$/g, '')
+    .replace(/^(?:fornitore|provider|supplier|piano|plan|cliente|azienda|gruppo|dominio|servizio)\s+/i, '')
     .trim()
 
   return term
@@ -122,6 +123,12 @@ export function parseServiceListReferenceRequest(message = '', {allowBarePositio
   }
 }
 
+function getReferenceText(value) {
+  if (!value) return null
+  if (typeof value === 'object') return value.name || value.label || value.id || null
+  return value
+}
+
 function getItemSearchFields(item = {}) {
   return [
     {value: item.servizio, weight: 8},
@@ -129,10 +136,23 @@ function getItemSearchFields(item = {}) {
     {value: item.cliente, weight: 4},
     {value: item.gruppo, weight: 2},
     {value: item.piano, weight: 1},
-    ...(item.piani || []).map(plan => ({
-      value: plan?.name,
-      weight: 1,
+    {value: getReferenceText(item.fornitore), weight: 4},
+    {value: getReferenceText(item.provider), weight: 4},
+    {value: getReferenceText(item.supplier), weight: 4},
+    ...(item.fornitori || []).map(provider => ({
+      value: getReferenceText(provider),
+      weight: 4,
     })),
+    ...(item.piani || []).flatMap(plan => [
+      {
+        value: plan?.name,
+        weight: 1,
+      },
+      {
+        value: getReferenceText(plan?.supplier),
+        weight: 4,
+      },
+    ]),
   ].filter(field => field.value)
 }
 
