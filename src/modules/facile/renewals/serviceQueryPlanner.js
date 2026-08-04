@@ -1,4 +1,7 @@
-import {buildBareRenewalsEntityServiceListMessage} from './intents.js'
+import {
+  buildBareRenewalsEntityServiceListMessage,
+  pickExplicitChatIntent,
+} from './intents.js'
 import {parseServiceListQuery} from './serviceQueries.js'
 import {normalizeMonthExpression} from './utils/dateExpressions.js'
 import {compactText, normalizeSearchText} from '../../../utils/text.js'
@@ -318,6 +321,18 @@ export function planServiceListRequest({
 } = {}) {
   const originalMessage = compactText(message)
   if (!originalMessage || isExplicitSummaryRequest(originalMessage)) return null
+
+  /*
+   * Il planner delle liste non deve reinterpretare richieste con un intento
+   * esplicito diverso da una lista. Ad esempio "info su example.it" è una
+   * richiesta di dettaglio: senza questo guard il dominio viene scambiato per
+   * un'entità isolata e trasformato in "servizi di info su example.it".
+   */
+  const explicitIntent = pickExplicitChatIntent(originalMessage)
+
+  if (explicitIntent && explicitIntent !== 'service-list') {
+    return null
+  }
 
   const pendingSuggestion = getPendingSuggestion(previousState)
 

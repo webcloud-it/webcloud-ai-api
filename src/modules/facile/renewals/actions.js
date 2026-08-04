@@ -4,9 +4,19 @@ import {normalizeSearchText} from '../../../utils/text.js'
 import {buildServiceListPayload} from './serviceQueries.js'
 import {parseServiceListSelector, resolveServiceListReference} from './serviceListReferences.js'
 import {pickPreviousServiceListState} from './serviceListState.js'
-import {updateServiceFlags} from './service.js'
+import {
+  copySupplierExpiryToCustomer,
+  updateServiceFlags,
+  updateSubscriptionEndDate,
+} from './service.js'
 
 const TOOL_ID = 'renewals.update-service-flags'
+const TRANSFER_TOOL_ID = 'renewals.set-transfer-target'
+const INVOICE_DATE_TOOL_ID = 'renewals.set-invoice-date'
+const PLESK_PLAN_SYNC_TOOL_ID = 'renewals.set-plesk-plan-sync'
+const AUTH_CODE_TOOL_ID = 'renewals.set-auth-code'
+const SUBSCRIPTION_END_DATE_TOOL_ID = 'renewals.set-subscription-end-date'
+const COPY_SUPPLIER_EXPIRY_TOOL_ID = 'renewals.copy-supplier-expiry-to-customer'
 const PROPOSAL_TTL_MS = 10 * 60 * 1000
 const proposals = new Map()
 const pendingClarifications = new Map()
@@ -115,6 +125,232 @@ const SERVICE_FLAG_ACTIONS = [
   }),
 ]
 
+const TRANSFER_TARGET_TERM_PATTERN =
+  /\bda\s+trasferire\b|\bper\s+(?:il\s+)?trasferimento\b|\bfornitore\s+di\s+trasferimento\b|\bdestinazione\s+del\s+trasferimento\b|\bto[_ -]?transfer\b/i
+
+const TRANSFER_PROVIDER_SEPARATOR_PATTERN = '(?:a|ad|verso|su|con|presso)'
+
+const INVOICE_DATE_TERM_PATTERN =
+  /\bdata\s+(?:di\s+)?fatturazione\b|\bfatturazione\b|\binvoice[_ -]?date\b/i
+
+const SUBSCRIPTION_END_DATE_TERM_PATTERN =
+  /\b(?:data\s+(?:di\s+)?)?scadenza\b|\bends?[_ -]?on\b/i
+
+const SUPPLIER_SUBSCRIPTION_TERM_PATTERN =
+  /\b(?:fornitore|fornitori|supplier|provider)\b/i
+
+const SUBSCRIPTION_DATE_SET_VERBS_PATTERN =
+  `(?:${SET_ACTION_VERBS_PATTERN}|modifica|modificalo|modificala|cambia|cambialo|cambiala|aggiorna|aggiornalo|aggiornala|proroga|prorogalo|prorogala|posticipa|posticipalo|posticipala|anticipa|anticipalo|anticipala)`
+
+const COPY_SUPPLIER_EXPIRY_VERBS_PATTERN =
+  '(?:copia|copialo|copiala|copiami|allinea|allinealo|allineala|sincronizza|sincronizzalo|sincronizzala|usa|usalo|usala|utilizza|utilizzalo|utilizzala|imposta|impostalo|impostala|porta|portalo|portala|riporta|riportalo|riportala)'
+
+const PLESK_PLAN_SYNC_TERM_PATTERN =
+  /\bno\s*sync\s+(?:del\s+)?piano\b|\b(?:sincronizzazione|sincronizza(?:re|zione)?|sync)\b[\s\S]{0,50}\b(?:piano|plan)\b[\s\S]{0,30}\bplesk\b|\bplesk\b[\s\S]{0,50}\b(?:sincronizzazione|sincronizza(?:re|zione)?|sync)\b(?:[\s\S]{0,30}\b(?:piano|plan)\b)?/i
+
+const AUTH_CODE_TERM_PATTERN =
+  /\b(?:auth\s*code|authcode|codice\s+(?:di\s+)?autorizzazione|codice\s+(?:di\s+)?trasferimento|codice\s+auth|epp\s*code|codice\s+epp|authorization\s+code)\b/i
+
+const AUTH_CODE_SET_VERBS_PATTERN =
+  `(?:${SET_ACTION_VERBS_PATTERN}|salva|salvalo|salvala|inserisci|inseriscilo|inseriscila|registra|registralo|registrala|aggiorna|aggiornalo|aggiornala|modifica|modificalo|modificala|cambia|cambialo|cambiala|sostituisci|sostituiscilo|sostituiscila)`
+
+const AUTH_CODE_MAX_LENGTH = 512
+
+const ITALIAN_MONTHS = Object.freeze({
+  gennaio: 0,
+  febbraio: 1,
+  marzo: 2,
+  aprile: 3,
+  maggio: 4,
+  giugno: 5,
+  luglio: 6,
+  agosto: 7,
+  settembre: 8,
+  ottobre: 9,
+  novembre: 10,
+  dicembre: 11,
+})
+
+function toLocalNoonIso(year, monthIndex, day) {
+  const date = new Date(year, monthIndex, day, 12, 0, 0, 0)
+
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== monthIndex ||
+    date.getDate() !== day
+  ) {
+    return null
+  }
+
+  const pad = value => String(value).padStart(2, '0')
+
+  return `${year}-${pad(monthIndex + 1)}-${pad(day)}T12:00:00`
+}
+
+function normalizeInvoiceDateValue(value) {
+  if (!value) return null
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+
+  return toLocalNoonIso(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function parseInvoiceDateValue(message = '') {
+  const text = normalizeSearchText(message)
+
+  let match = text.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})\b/)
+  if (match) {
+    return toLocalNoonIso(Number(match[3]), Number(match[2]) - 1, Number(match[1]))
+  }
+
+  match = text.match(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/)
+  if (match) {
+    return toLocalNoonIso(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  }
+
+  match = text.match(
+    /\b(\d{1,2})\s+(gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)(?:\s+(\d{4}))?\b/i
+  )
+
+  if (match) {
+    const year = match[3] ? Number(match[3]) : new Date().getFullYear()
+    return toLocalNoonIso(year, ITALIAN_MONTHS[match[2].toLowerCase()], Number(match[1]))
+  }
+
+  return null
+}
+
+function formatInvoiceDate(value) {
+  const normalized = normalizeInvoiceDateValue(value)
+  if (!normalized) return 'non impostata'
+
+  return new Intl.DateTimeFormat('it-IT').format(new Date(normalized))
+}
+
+
+function normalizeAuthCodeValue(value) {
+  if (value === null || value === undefined) return null
+
+  const normalized = String(value).trim()
+
+  return normalized || null
+}
+
+function authCodeState(value) {
+  return {
+    isSet: Boolean(normalizeAuthCodeValue(value)),
+    sensitive: true,
+  }
+}
+
+function stripMatchingQuotes(value = '') {
+  const text = String(value || '').trim()
+  const pairs = [
+    ['"', '"'],
+    ["'", "'"],
+    ['“', '”'],
+    ['«', '»'],
+  ]
+
+  for (const [start, end] of pairs) {
+    if (text.startsWith(start) && text.endsWith(end) && text.length >= 2) {
+      return text.slice(start.length, -end.length).trim()
+    }
+  }
+
+  return text
+}
+
+function cleanAuthCodeInput(value = '') {
+  return normalizeAuthCodeValue(stripMatchingQuotes(value))
+}
+
+function redactAuthCodeMessage(message = '', authCode = null) {
+  const code = normalizeAuthCodeValue(authCode)
+  if (!code) return String(message || '').trim()
+
+  return String(message || '').replace(code, '[RISERVATO]').trim()
+}
+
+function cleanAuthCodeServiceTarget(value = '') {
+  const cleaned = String(value || '')
+    .replace(new RegExp(`\\b${AUTH_CODE_SET_VERBS_PATTERN}\\b`, 'gi'), ' ')
+    .replace(new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'gi'), ' ')
+    .replace(AUTH_CODE_TERM_PATTERN, ' ')
+    .replace(
+      /\b(?:ora|adesso|poi|quindi|allora|invece|il|lo|la|l|un|una|di|del|dello|della|da|dal|dalla|per|su|sul|a|al|nel|nello|nella|servizio|dominio)\b/gi,
+      ' '
+    )
+    .replace(/[,:;!?]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return cleanTransferServiceTarget(cleaned)
+}
+
+function buildAuthCodeChange(from, to) {
+  return {
+    field: 'authCode',
+    label: 'AUTH CODE',
+    from: authCodeState(from),
+    to: authCodeState(to),
+    sensitive: true,
+  }
+}
+
+function cleanProviderTarget(value = '') {
+  return String(value || '')
+    .replace(/^[\s:,-]+|[\s?.!,;:,-]+$/g, '')
+    .replace(/^(?:il|lo|la|i|gli|le|un|una)\s+/i, '')
+    .replace(/^(?:fornitore|provider)\s+/i, '')
+    .trim()
+}
+
+function cleanTransferServiceTarget(value = '') {
+  const cleaned = cleanTarget(value)
+    .replace(/^(?:ora|adesso|poi|quindi|allora|invece)\s+/i, '')
+    .trim()
+
+  if (
+    /^(?:come|lo|la|questo|questa|quello|quella|il servizio|quel servizio|questo servizio)?$/i.test(
+      cleaned
+    )
+  ) {
+    return null
+  }
+
+  return cleaned || null
+}
+
+function buildTransferRequest({
+  message,
+  providerQuery = null,
+  namedTarget = null,
+  selector = null,
+  clear = false,
+}) {
+  const resolvedNamedTarget = selector ? null : cleanTransferServiceTarget(namedTarget)
+
+  return {
+    type: 'renewals-transfer-target-request',
+    tool: TRANSFER_TOOL_ID,
+    message: String(message || '').trim(),
+    field: 'toTransfer',
+    label: 'DA TRASFERIRE',
+    clear,
+    providerQuery: clear ? null : cleanProviderTarget(providerQuery),
+    selector,
+    selectorSource: selector
+      ? 'previous-list'
+      : resolvedNamedTarget
+        ? 'named-target'
+        : 'context',
+    namedTarget: resolvedNamedTarget,
+  }
+}
+
+
 function cleanupProposals(now = Date.now()) {
   for (const [actionId, proposal] of proposals.entries()) {
     const finishedAt = proposal.finishedAt || proposal.expiresAt
@@ -157,6 +393,16 @@ function getRecentActionContext(actorToken = '') {
   return recentActionContexts.get(fingerprintToken(actorToken)) || null
 }
 
+export function getRecentRenewalsActionTarget({actorToken = ''} = {}) {
+  const context = getRecentActionContext(actorToken)
+
+  return context?.target
+    ? {
+        ...context.target,
+      }
+    : null
+}
+
 function rememberRecentActionTarget(actorToken = '', target = null) {
   if (!target?.id) return
 
@@ -183,6 +429,8 @@ function rememberCompletedAction(actorToken = '', proposal = null) {
   }
 
   const actorFingerprint = fingerprintToken(actorToken)
+  const beforeValues = proposal.expectedValues || proposal.expectedFlags || {}
+  const afterValues = proposal.desiredValues || proposal.desiredFlags || {}
 
   recentActionContexts.set(actorFingerprint, {
     target: {
@@ -193,16 +441,19 @@ function rememberCompletedAction(actorToken = '', proposal = null) {
 
     lastCompleted: {
       actionId: proposal.actionId,
+      tool: proposal.tool || TOOL_ID,
+      operation: proposal.operation || 'service-flags',
       target: proposal.target,
+      subscription: proposal.subscription ? {...proposal.subscription} : null,
 
       changes: proposal.changes.map(change => ({...change})),
 
-      beforeFlags: {
-        ...proposal.expectedFlags,
+      beforeValues: {
+        ...beforeValues,
       },
 
-      afterFlags: {
-        ...proposal.desiredFlags,
+      afterValues: {
+        ...afterValues,
       },
 
       completedAt: proposal.finishedAt || Date.now(),
@@ -414,6 +665,529 @@ export function parseServiceFlagAction(message = '') {
   return null
 }
 
+
+export function parseServiceTransferTargetAction(message = '') {
+  const text = String(message || '').trim()
+  const normalized = normalizeSearchText(text)
+
+  if (!normalized || !TRANSFER_TARGET_TERM_PATTERN.test(normalized)) {
+    return null
+  }
+
+  const selector = parseServiceListSelector(text)
+  const remove = new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'i').test(normalized)
+  const set = new RegExp(`\\b${SET_ACTION_VERBS_PATTERN}\\b`, 'i').test(normalized)
+
+  if (remove && !set) {
+    const targetPatterns = [
+      new RegExp(
+        `\\b${REMOVE_ACTION_VERBS_PATTERN}\\b[\\s\\S]{0,40}(?:da\\s+trasferire|per\\s+(?:il\\s+)?trasferimento|to[_ -]?transfer)\\s+(?:da|dal|dalla|su|per)\\s+(.+)$`,
+        'i'
+      ),
+      new RegExp(
+        `\\b${REMOVE_ACTION_VERBS_PATTERN}\\b\\s+(?:il\\s+|lo\\s+|la\\s+)?(?:servizio\\s+|dominio\\s+)?(.+?)\\s+(?:da\\s+)?(?:da\\s+trasferire|per\\s+(?:il\\s+)?trasferimento|to[_ -]?transfer)\\b`,
+        'i'
+      ),
+    ]
+
+    let namedTarget = null
+
+    if (!selector) {
+      for (const pattern of targetPatterns) {
+        const match = text.match(pattern)
+
+        if (match?.[1]) {
+          namedTarget = match[1]
+          break
+        }
+      }
+    }
+
+    return buildTransferRequest({
+      message: text,
+      selector,
+      namedTarget,
+      clear: true,
+    })
+  }
+
+  if (!set || remove) {
+    return null
+  }
+
+  const patterns = [
+    new RegExp(
+      `\\b${SET_ACTION_VERBS_PATTERN}\\b\\s+(?:il\\s+|lo\\s+|la\\s+)?(?:servizio\\s+|dominio\\s+)?(.+?)\\s+(?:come\\s+)?(?:da\\s+trasferire|per\\s+(?:il\\s+)?trasferimento|to[_ -]?transfer)\\s+${TRANSFER_PROVIDER_SEPARATOR_PATTERN}\\s+(.+)$`,
+      'i'
+    ),
+    new RegExp(
+      `\\b${SET_ACTION_VERBS_PATTERN}\\b[\\s\\S]{0,50}(?:da\\s+trasferire|per\\s+(?:il\\s+)?trasferimento|to[_ -]?transfer)\\s+${TRANSFER_PROVIDER_SEPARATOR_PATTERN}\\s+(.+)$`,
+      'i'
+    ),
+    new RegExp(
+      `\\b${SET_ACTION_VERBS_PATTERN}\\b\\s+(.+?)\\s+come\\s+(?:fornitore\\s+di\\s+trasferimento|destinazione\\s+del\\s+trasferimento)\\s+(?:per|su|al|sul)\\s+(.+)$`,
+      'i'
+    ),
+  ]
+
+  const first = text.match(patterns[0])
+
+  if (first?.[2]) {
+    return buildTransferRequest({
+      message: text,
+      selector,
+      namedTarget: selector ? null : first[1],
+      providerQuery: first[2],
+    })
+  }
+
+  const contextual = text.match(patterns[1])
+
+  if (contextual?.[1]) {
+    return buildTransferRequest({
+      message: text,
+      selector,
+      namedTarget: null,
+      providerQuery: contextual[1],
+    })
+  }
+
+  const providerFirst = text.match(patterns[2])
+
+  if (providerFirst?.[1] && providerFirst?.[2]) {
+    return buildTransferRequest({
+      message: text,
+      selector,
+      namedTarget: selector ? null : providerFirst[2],
+      providerQuery: providerFirst[1],
+    })
+  }
+
+  return null
+}
+
+export function parseServiceInvoiceDateAction(message = '') {
+  const text = String(message || '').trim()
+  const normalized = normalizeSearchText(text)
+
+  if (!normalized || !INVOICE_DATE_TERM_PATTERN.test(normalized)) return null
+
+  const selector = parseServiceListSelector(text)
+  const remove = new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'i').test(normalized)
+  const set = new RegExp(`\\b${SET_ACTION_VERBS_PATTERN}\\b`, 'i').test(normalized)
+
+  if (remove && !set) {
+    const withoutCommand = text
+      .replace(new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'i'), ' ')
+      .replace(INVOICE_DATE_TERM_PATTERN, ' ')
+      .replace(/\b(?:di|da|dal|dalla|del|dello|della|su|per|a|al)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    const resolvedNamedTarget = selector ? null : cleanTransferServiceTarget(withoutCommand)
+
+    return {
+      type: 'renewals-invoice-date-request',
+      tool: INVOICE_DATE_TOOL_ID,
+      message: text,
+      field: 'invoiceDate',
+      label: 'DATA DI FATTURAZIONE',
+      clear: true,
+      desiredDate: null,
+      selector,
+      selectorSource: selector
+        ? 'previous-list'
+        : resolvedNamedTarget
+          ? 'named-target'
+          : 'context',
+      namedTarget: resolvedNamedTarget,
+    }
+  }
+
+  if (!set || remove) return null
+
+  const desiredDate = parseInvoiceDateValue(text)
+  if (!desiredDate) return null
+
+  const datePatterns = [
+    /\b(?:al|a|per|su|del|dello|della)?\s*\d{1,2}[\/-]\d{1,2}[\/-]\d{4}\b/i,
+    /\b(?:al|a|per|su|del|dello|della)?\s*\d{4}-\d{1,2}-\d{1,2}\b/i,
+    /\b(?:al|a|per|su|del|dello|della)?\s*\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)(?:\s+\d{4})?\b/i,
+  ]
+
+  let namedTarget = text
+    .replace(new RegExp(`\\b${SET_ACTION_VERBS_PATTERN}\\b`, 'i'), ' ')
+    .replace(INVOICE_DATE_TERM_PATTERN, ' ')
+
+  for (const datePattern of datePatterns) {
+    namedTarget = namedTarget.replace(datePattern, ' ')
+  }
+
+  namedTarget = namedTarget
+    .replace(/\b(?:di|del|dello|della|per|su|al|a)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  const resolvedNamedTarget = selector ? null : cleanTransferServiceTarget(namedTarget)
+
+  return {
+    type: 'renewals-invoice-date-request',
+    tool: INVOICE_DATE_TOOL_ID,
+    message: text,
+    field: 'invoiceDate',
+    label: 'DATA DI FATTURAZIONE',
+    clear: false,
+    desiredDate,
+    selector,
+    selectorSource: selector
+      ? 'previous-list'
+      : resolvedNamedTarget
+        ? 'named-target'
+        : 'context',
+    namedTarget: resolvedNamedTarget,
+  }
+}
+
+
+function cleanSubscriptionEndDateServiceTarget(value = '') {
+  const datePatterns = [
+    /\b(?:al|a|per|su|del|dello|della)?\s*\d{1,2}[\/-]\d{1,2}[\/-]\d{4}\b/i,
+    /\b(?:al|a|per|su|del|dello|della)?\s*\d{4}-\d{1,2}-\d{1,2}\b/i,
+    /\b(?:al|a|per|su|del|dello|della)?\s*\d{1,2}\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)(?:\s+\d{4})?\b/i,
+  ]
+
+  let cleaned = String(value || '')
+    .replace(new RegExp(`\\b${SUBSCRIPTION_DATE_SET_VERBS_PATTERN}\\b`, 'gi'), ' ')
+    .replace(/\b(?:data\s+(?:di\s+)?)?scadenza\b/gi, ' ')
+    .replace(/\b(?:sottoscrizione|subscription)\b/gi, ' ')
+    .replace(/\b(?:cliente|client|customer|fornitore|fornitori|supplier|provider)\b/gi, ' ')
+    .replace(/\b(?:id|numero|n)\s+[0-9a-f-]{6,}\b/gi, ' ')
+
+  for (const datePattern of datePatterns) {
+    cleaned = cleaned.replace(datePattern, ' ')
+  }
+
+  cleaned = cleaned
+    .replace(
+      /\b(?:ora|adesso|poi|quindi|allora|invece|la|il|lo|l|un|una|del|dello|della|di|da|dal|su|sul|per|a|al|con|nel|nello|nella|servizio|dominio)\b/gi,
+      ' '
+    )
+    .replace(/[,:;!?]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return cleanTransferServiceTarget(cleaned)
+}
+
+export function parseServiceSubscriptionEndDateAction(message = '') {
+  const text = String(message || '').trim()
+  const normalized = normalizeSearchText(text)
+
+  if (!normalized || !SUBSCRIPTION_END_DATE_TERM_PATTERN.test(normalized)) return null
+
+  const hasSetVerb = new RegExp(`\\b${SUBSCRIPTION_DATE_SET_VERBS_PATTERN}\\b`, 'i').test(
+    normalized
+  )
+
+  if (!hasSetVerb) return null
+
+  const desiredDate = parseInvoiceDateValue(text)
+  if (!desiredDate) return null
+
+  const selector = parseServiceListSelector(text)
+  const subscriptionType = SUPPLIER_SUBSCRIPTION_TERM_PATTERN.test(normalized)
+    ? 'supplier'
+    : 'customer'
+
+  const explicitSubscriptionMatch = text.match(
+    /\b(?:sottoscrizione|subscription)\s+(?:(?:id|numero|n\.?)[\s:#-]*)?([0-9a-f]{6,}(?:-[0-9a-f-]+)?)\b/i
+  )
+
+  const namedTarget = selector ? null : cleanSubscriptionEndDateServiceTarget(text)
+
+  return {
+    type: 'renewals-subscription-end-date-request',
+    tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+    message: text,
+    field: 'subscriptionEndDate',
+    label:
+      subscriptionType === 'supplier' ? 'SCADENZA FORNITORE' : 'SCADENZA CLIENTE',
+    subscriptionType,
+    subscriptionId: explicitSubscriptionMatch?.[1] || null,
+    desiredDate,
+    selector,
+    selectorSource: selector ? 'previous-list' : namedTarget ? 'named-target' : 'context',
+    namedTarget,
+  }
+}
+
+
+function cleanCopySupplierExpiryServiceTarget(value = '') {
+  const cleaned = String(value || '')
+    .replace(new RegExp(`\\b${COPY_SUPPLIER_EXPIRY_VERBS_PATTERN}\\b`, 'gi'), ' ')
+    .replace(/\b(?:data\s+(?:di\s+)?)?scadenza\b/gi, ' ')
+    .replace(/\b(?:sottoscrizione|subscription)\b/gi, ' ')
+    .replace(/\b(?:cliente|client|customer|fornitore|fornitori|supplier|provider)\b/gi, ' ')
+    .replace(/\b(?:quella|quello|stessa|stesso|uguale|identica|identico|come)\b/gi, ' ')
+    .replace(/\b(?:sulla|sul|alla|al|della|del|dal|da|di|per|su|a)\b/gi, ' ')
+    .replace(/\b(?:ora|adesso|poi|quindi|allora|invece|servizio|dominio)\b/gi, ' ')
+    .replace(/[,:;!?]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return cleanTransferServiceTarget(cleaned)
+}
+
+export function parseCopySupplierExpiryToCustomerAction(message = '') {
+  const text = String(message || '').trim()
+  const normalized = normalizeSearchText(text)
+
+  if (!normalized || !SUBSCRIPTION_END_DATE_TERM_PATTERN.test(normalized)) return null
+  if (!SUPPLIER_SUBSCRIPTION_TERM_PATTERN.test(normalized)) return null
+  if (!/\b(?:cliente|client|customer)\b/i.test(normalized)) return null
+
+  const hasCopyVerb = new RegExp(`\\b${COPY_SUPPLIER_EXPIRY_VERBS_PATTERN}\\b`, 'i').test(
+    normalized
+  )
+  const hasCopyRelation =
+    /\b(?:come|uguale\s+a|identica\s+a|identico\s+a|a\s+quella\s+del|alla\s+stessa\s+data\s+del)\b/i.test(
+      normalized
+    )
+
+  if (!hasCopyVerb && !hasCopyRelation) return null
+
+  const selector = parseServiceListSelector(text)
+  const supplierSubscriptionMatch = text.match(
+    /\b(?:fornitore|supplier|provider)\b[\s\S]{0,50}?\b(?:id|numero|n\.?)\s*[:#-]?\s*([0-9a-f]{6,}(?:-[0-9a-f-]+)?)\b/i
+  )
+  const customerSubscriptionMatch = text.match(
+    /\b(?:cliente|client|customer)\b[\s\S]{0,50}?\b(?:id|numero|n\.?)\s*[:#-]?\s*([0-9a-f]{6,}(?:-[0-9a-f-]+)?)\b/i
+  )
+  const namedTarget = selector ? null : cleanCopySupplierExpiryServiceTarget(text)
+
+  return {
+    type: 'renewals-copy-supplier-expiry-to-customer-request',
+    tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+    message: text,
+    field: 'subscriptionEndDate',
+    label: 'SCADENZA CLIENTE',
+    supplierSubscriptionId: supplierSubscriptionMatch?.[1] || null,
+    customerSubscriptionId: customerSubscriptionMatch?.[1] || null,
+    selector,
+    selectorSource: selector ? 'previous-list' : namedTarget ? 'named-target' : 'context',
+    namedTarget,
+  }
+}
+
+
+function cleanPleskPlanSyncServiceTarget(value = '') {
+  const cleaned = String(value || '')
+    .replace(/(?:non\s+sincronizzare(?:\s+pi[uù])?|senza\s+sincronizzazione)/gi, ' ')
+    .replace(/\b(?:riattiva|riattivalo|riattivala|riabilita|riabilitalo|riabilitala)\b/gi, ' ')
+    .replace(new RegExp(`\\b${SET_ACTION_VERBS_PATTERN}\\b`, 'gi'), ' ')
+    .replace(new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'gi'), ' ')
+    .replace(/\bno\s*sync\s+(?:del\s+)?piano\b/gi, ' ')
+    .replace(
+      /\b(?:sincronizzazione|sincronizza|sincronizzare|sync)\s+(?:del\s+|dello\s+|della\s+)?(?:piano|plan)(?:\s+(?:con|su))?\s+plesk\b/gi,
+      ' '
+    )
+    .replace(/\b(?:piano|plan)(?:\s+(?:con|su))?\s+plesk\b/gi, ' ')
+    .replace(/\bplesk\s+(?:piano|plan)?\s*(?:sincronizzazione|sync)\b/gi, ' ')
+    .replace(/\b(?:sincronizzazione|sincronizza|sincronizzare|sync)\b/gi, ' ')
+    .replace(/\b(?:piano|plan|piu)\b|più/gi, ' ')
+    .replace(
+      /\b(?:ora|adesso|poi|quindi|allora|invece|la|il|lo|l|un|una|del|dello|della|di|da|dal|dalla|su|sul|per|a|al|con|nel|nello|nella|servizio|dominio)\b/gi,
+      ' '
+    )
+    .replace(/[,:;!?]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return cleanTransferServiceTarget(cleaned)
+}
+
+export function parseServicePleskPlanSyncAction(message = '') {
+  const text = String(message || '').trim()
+  const normalized = normalizeSearchText(text)
+
+  if (!normalized || !PLESK_PLAN_SYNC_TERM_PATTERN.test(normalized)) return null
+
+  const selector = parseServiceListSelector(text)
+  const noSyncTerm = /\bno\s*sync\s+(?:del\s+)?piano\b/i.test(normalized)
+  const explicitDisable =
+    /\bnon\s+sincronizzare(?:\s+piu)?\b|\bsenza\s+sincronizzazione\b/i.test(normalized)
+  const explicitEnable =
+    /\b(?:riattiva|riattivalo|riattivala|riabilita|riabilitalo|riabilitala)\b/i.test(normalized)
+  const remove = new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'i').test(normalized)
+  const set = new RegExp(`\\b${SET_ACTION_VERBS_PATTERN}\\b`, 'i').test(normalized)
+
+  let desiredValue = null
+
+  if (explicitDisable) {
+    desiredValue = false
+  } else if (explicitEnable) {
+    desiredValue = true
+  } else if (noSyncTerm) {
+    if (remove && !set) desiredValue = true
+    else if (set && !remove) desiredValue = false
+  } else if (remove !== set) {
+    desiredValue = set
+  }
+
+  if (typeof desiredValue !== 'boolean') return null
+
+  const namedTarget = selector ? null : cleanPleskPlanSyncServiceTarget(text)
+
+  return {
+    type: 'renewals-plesk-plan-sync-request',
+    tool: PLESK_PLAN_SYNC_TOOL_ID,
+    message: text,
+    field: 'pleskPlansSync',
+    label: 'SINCRONIZZAZIONE PIANO PLESK',
+    desiredValue,
+    selector,
+    selectorSource: selector ? 'previous-list' : namedTarget ? 'named-target' : 'context',
+    namedTarget,
+  }
+}
+
+
+export function parseServiceAuthCodeAction(message = '') {
+  const text = String(message || '').trim()
+  const normalized = normalizeSearchText(text)
+
+  if (!normalized || !AUTH_CODE_TERM_PATTERN.test(normalized)) return null
+
+  const selector = parseServiceListSelector(text)
+  const remove = new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'i').test(normalized)
+  const set = new RegExp(`\\b${AUTH_CODE_SET_VERBS_PATTERN}\\b`, 'i').test(normalized)
+
+  if (remove && !set) {
+    const withoutCommand = text
+      .replace(new RegExp(`\\b${REMOVE_ACTION_VERBS_PATTERN}\\b`, 'i'), ' ')
+      .replace(AUTH_CODE_TERM_PATTERN, ' ')
+      .replace(/\b(?:di|da|dal|dalla|del|dello|della|su|sul|per|a|al)\b/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    const namedTarget = selector ? null : cleanAuthCodeServiceTarget(withoutCommand)
+
+    return {
+      type: 'renewals-auth-code-request',
+      tool: AUTH_CODE_TOOL_ID,
+      message: text,
+      field: 'authCode',
+      label: 'AUTH CODE',
+      clear: true,
+      desiredAuthCode: null,
+      selector,
+      selectorSource: selector ? 'previous-list' : namedTarget ? 'named-target' : 'context',
+      namedTarget,
+    }
+  }
+
+  const article = "(?:(?:il|lo)\\s+|l(?:['’]\\s*|\\s+))?"
+  const term = AUTH_CODE_TERM_PATTERN.source
+  let desiredAuthCode = null
+  let namedTarget = null
+
+  const serviceFirst = text.match(
+    new RegExp(
+      `\\b${AUTH_CODE_SET_VERBS_PATTERN}\\b\\s+${article}${term}\\s+(?:di|del|dello|della|per|su|sul)\\s+(.+?)\\s+(?:a|ad|in|con|come|:)\\s+(.+)$`,
+      'i'
+    )
+  )
+
+  if (serviceFirst?.[2]) {
+    namedTarget = selector ? null : cleanAuthCodeServiceTarget(serviceFirst[1])
+    desiredAuthCode = cleanAuthCodeInput(serviceFirst[2])
+  }
+
+  if (!desiredAuthCode) {
+    const codeFirstWithSeparator = text.match(
+      new RegExp(
+        `\\b${AUTH_CODE_SET_VERBS_PATTERN}\\b\\s+${article}${term}\\s+(?:a|ad|in|con|come|:)\\s+(.+?)\\s+(?:per|su|sul|di|del|dello|della)\\s+(.+)$`,
+        'i'
+      )
+    )
+
+    if (codeFirstWithSeparator?.[2]) {
+      desiredAuthCode = cleanAuthCodeInput(codeFirstWithSeparator[1])
+      namedTarget = selector ? null : cleanAuthCodeServiceTarget(codeFirstWithSeparator[2])
+    }
+  }
+
+  if (!desiredAuthCode) {
+    const codeFirst = text.match(
+      new RegExp(
+        `\\b${AUTH_CODE_SET_VERBS_PATTERN}\\b\\s+${article}${term}\\s+(.+?)\\s+(?:per|su|sul|di|del|dello|della)\\s+(.+)$`,
+        'i'
+      )
+    )
+
+    if (codeFirst?.[2]) {
+      desiredAuthCode = cleanAuthCodeInput(codeFirst[1])
+      namedTarget = selector ? null : cleanAuthCodeServiceTarget(codeFirst[2])
+    }
+  }
+
+  if (!desiredAuthCode) {
+    const valueAsAuthCode = text.match(
+      new RegExp(
+        `\\b${AUTH_CODE_SET_VERBS_PATTERN}\\b\\s+(.+?)\\s+come\\s+${article}${term}\\s+(?:per|su|sul|di|del|dello|della)\\s+(.+)$`,
+        'i'
+      )
+    )
+
+    if (valueAsAuthCode?.[2]) {
+      desiredAuthCode = cleanAuthCodeInput(valueAsAuthCode[1])
+      namedTarget = selector ? null : cleanAuthCodeServiceTarget(valueAsAuthCode[2])
+    }
+  }
+
+  if (!desiredAuthCode && set) {
+    const contextual = text.match(
+      new RegExp(
+        `\\b${AUTH_CODE_SET_VERBS_PATTERN}\\b[\\s\\S]{0,40}${term}\\s+(?:a|ad|in|con|come|:)\\s+(.+)$`,
+        'i'
+      )
+    )
+
+    if (contextual?.[1]) {
+      desiredAuthCode = cleanAuthCodeInput(contextual[1])
+    }
+  }
+
+  if (!desiredAuthCode) {
+    const declarative = text.match(
+      new RegExp(
+        `${term}\\s+(?:di|del|dello|della|per|su|sul)\\s+(.+?)\\s+(?:e|è|:)\\s+(.+)$`,
+        'i'
+      )
+    )
+
+    if (declarative?.[2]) {
+      namedTarget = selector ? null : cleanAuthCodeServiceTarget(declarative[1])
+      desiredAuthCode = cleanAuthCodeInput(declarative[2])
+    }
+  }
+
+  if (!set && !desiredAuthCode) return null
+
+  return {
+    type: 'renewals-auth-code-request',
+    tool: AUTH_CODE_TOOL_ID,
+    message: redactAuthCodeMessage(text, desiredAuthCode),
+    field: 'authCode',
+    label: 'AUTH CODE',
+    clear: false,
+    desiredAuthCode,
+    selector,
+    selectorSource: selector ? 'previous-list' : namedTarget ? 'named-target' : 'context',
+    namedTarget,
+  }
+}
+
 export function isRecentRenewalsActionUndoRequest(message = '') {
   const normalized = normalizeActionDecisionMessage(message)
 
@@ -517,6 +1291,11 @@ function buildCandidateDetails(service = {}) {
     toRenew: getServiceFlagValue(service, 'toRenew'),
     dontRenew: getServiceFlagValue(service, 'dontRenew'),
     autoRenew: getServiceFlagValue(service, 'autoRenew'),
+    toTransfer: getServiceTransferProvider(service),
+    invoiceDate: normalizeInvoiceDateValue(service?.invoiceDate ?? service?.invoice_date ?? null),
+    pleskPlansSync: getServicePleskPlanSyncValue(service),
+    hasPlesk: hasPleskService(service),
+    authCodeSet: Boolean(normalizeAuthCodeValue(service?.authCode ?? service?.auth_code ?? null)),
   }
 }
 
@@ -660,13 +1439,38 @@ function buildResolutionClarification(resolution = {}, services = [], request = 
   }
 
   if (resolution.status === 'ambiguous') {
+    const isTransferAction = request.type === 'renewals-transfer-target-request'
+    const isPleskSyncAction = request.type === 'renewals-plesk-plan-sync-request'
+    const isAuthCodeAction = request.type === 'renewals-auth-code-request'
+    const isSubscriptionEndDateAction =
+      request.type === 'renewals-subscription-end-date-request'
     const config = getServiceFlagActionConfig(request.field)
     const label = config?.label || request.label || 'FLAG'
 
-    const question =
-      request.desiredValue === true
-        ? `Quale vuoi segnare come ${label}?`
-        : `Da quale vuoi rimuovere ${label}?`
+    let question
+
+    if (isTransferAction) {
+      question = request.clear
+        ? 'Da quale servizio vuoi rimuovere DA TRASFERIRE?'
+        : `Quale servizio vuoi marcare DA TRASFERIRE${
+            request.providerQuery ? ` verso ${request.providerQuery}` : ''
+          }?`
+    } else if (isPleskSyncAction) {
+      question = request.desiredValue
+        ? 'Per quale servizio vuoi attivare la sincronizzazione del piano con Plesk?'
+        : 'Per quale servizio vuoi disattivare la sincronizzazione del piano con Plesk?'
+    } else if (isAuthCodeAction) {
+      question = request.clear
+        ? 'Da quale servizio vuoi rimuovere l’AUTH CODE?'
+        : 'Per quale servizio vuoi impostare o sostituire l’AUTH CODE?'
+    } else if (isSubscriptionEndDateAction) {
+      question = `Di quale servizio vuoi modificare la ${String(request.label || 'scadenza').toLowerCase()}?`
+    } else {
+      question =
+        request.desiredValue === true
+          ? `Quale vuoi segnare come ${label}?`
+          : `Da quale vuoi rimuovere ${label}?`
+    }
 
     const rows = (resolution.candidates || []).slice(0, 8).map((candidate, index) => {
       const ids = uniqueServiceIds(candidate.item || {})
@@ -675,6 +1479,7 @@ function buildResolutionClarification(resolution = {}, services = [], request = 
 
       const details = buildCandidateDetails(service || {})
       const currentValue = details[request.field] === true
+      const currentTransfer = details.toTransfer
 
       return [
         `${index + 1}. ${details.serviceName || 'Servizio'} (ID ${details.id || '—'})`,
@@ -684,7 +1489,13 @@ function buildResolutionClarification(resolution = {}, services = [], request = 
         `   Fornitore: ${details.suppliers.join(', ') || '—'}`,
         `   Scadenza cliente: ${details.customerExpiry || '—'}`,
         `   Scadenza fornitore: ${details.supplierExpiry || '—'}`,
-        `   Stato attuale: ${label} ${currentValue ? 'attivo' : 'non attivo'}`,
+        isTransferAction
+          ? `   DA TRASFERIRE: ${currentTransfer ? providerLabel(currentTransfer) : 'non impostato'}`
+          : isPleskSyncAction
+            ? `   Plesk: ${details.hasPlesk ? 'collegato' : 'non collegato'} | Sincronizzazione piano: ${details.pleskPlansSync ? 'attiva' : 'disattivata'}`
+            : isAuthCodeAction
+              ? `   AUTH CODE: ${details.authCodeSet ? 'presente' : 'non presente'}`
+              : `   Stato attuale: ${label} ${currentValue ? 'attivo' : 'non attivo'}`,
       ].join('\n')
     })
 
@@ -742,6 +1553,262 @@ function getServiceFlagValue(service = {}, field) {
   }
 
   return false
+}
+
+
+function getSubscriptionId(subscription = {}) {
+  return subscription?.id ? String(subscription.id) : null
+}
+
+function getSubscriptionIsSupplier(subscription = {}) {
+  return subscription?.isSupplier === true || subscription?.is_supplier_subscription === true
+}
+
+function getSubscriptionStartDate(subscription = {}) {
+  return normalizeInvoiceDateValue(subscription?.startsOn ?? subscription?.starts_on ?? null)
+}
+
+function getSubscriptionEndDate(subscription = {}) {
+  return normalizeInvoiceDateValue(subscription?.endsOn ?? subscription?.ends_on ?? null)
+}
+
+function getSubscriptionPlanName(subscription = {}) {
+  return subscription?.plan?.name || subscription?.plans_id?.name || null
+}
+
+function getSubscriptionSupplierName(subscription = {}) {
+  return (
+    subscription?.plan?.supplier?.name ||
+    subscription?.plans_id?.suppliers_id?.name ||
+    null
+  )
+}
+
+function collectServiceSubscriptions(service = {}) {
+  const out = []
+  const seen = new Set()
+
+  const visit = subscription => {
+    if (!subscription) return
+
+    const id = getSubscriptionId(subscription)
+
+    if (id && !seen.has(id)) {
+      seen.add(id)
+      out.push(subscription)
+    }
+
+    const children =
+      subscription?.suppliersSubscriptions ||
+      subscription?.suppliers_subscriptions ||
+      subscription?.suppliersSubscriptionsChildren ||
+      []
+
+    for (const child of Array.isArray(children) ? children : []) {
+      visit(child?.related_subscriptions_id || child)
+    }
+  }
+
+  for (const subscription of Array.isArray(service?.subscriptions) ? service.subscriptions : []) {
+    visit(subscription)
+  }
+
+  return out
+}
+
+function findServiceSubscription(service = {}, subscriptionId) {
+  const targetId = String(subscriptionId || '').trim()
+
+  if (!targetId) return null
+
+  return (
+    collectServiceSubscriptions(service).find(
+      subscription => getSubscriptionId(subscription) === targetId
+    ) || null
+  )
+}
+
+function subscriptionTypeLabel(subscription = {}) {
+  return getSubscriptionIsSupplier(subscription) ? 'fornitore' : 'cliente'
+}
+
+function buildSubscriptionReference(subscription = {}) {
+  return {
+    id: getSubscriptionId(subscription),
+    type: getSubscriptionIsSupplier(subscription) ? 'supplier' : 'customer',
+    label: getSubscriptionIsSupplier(subscription)
+      ? 'Sottoscrizione fornitore'
+      : 'Sottoscrizione cliente',
+    planName: getSubscriptionPlanName(subscription),
+    supplierName: getSubscriptionSupplierName(subscription),
+    startsOn: getSubscriptionStartDate(subscription),
+    endsOn: getSubscriptionEndDate(subscription),
+  }
+}
+
+function buildSubscriptionChoiceLine(subscription = {}, index = 0) {
+  const ref = buildSubscriptionReference(subscription)
+
+  return [
+    `${index + 1}. ${ref.label} (ID ${ref.id || '—'})`,
+    `   Piano: ${ref.planName || '—'}`,
+    `   Fornitore: ${ref.supplierName || '—'}`,
+    `   Inizio: ${ref.startsOn ? formatInvoiceDate(ref.startsOn) : '—'}`,
+    `   Scadenza: ${ref.endsOn ? formatInvoiceDate(ref.endsOn) : '—'}`,
+  ].join('\n')
+}
+
+function resolveSubscriptionForRequest(service = {}, request = {}) {
+  const expectedSupplier = request.subscriptionType === 'supplier'
+  const candidates = collectServiceSubscriptions(service).filter(
+    subscription => getSubscriptionIsSupplier(subscription) === expectedSupplier
+  )
+
+  if (request.subscriptionId) {
+    const explicit = candidates.find(
+      subscription => getSubscriptionId(subscription) === String(request.subscriptionId)
+    )
+
+    return explicit
+      ? {status: 'resolved', subscription: explicit, candidates}
+      : {status: 'not-found', candidates}
+  }
+
+  if (!candidates.length) return {status: 'empty', candidates}
+  if (candidates.length === 1) return {status: 'resolved', subscription: candidates[0], candidates}
+
+  return {status: 'ambiguous', candidates}
+}
+
+
+function getServicePleskPlanSyncValue(service = {}) {
+  const raw = service?.pleskPlansSync ?? service?.plesk_plans_sync
+
+  return raw !== false
+}
+
+function hasPleskService(service = {}) {
+  if (service?.pleskDomain?.id || service?.plesk_domain?.id) return true
+
+  const relation = service?.domains_id?.plesk_domain
+
+  if (Array.isArray(relation)) {
+    return relation.some(item => Boolean(item?.id || item))
+  }
+
+  return Boolean(relation?.id || relation)
+}
+
+
+function getServiceTransferProvider(service = {}) {
+  const raw = service?.toTransfer ?? service?.to_transfer ?? null
+
+  if (!raw) return null
+
+  if (typeof raw === 'object') {
+    const id = raw?.id ? String(raw.id) : null
+
+    return id
+      ? {
+          id,
+          name: raw?.name || null,
+        }
+      : null
+  }
+
+  const id = String(raw).trim()
+
+  return id
+    ? {
+        id,
+        name: null,
+      }
+    : null
+}
+
+function normalizeProviderOption(option = {}) {
+  const id = option?.value ?? option?.id ?? null
+  const name = option?.label ?? option?.name ?? null
+
+  return id
+    ? {
+        id: String(id),
+        name: name ? String(name) : null,
+      }
+    : null
+}
+
+function providerLabel(provider = null) {
+  return provider?.name || provider?.id || 'nessun fornitore'
+}
+
+function normalizeProviderSearch(value = '') {
+  return normalizeComparable(value)
+}
+
+function resolveTransferProvider(providerQuery = '', providers = []) {
+  const query = String(providerQuery || '').trim()
+
+  if (!query) {
+    return {
+      status: 'missing-provider',
+    }
+  }
+
+  const options = providers.map(normalizeProviderOption).filter(Boolean)
+  const directId = options.find(provider => provider.id === query)
+
+  if (directId) {
+    return {
+      status: 'resolved',
+      provider: directId,
+    }
+  }
+
+  const normalizedQuery = normalizeProviderSearch(query)
+
+  const exact = options.filter(
+    provider => normalizeProviderSearch(provider.name || '') === normalizedQuery
+  )
+
+  if (exact.length === 1) {
+    return {
+      status: 'resolved',
+      provider: exact[0],
+    }
+  }
+
+  const partial = options.filter(provider => {
+    const normalizedName = normalizeProviderSearch(provider.name || '')
+
+    return normalizedName && normalizedName.includes(normalizedQuery)
+  })
+
+  if (partial.length === 1) {
+    return {
+      status: 'resolved',
+      provider: partial[0],
+    }
+  }
+
+  const candidates = exact.length > 1 ? exact : partial
+
+  if (candidates.length > 1) {
+    return {
+      status: 'ambiguous',
+      term: query,
+      candidates,
+    }
+  }
+
+  return {
+    status: 'not-found',
+    term: query,
+  }
+}
+
+function sameProvider(first = null, second = null) {
+  return String(first?.id || '') === String(second?.id || '')
 }
 
 function buildChange(field, label, from, to) {
@@ -842,12 +1909,205 @@ function buildUndoUnavailableResponse(reason, reply) {
   }
 }
 
+function getCurrentActionValues(service = {}, operation = 'service-flags', resource = null) {
+  if (operation === 'transfer-target') {
+    return {
+      toTransfer: getServiceTransferProvider(service)?.id || null,
+    }
+  }
+
+  if (operation === 'invoice-date') {
+    return {
+      invoiceDate: normalizeInvoiceDateValue(service?.invoiceDate ?? service?.invoice_date ?? null),
+    }
+  }
+
+  if (operation === 'plesk-plan-sync') {
+    return {
+      pleskPlansSync: getServicePleskPlanSyncValue(service),
+    }
+  }
+
+  if (operation === 'auth-code') {
+    return {
+      authCode: normalizeAuthCodeValue(service?.authCode ?? service?.auth_code ?? null),
+    }
+  }
+
+  if (operation === 'subscription-end-date') {
+    const subscription = findServiceSubscription(service, resource?.id)
+
+    return {
+      subscriptionEndDate: subscription ? getSubscriptionEndDate(subscription) : undefined,
+    }
+  }
+
+  return {
+    dontRenew: getServiceFlagValue(service, 'dontRenew'),
+    autoRenew: getServiceFlagValue(service, 'autoRenew'),
+    toRenew: getServiceFlagValue(service, 'toRenew'),
+  }
+}
+
+function sameActionValue(field, first, second) {
+  if (field === 'toTransfer') {
+    return String(first || '') === String(second || '')
+  }
+
+  if (field === 'invoiceDate' || field === 'subscriptionEndDate') {
+    return normalizeInvoiceDateValue(first) === normalizeInvoiceDateValue(second)
+  }
+
+  if (field === 'authCode') {
+    return normalizeAuthCodeValue(first) === normalizeAuthCodeValue(second)
+  }
+
+  return first === second
+}
+
+function buildUndoChanges(completed = {}) {
+  const beforeValues = completed.beforeValues || completed.beforeFlags || {}
+  const afterValues = completed.afterValues || completed.afterFlags || {}
+  const fields = Object.keys(afterValues)
+
+  return fields
+    .filter(field => !sameActionValue(field, afterValues[field], beforeValues[field]))
+    .map(field => {
+      if (field === 'toTransfer') {
+        const originalChange = (completed.changes || []).find(change => change.field === field)
+
+        return buildChange(
+          field,
+          'DA TRASFERIRE',
+          originalChange?.to || (afterValues[field] ? {id: afterValues[field], name: null} : null),
+          originalChange?.from || (beforeValues[field] ? {id: beforeValues[field], name: null} : null)
+        )
+      }
+
+      if (field === 'invoiceDate') {
+        return buildChange(
+          field,
+          'DATA DI FATTURAZIONE',
+          afterValues[field] || null,
+          beforeValues[field] || null
+        )
+      }
+
+      if (field === 'subscriptionEndDate') {
+        const label =
+          completed.subscription?.type === 'supplier'
+            ? 'SCADENZA FORNITORE'
+            : 'SCADENZA CLIENTE'
+
+        return buildChange(
+          field,
+          label,
+          afterValues[field] || null,
+          beforeValues[field] || null
+        )
+      }
+
+      if (field === 'pleskPlansSync') {
+        return buildChange(
+          field,
+          'SINCRONIZZAZIONE PIANO PLESK',
+          afterValues[field] === true,
+          beforeValues[field] === true
+        )
+      }
+
+      if (field === 'authCode') {
+        return buildAuthCodeChange(afterValues[field], beforeValues[field])
+      }
+
+      return buildChange(
+        field,
+        SERVICE_FLAG_LABELS[field] || field,
+        afterValues[field],
+        beforeValues[field]
+      )
+    })
+}
+
+function describeTransferChange(change = {}, {completed = false} = {}) {
+  const destination = change?.to ? providerLabel(change.to) : null
+
+  if (destination) {
+    return completed
+      ? `DA TRASFERIRE impostato verso ${destination}`
+      : `imposterò DA TRASFERIRE verso ${destination}`
+  }
+
+  const previous = change?.from ? ` (${providerLabel(change.from)})` : ''
+
+  return completed
+    ? `DA TRASFERIRE rimosso${previous}`
+    : `rimuoverò DA TRASFERIRE${previous}`
+}
+
+function describePlannedChanges(changes = []) {
+  return joinItalian(
+    changes.map(change => {
+      if (change.field === 'toTransfer') return describeTransferChange(change)
+      if (change.field === 'invoiceDate') {
+        return change.to
+          ? `imposterò la DATA DI FATTURAZIONE al ${formatInvoiceDate(change.to)}`
+          : `rimuoverò la DATA DI FATTURAZIONE${change.from ? ` del ${formatInvoiceDate(change.from)}` : ''}`
+      }
+      if (change.field === 'subscriptionEndDate') {
+        return change.to
+          ? `imposterò la ${change.label} al ${formatInvoiceDate(change.to)}`
+          : `rimuoverò la ${change.label}${change.from ? ` del ${formatInvoiceDate(change.from)}` : ''}`
+      }
+      if (change.field === 'pleskPlansSync') {
+        return change.to
+          ? 'attiverò la SINCRONIZZAZIONE DEL PIANO CON PLESK'
+          : 'disattiverò la SINCRONIZZAZIONE DEL PIANO CON PLESK'
+      }
+      if (change.field === 'authCode') {
+        if (change.to?.isSet && change.from?.isSet) return 'sostituirò l’AUTH CODE attualmente presente'
+        if (change.to?.isSet) return 'imposterò l’AUTH CODE'
+        return 'rimuoverò l’AUTH CODE attualmente presente'
+      }
+      return change.to ? `attiverò ${change.label}` : `disattiverò ${change.label}`
+    })
+  )
+}
+
+function describeCompletedChanges(changes = []) {
+  return joinItalian(
+    changes.map(change => {
+      if (change.field === 'toTransfer') return describeTransferChange(change, {completed: true})
+      if (change.field === 'invoiceDate') {
+        return change.to
+          ? `DATA DI FATTURAZIONE impostata al ${formatInvoiceDate(change.to)}`
+          : `DATA DI FATTURAZIONE rimossa${change.from ? ` (era ${formatInvoiceDate(change.from)})` : ''}`
+      }
+      if (change.field === 'subscriptionEndDate') {
+        return change.to
+          ? `${change.label} impostata al ${formatInvoiceDate(change.to)}`
+          : `${change.label} rimossa${change.from ? ` (era ${formatInvoiceDate(change.from)})` : ''}`
+      }
+      if (change.field === 'pleskPlansSync') {
+        return change.to
+          ? 'SINCRONIZZAZIONE DEL PIANO CON PLESK attivata'
+          : 'SINCRONIZZAZIONE DEL PIANO CON PLESK disattivata'
+      }
+      if (change.field === 'authCode') {
+        if (change.to?.isSet && change.from?.isSet) return 'AUTH CODE sostituito'
+        if (change.to?.isSet) return 'AUTH CODE impostato'
+        return 'AUTH CODE rimosso'
+      }
+      return change.to ? `${change.label} attivato` : `${change.label} disattivato`
+    })
+  )
+}
+
 export function buildRecentRenewalsActionUndoPreview({services = [], actorToken = ''} = {}) {
   cleanupProposals()
   cleanupRecentActionContexts()
 
   const recentContext = getRecentActionContext(actorToken)
-
   const completed = recentContext?.lastCompleted || null
 
   if (!completed) {
@@ -873,24 +2133,30 @@ export function buildRecentRenewalsActionUndoPreview({services = [], actorToken 
     )
   }
 
-  if (!isCoherentServiceFlagState(completed.beforeFlags)) {
+  const operation = completed.operation || 'service-flags'
+  const beforeValues = completed.beforeValues || completed.beforeFlags || {}
+  const afterValues = completed.afterValues || completed.afterFlags || {}
+
+  if (operation === 'service-flags' && !isCoherentServiceFlagState(beforeValues)) {
     return buildUndoUnavailableResponse(
       'action-undo-invalid-previous-state',
       'Non posso ripristinare lo stato precedente perché non rispetta più le regole di coerenza tra i flag.'
     )
   }
 
-  const currentFlags = {
-    dontRenew: getServiceFlagValue(service, 'dontRenew'),
-
-    autoRenew: getServiceFlagValue(service, 'autoRenew'),
-
-    toRenew: getServiceFlagValue(service, 'toRenew'),
+  if (operation === 'subscription-end-date' && !findServiceSubscription(service, completed.subscription?.id)) {
+    return buildUndoUnavailableResponse(
+      'action-undo-subscription-not-found',
+      'La sottoscrizione dell’ultima operazione non è più disponibile.'
+    )
   }
 
-  const fields = Object.keys(completed.afterFlags || {})
+  const currentValues = getCurrentActionValues(service, operation, completed.subscription)
+  const fields = Object.keys(afterValues)
 
-  const staleFields = fields.filter(field => currentFlags[field] !== completed.afterFlags[field])
+  const staleFields = fields.filter(
+    field => !sameActionValue(field, currentValues[field], afterValues[field])
+  )
 
   if (staleFields.length) {
     return buildUndoUnavailableResponse(
@@ -899,16 +2165,7 @@ export function buildRecentRenewalsActionUndoPreview({services = [], actorToken 
     )
   }
 
-  const changes = fields
-    .filter(field => completed.afterFlags[field] !== completed.beforeFlags[field])
-    .map(field =>
-      buildChange(
-        field,
-        SERVICE_FLAG_LABELS[field] || field,
-        completed.afterFlags[field],
-        completed.beforeFlags[field]
-      )
-    )
+  const changes = buildUndoChanges(completed)
 
   if (!changes.length) {
     return buildUndoUnavailableResponse(
@@ -919,14 +2176,45 @@ export function buildRecentRenewalsActionUndoPreview({services = [], actorToken 
 
   const now = Date.now()
   const actionId = randomUUID()
-
   const actorFingerprint = fingerprintToken(actorToken)
 
   supersedePendingProposals(actorFingerprint)
 
+  const expectedValues =
+    operation === 'auth-code'
+      ? {authCode: normalizeAuthCodeValue(afterValues.authCode)}
+      : Object.fromEntries(
+          changes.map(change => [
+            change.field,
+            change.field === 'toTransfer' ? change.from?.id || null : change.from,
+          ])
+        )
+
+  const desiredValues =
+    operation === 'auth-code'
+      ? {authCode: normalizeAuthCodeValue(beforeValues.authCode)}
+      : Object.fromEntries(
+          changes.map(change => [
+            change.field,
+            change.field === 'toTransfer' ? change.to?.id || null : change.to,
+          ])
+        )
+
   const proposal = {
     actionId,
-    tool: TOOL_ID,
+    tool:
+      operation === 'transfer-target'
+        ? TRANSFER_TOOL_ID
+        : operation === 'invoice-date'
+          ? INVOICE_DATE_TOOL_ID
+          : operation === 'plesk-plan-sync'
+            ? PLESK_PLAN_SYNC_TOOL_ID
+            : operation === 'auth-code'
+              ? AUTH_CODE_TOOL_ID
+              : operation === 'subscription-end-date'
+                ? SUBSCRIPTION_END_DATE_TOOL_ID
+                : TOOL_ID,
+    operation,
 
     kind: 'undo',
     undoOfActionId: completed.actionId,
@@ -938,19 +2226,18 @@ export function buildRecentRenewalsActionUndoPreview({services = [], actorToken 
     expiresAt: now + PROPOSAL_TTL_MS,
 
     target: completed.target,
+    subscription: completed.subscription ? {...completed.subscription} : null,
     changes,
 
     field: null,
     label: 'RIPRISTINO STATO PRECEDENTE',
     requestedValue: null,
 
-    expectedFlags: Object.fromEntries(changes.map(change => [change.field, change.from])),
-
-    desiredFlags: Object.fromEntries(changes.map(change => [change.field, change.to])),
+    expectedValues,
+    desiredValues,
   }
 
   proposals.set(actionId, proposal)
-
   rememberRecentActionTarget(actorToken, proposal.target)
 
   auditAction('undo-proposed', proposal, {
@@ -964,14 +2251,14 @@ export function buildRecentRenewalsActionUndoPreview({services = [], actorToken 
 
     reply:
       `Ripristinerò lo stato precedente del servizio "${proposal.target.label}": ` +
-      `${describePlannedFlagChanges(changes)}. Confermi?`,
+      `${describePlannedChanges(changes)}. Confermi?`,
 
     data: {
       type: 'action-preview',
 
       action: {
         actionId,
-        tool: TOOL_ID,
+        tool: proposal.tool,
         kind: 'undo',
         undoOfActionId: completed.actionId,
 
@@ -980,11 +2267,13 @@ export function buildRecentRenewalsActionUndoPreview({services = [], actorToken 
         expiresAt: new Date(proposal.expiresAt).toISOString(),
 
         target: proposal.target,
+        subscription: proposal.subscription || null,
         changes,
       },
     },
 
     meta: buildActionMeta('action-proposal', {
+      tool: proposal.tool,
       actionId,
       actionStatus: 'pending',
       actionKind: 'undo',
@@ -1003,7 +2292,7 @@ function buildActionMeta(intent, extra = {}) {
   }
 }
 
-function rememberPendingClarification({request, resolution, services, scope, actorToken}) {
+function rememberPendingClarification({request, resolution, services, providers = [], scope, actorToken}) {
   const actorFingerprint = fingerprintToken(actorToken)
 
   const candidateIds = (resolution?.candidates || [])
@@ -1013,13 +2302,61 @@ function rememberPendingClarification({request, resolution, services, scope, act
   if (!candidateIds.length) return
 
   pendingClarifications.set(actorFingerprint, {
+    kind: 'service',
     request,
-    scope: resolvedScope,
+    scope,
+    providers: Array.isArray(providers) ? providers : [],
     candidateIds: [...new Set(candidateIds.map(String))],
     createdAt: Date.now(),
     expiresAt: Date.now() + PROPOSAL_TTL_MS,
   })
 }
+
+function rememberPendingProviderClarification({
+  request,
+  providerResolution,
+  scope,
+  actorToken,
+}) {
+  const candidates = (providerResolution?.candidates || []).map(normalizeProviderOption).filter(Boolean)
+
+  if (!candidates.length) return
+
+  pendingClarifications.set(fingerprintToken(actorToken), {
+    kind: 'provider',
+    request,
+    scope,
+    providers: candidates,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + PROPOSAL_TTL_MS,
+  })
+}
+
+function rememberPendingSubscriptionClarification({
+  request,
+  service,
+  candidates = [],
+  scope,
+  actorToken,
+}) {
+  const subscriptionIds = candidates.map(getSubscriptionId).filter(Boolean)
+
+  if (!service?.id || !subscriptionIds.length) return
+
+  pendingClarifications.set(fingerprintToken(actorToken), {
+    kind: 'subscription',
+    request,
+    scope: {
+      ...scope,
+      serviceId: String(service.id),
+    },
+    serviceId: String(service.id),
+    subscriptionIds,
+    createdAt: Date.now(),
+    expiresAt: Date.now() + PROPOSAL_TTL_MS,
+  })
+}
+
 
 function normalizeComparable(value = '') {
   return normalizeSearchText(value)
@@ -1142,6 +2479,65 @@ function resolvePendingCandidate(message, services = [], candidateIds = []) {
   }
 }
 
+function resolvePendingProvider(message = '', candidates = []) {
+  const raw = String(message || '').trim()
+  const ordinalIndex = extractOrdinalIndex(raw)
+
+  if (ordinalIndex >= 0 && ordinalIndex < candidates.length) {
+    return {
+      status: 'resolved',
+      provider: candidates[ordinalIndex],
+    }
+  }
+
+  return resolveTransferProvider(raw, candidates)
+}
+
+function resolvePendingSubscription(message = '', service = {}, subscriptionIds = []) {
+  const candidates = subscriptionIds
+    .map(id => findServiceSubscription(service, id))
+    .filter(Boolean)
+
+  if (!candidates.length) return {status: 'not-found'}
+
+  const raw = String(message || '').trim()
+  const ordinalIndex = extractOrdinalIndex(raw)
+
+  if (ordinalIndex >= 0 && ordinalIndex < candidates.length) {
+    return {status: 'resolved', subscription: candidates[ordinalIndex]}
+  }
+
+  const exactId = candidates.find(subscription => getSubscriptionId(subscription) === raw)
+  if (exactId) return {status: 'resolved', subscription: exactId}
+
+  const normalized = normalizeComparable(raw)
+    .replace(
+      /\b(quella|quello|sottoscrizione|subscription|con|il|lo|la|l|fornitore|piano|cliente|che|ha|scade|scadenza)\b/g,
+      ' '
+    )
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) return {status: 'unrecognized'}
+
+  const matched = candidates.filter(subscription => {
+    const ref = buildSubscriptionReference(subscription)
+    const haystack = normalizeComparable(
+      [ref.id, ref.planName, ref.supplierName, ref.startsOn, ref.endsOn, ref.type]
+        .filter(Boolean)
+        .join(' ')
+    )
+
+    return haystack.includes(normalized)
+  })
+
+  if (matched.length === 1) return {status: 'resolved', subscription: matched[0]}
+  if (matched.length > 1) return {status: 'ambiguous', candidates: matched}
+
+  return {status: 'not-found'}
+}
+
+
 export function hasPendingRenewalsActionClarification({actorToken = ''} = {}) {
   cleanupPendingClarifications()
 
@@ -1151,6 +2547,7 @@ export function hasPendingRenewalsActionClarification({actorToken = ''} = {}) {
 export function handlePendingRenewalsActionClarification({
   message = '',
   services = [],
+  providers = [],
   settings = {},
   history = [],
   scope = {},
@@ -1162,6 +2559,156 @@ export function handlePendingRenewalsActionClarification({
   const pending = pendingClarifications.get(actorFingerprint)
 
   if (!pending) return null
+
+  if (pending.kind === 'subscription') {
+    const service = services.find(item => String(item?.id) === String(pending.serviceId))
+
+    if (!service) {
+      pendingClarifications.delete(actorFingerprint)
+
+      return {
+        ok: true,
+        intent: 'clarification',
+        source: 'tool-fast',
+        reply: 'Il servizio selezionato non è più disponibile. Ripeti la richiesta.',
+        data: {type: 'clarification', reason: 'action-subscription-service-not-found'},
+        meta: buildActionMeta('clarification', {
+          tool: pending.request?.tool || SUBSCRIPTION_END_DATE_TOOL_ID,
+          guard: 'action-subscription-service-not-found',
+        }),
+      }
+    }
+
+    const selection = resolvePendingSubscription(
+      message,
+      service,
+      pending.subscriptionIds || []
+    )
+
+    if (selection.status === 'unrecognized') return null
+
+    if (selection.status !== 'resolved') {
+      const candidates = (pending.subscriptionIds || [])
+        .map(id => findServiceSubscription(service, id))
+        .filter(Boolean)
+
+      return {
+        ok: true,
+        intent: 'clarification',
+        source: 'tool-fast',
+        reply: [
+          selection.status === 'ambiguous'
+            ? 'Il dettaglio indicato corrisponde ancora a più sottoscrizioni.'
+            : 'Non riesco a identificare una delle sottoscrizioni proposte.',
+          'Indica il numero, l’ID, il piano, il fornitore oppure la scadenza attuale:',
+          '',
+          ...candidates.map(buildSubscriptionChoiceLine),
+        ].join('\n'),
+        data: {
+          type: 'clarification',
+          reason: `action-subscription-${selection.status || 'unresolved'}`,
+        },
+        meta: buildActionMeta('clarification', {
+          tool: pending.request?.tool || SUBSCRIPTION_END_DATE_TOOL_ID,
+          guard: `action-subscription-${selection.status || 'unresolved'}`,
+        }),
+      }
+    }
+
+    pendingClarifications.delete(actorFingerprint)
+
+    if (pending.request?.type === 'renewals-copy-supplier-expiry-to-customer-request') {
+      const selectedId = getSubscriptionId(selection.subscription)
+      const role = pending.request?.clarificationRole || 'supplier'
+
+      return buildCopySupplierExpiryToCustomerActionPreview({
+        request: {
+          ...pending.request,
+          selector: null,
+          selectorSource: 'context',
+          namedTarget: null,
+          clarificationRole: null,
+          ...(role === 'customer'
+            ? {customerSubscriptionId: selectedId}
+            : {supplierSubscriptionId: selectedId}),
+        },
+        services,
+        settings,
+        history,
+        scope: {
+          ...pending.scope,
+          ...scope,
+          serviceId: service.id,
+        },
+        actorToken,
+      })
+    }
+
+    return buildServiceSubscriptionEndDateActionPreview({
+      request: {
+        ...pending.request,
+        selector: null,
+        selectorSource: 'context',
+        namedTarget: null,
+        subscriptionId: getSubscriptionId(selection.subscription),
+      },
+      services,
+      settings,
+      history,
+      scope: {
+        ...pending.scope,
+        ...scope,
+        serviceId: service.id,
+      },
+      actorToken,
+    })
+  }
+
+  if (pending.kind === 'provider') {
+    const selection = resolvePendingProvider(message, pending.providers || [])
+
+    if (selection.status !== 'resolved') {
+      return {
+        ok: true,
+        intent: 'clarification',
+        source: 'tool-fast',
+        reply: [
+          'Non riesco a identificare un solo fornitore di destinazione.',
+          'Indica il numero, l’ID oppure il nome completo:',
+          '',
+          ...(pending.providers || []).map(
+            (provider, index) => `${index + 1}. ${providerLabel(provider)} (ID ${provider.id})`
+          ),
+        ].join('\n'),
+        data: {
+          type: 'clarification',
+          reason: `action-provider-${selection.status || 'unresolved'}`,
+        },
+        meta: buildActionMeta('clarification', {
+          tool: TRANSFER_TOOL_ID,
+          guard: `action-provider-${selection.status || 'unresolved'}`,
+        }),
+      }
+    }
+
+    pendingClarifications.delete(actorFingerprint)
+
+    return buildServiceTransferTargetActionPreview({
+      request: {
+        ...pending.request,
+        providerQuery: selection.provider.id,
+      },
+      services,
+      providers: pending.providers || providers,
+      settings,
+      history,
+      scope: {
+        ...pending.scope,
+        ...scope,
+      },
+      actorToken,
+    })
+  }
 
   const selection = resolvePendingCandidate(message, services, pending.candidateIds)
 
@@ -1200,6 +2747,7 @@ export function handlePendingRenewalsActionClarification({
         reason: `action-target-${selection.status}`,
       },
       meta: buildActionMeta('clarification', {
+        tool: pending.request?.tool || TOOL_ID,
         guard: `action-target-${selection.status}`,
       }),
     }
@@ -1207,7 +2755,7 @@ export function handlePendingRenewalsActionClarification({
 
   pendingClarifications.delete(actorFingerprint)
 
-  return buildServiceFlagActionPreview({
+  const previewArgs = {
     request: {
       ...pending.request,
       selector: null,
@@ -1215,6 +2763,7 @@ export function handlePendingRenewalsActionClarification({
       namedTarget: null,
     },
     services,
+    providers: pending.providers || providers,
     settings,
     history,
     scope: {
@@ -1223,7 +2772,33 @@ export function handlePendingRenewalsActionClarification({
       serviceId: selection.service.id,
     },
     actorToken,
-  })
+  }
+
+  if (pending.request?.type === 'renewals-transfer-target-request') {
+    return buildServiceTransferTargetActionPreview(previewArgs)
+  }
+
+  if (pending.request?.type === 'renewals-invoice-date-request') {
+    return buildServiceInvoiceDateActionPreview(previewArgs)
+  }
+
+  if (pending.request?.type === 'renewals-plesk-plan-sync-request') {
+    return buildServicePleskPlanSyncActionPreview(previewArgs)
+  }
+
+  if (pending.request?.type === 'renewals-auth-code-request') {
+    return buildServiceAuthCodeActionPreview(previewArgs)
+  }
+
+  if (pending.request?.type === 'renewals-subscription-end-date-request') {
+    return buildServiceSubscriptionEndDateActionPreview(previewArgs)
+  }
+
+  if (pending.request?.type === 'renewals-copy-supplier-expiry-to-customer-request') {
+    return buildCopySupplierExpiryToCustomerActionPreview(previewArgs)
+  }
+
+  return buildServiceFlagActionPreview(previewArgs)
 }
 
 export function buildServiceFlagActionPreview({
@@ -1267,7 +2842,7 @@ export function buildServiceFlagActionPreview({
         request,
         resolution,
         services,
-        scope,
+        scope: resolvedScope,
         actorToken,
       })
     }
@@ -1348,6 +2923,11 @@ export function buildServiceFlagActionPreview({
 
   const service = resolvedService.service
   const desired = request.desiredValue === true
+  const target = {
+    type: 'service',
+    id: String(service.id),
+    label: getServiceLabel(service),
+  }
 
   rememberRecentActionTarget(actorToken, target)
 
@@ -1389,6 +2969,7 @@ export function buildServiceFlagActionPreview({
   const proposal = {
     actionId,
     tool: TOOL_ID,
+    operation: 'service-flags',
     status: 'pending',
     actorFingerprint,
     createdAt: now,
@@ -1400,6 +2981,8 @@ export function buildServiceFlagActionPreview({
     requestedValue: desired,
     expectedFlags: mutationPlan.expectedFlags,
     desiredFlags: mutationPlan.desiredFlags,
+    expectedValues: mutationPlan.expectedFlags,
+    desiredValues: mutationPlan.desiredFlags,
   }
 
   proposals.set(actionId, proposal)
@@ -1430,6 +3013,1447 @@ export function buildServiceFlagActionPreview({
   }
 }
 
+
+export function buildServiceInvoiceDateActionPreview({
+  request,
+  services = [],
+  settings = {},
+  history = [],
+  scope = {},
+  actorToken = '',
+} = {}) {
+  cleanupProposals()
+  cleanupPendingClarifications()
+  cleanupRecentActionContexts()
+
+  const resolvedScope = resolveRecentActionScope(request, scope, actorToken)
+  const resolution =
+    request.selectorSource === 'previous-list'
+      ? resolveFromPreviousList({request, services, settings, history, scope: resolvedScope, message: request.message || ''})
+      : request.selectorSource === 'named-target'
+        ? resolveNamedTarget({request, services, scope: resolvedScope})
+        : resolveContextTarget({services, scope: resolvedScope})
+
+  if (resolution.status !== 'resolved') {
+    if (resolution.status === 'ambiguous') {
+      rememberPendingClarification({request, resolution, services, scope: resolvedScope, actorToken})
+    }
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildResolutionClarification(resolution, services, request),
+      data: {type: 'clarification', reason: `action-target-${resolution.status || 'unresolved'}`},
+      meta: buildActionMeta('clarification', {tool: INVOICE_DATE_TOOL_ID, guard: `action-target-${resolution.status || 'unresolved'}`}),
+    }
+  }
+
+  const resolvedService = findResolvedService(services, resolution.item)
+  if (resolvedService.status !== 'resolved') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: resolvedService.status === 'grouped-row'
+        ? 'La riga selezionata raggruppa più servizi. Indica il singolo servizio di cui vuoi modificare la data di fatturazione.'
+        : 'Il servizio selezionato non è più disponibile. Ripeti la ricerca prima di procedere.',
+      data: {type: 'clarification', reason: `action-target-${resolvedService.status}`},
+      meta: buildActionMeta('clarification', {tool: INVOICE_DATE_TOOL_ID, guard: `action-target-${resolvedService.status}`}),
+    }
+  }
+
+  const service = resolvedService.service
+  const target = {type: 'service', id: String(service.id), label: getServiceLabel(service)}
+  rememberRecentActionTarget(actorToken, target)
+
+  const currentDate = normalizeInvoiceDateValue(service?.invoiceDate ?? service?.invoice_date ?? null)
+  const desiredDate = request.clear ? null : normalizeInvoiceDateValue(request.desiredDate)
+
+  if (!request.clear && !desiredDate) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: 'Indica una data valida, ad esempio “15 settembre 2026” oppure “15/09/2026”.',
+      data: {type: 'clarification', reason: 'action-invoice-date-invalid'},
+      meta: buildActionMeta('clarification', {tool: INVOICE_DATE_TOOL_ID, guard: 'action-invoice-date-invalid'}),
+    }
+  }
+
+  if (currentDate === desiredDate) {
+    return {
+      ok: true,
+      intent: 'action-result',
+      source: 'tool-fast',
+      reply: desiredDate
+        ? `Il servizio "${target.label}" ha già la data di fatturazione impostata al ${formatInvoiceDate(desiredDate)}.`
+        : `Il servizio "${target.label}" non ha una data di fatturazione impostata.`,
+      data: {type: 'action-result', action: {tool: INVOICE_DATE_TOOL_ID, requiresConfirmation: false, target, changes: []}, result: {status: 'noop', changed: false}},
+      meta: buildActionMeta('action-result', {tool: INVOICE_DATE_TOOL_ID, actionStatus: 'noop'}),
+    }
+  }
+
+  const changes = [buildChange('invoiceDate', 'DATA DI FATTURAZIONE', currentDate, desiredDate)]
+  const now = Date.now()
+  const actionId = randomUUID()
+  const actorFingerprint = fingerprintToken(actorToken)
+  supersedePendingProposals(actorFingerprint)
+
+  const proposal = {
+    actionId,
+    tool: INVOICE_DATE_TOOL_ID,
+    operation: 'invoice-date',
+    status: 'pending',
+    actorFingerprint,
+    createdAt: now,
+    expiresAt: now + PROPOSAL_TTL_MS,
+    target,
+    changes,
+    field: 'invoiceDate',
+    label: 'DATA DI FATTURAZIONE',
+    requestedValue: desiredDate,
+    expectedValues: {invoiceDate: currentDate},
+    desiredValues: {invoiceDate: desiredDate},
+  }
+
+  proposals.set(actionId, proposal)
+  auditAction('proposed', proposal)
+
+  return {
+    ok: true,
+    intent: 'action-proposal',
+    source: 'tool-fast',
+    reply: `Sul servizio "${target.label}" ${describePlannedChanges(changes)}. Confermi?`,
+    data: {type: 'action-preview', action: {actionId, tool: INVOICE_DATE_TOOL_ID, requiresConfirmation: true, expiresAt: new Date(proposal.expiresAt).toISOString(), target, changes}},
+    meta: buildActionMeta('action-proposal', {tool: INVOICE_DATE_TOOL_ID, actionId, actionStatus: 'pending'}),
+  }
+}
+
+
+export function buildServiceSubscriptionEndDateActionPreview({
+  request,
+  services = [],
+  settings = {},
+  history = [],
+  scope = {},
+  actorToken = '',
+} = {}) {
+  cleanupProposals()
+  cleanupPendingClarifications()
+  cleanupRecentActionContexts()
+
+  const resolvedScope = resolveRecentActionScope(request, scope, actorToken)
+  const resolution =
+    request.selectorSource === 'previous-list'
+      ? resolveFromPreviousList({
+          request,
+          services,
+          settings,
+          history,
+          scope: resolvedScope,
+          message: request.message || '',
+        })
+      : request.selectorSource === 'named-target'
+        ? resolveNamedTarget({request, services, scope: resolvedScope})
+        : resolveContextTarget({services, scope: resolvedScope})
+
+  if (resolution.status !== 'resolved') {
+    if (resolution.status === 'ambiguous') {
+      rememberPendingClarification({
+        request,
+        resolution,
+        services,
+        scope: resolvedScope,
+        actorToken,
+      })
+    }
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildResolutionClarification(resolution, services, request),
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolution.status || 'unresolved'}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        guard: `action-target-${resolution.status || 'unresolved'}`,
+      }),
+    }
+  }
+
+  const resolvedService = findResolvedService(services, resolution.item)
+
+  if (resolvedService.status !== 'resolved') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        resolvedService.status === 'grouped-row'
+          ? 'La riga selezionata raggruppa più servizi. Indica il singolo servizio di cui vuoi modificare la scadenza.'
+          : 'Il servizio selezionato non è più disponibile. Ripeti la ricerca prima di procedere.',
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolvedService.status}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        guard: `action-target-${resolvedService.status}`,
+      }),
+    }
+  }
+
+  const service = resolvedService.service
+  const target = {
+    type: 'service',
+    id: String(service.id),
+    label: getServiceLabel(service),
+  }
+
+  rememberRecentActionTarget(actorToken, target)
+
+  const desiredDate = normalizeInvoiceDateValue(request.desiredDate)
+
+  if (!desiredDate) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: 'Indica una data valida, ad esempio “3 marzo 2028” oppure “03/03/2028”.',
+      data: {type: 'clarification', reason: 'action-subscription-end-date-invalid'},
+      meta: buildActionMeta('clarification', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        guard: 'action-subscription-end-date-invalid',
+      }),
+    }
+  }
+
+  const subscriptionResolution = resolveSubscriptionForRequest(service, request)
+  const typeLabel = request.subscriptionType === 'supplier' ? 'fornitore' : 'cliente'
+
+  if (subscriptionResolution.status === 'empty') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `Il servizio "${target.label}" non ha sottoscrizioni ${typeLabel} disponibili.`,
+      data: {type: 'clarification', reason: 'action-subscription-not-found'},
+      meta: buildActionMeta('clarification', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        guard: 'action-subscription-not-found',
+      }),
+    }
+  }
+
+  if (subscriptionResolution.status === 'not-found') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `Non ho trovato la sottoscrizione ${typeLabel} indicata sul servizio "${target.label}".`,
+      data: {type: 'clarification', reason: 'action-subscription-id-not-found'},
+      meta: buildActionMeta('clarification', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        guard: 'action-subscription-id-not-found',
+      }),
+    }
+  }
+
+  if (subscriptionResolution.status === 'ambiguous') {
+    rememberPendingSubscriptionClarification({
+      request,
+      service,
+      candidates: subscriptionResolution.candidates,
+      scope: resolvedScope,
+      actorToken,
+    })
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: [
+        `Il servizio "${target.label}" ha più sottoscrizioni ${typeLabel}.`,
+        `Quale vuoi portare al ${formatInvoiceDate(desiredDate)}?`,
+        '',
+        ...subscriptionResolution.candidates.map(buildSubscriptionChoiceLine),
+        '',
+        'Rispondi con il numero, l’ID, il piano, il fornitore oppure la scadenza attuale.',
+      ].join('\n'),
+      data: {type: 'clarification', reason: 'action-subscription-ambiguous'},
+      meta: buildActionMeta('clarification', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        guard: 'action-subscription-ambiguous',
+      }),
+    }
+  }
+
+  const subscription = subscriptionResolution.subscription
+  const subscriptionRef = buildSubscriptionReference(subscription)
+  const currentDate = subscriptionRef.endsOn
+  const startsOn = subscriptionRef.startsOn
+
+  if (startsOn && desiredDate.slice(0, 10) < startsOn.slice(0, 10)) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        `La nuova scadenza (${formatInvoiceDate(desiredDate)}) precede l’inizio della sottoscrizione ` +
+        `(${formatInvoiceDate(startsOn)}). Indica una data uguale o successiva all’inizio.`,
+      data: {type: 'clarification', reason: 'action-subscription-end-before-start'},
+      meta: buildActionMeta('clarification', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        guard: 'action-subscription-end-before-start',
+      }),
+    }
+  }
+
+  if (currentDate === desiredDate) {
+    return {
+      ok: true,
+      intent: 'action-result',
+      source: 'tool-fast',
+      reply:
+        `La sottoscrizione ${subscriptionTypeLabel(subscription)} del servizio "${target.label}" ` +
+        `scade già il ${formatInvoiceDate(desiredDate)}.`,
+      data: {
+        type: 'action-result',
+        action: {
+          tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+          requiresConfirmation: false,
+          target,
+          subscription: subscriptionRef,
+          changes: [],
+        },
+        result: {status: 'noop', changed: false},
+      },
+      meta: buildActionMeta('action-result', {
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        actionStatus: 'noop',
+      }),
+    }
+  }
+
+  const label =
+    subscriptionRef.type === 'supplier' ? 'SCADENZA FORNITORE' : 'SCADENZA CLIENTE'
+  const changes = [
+    buildChange('subscriptionEndDate', label, currentDate, desiredDate),
+  ]
+  const now = Date.now()
+  const actionId = randomUUID()
+  const actorFingerprint = fingerprintToken(actorToken)
+
+  supersedePendingProposals(actorFingerprint)
+
+  const proposal = {
+    actionId,
+    tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+    operation: 'subscription-end-date',
+    status: 'pending',
+    actorFingerprint,
+    createdAt: now,
+    expiresAt: now + PROPOSAL_TTL_MS,
+    target,
+    subscription: subscriptionRef,
+    changes,
+    field: 'subscriptionEndDate',
+    label,
+    requestedValue: desiredDate,
+    expectedValues: {subscriptionEndDate: currentDate},
+    desiredValues: {subscriptionEndDate: desiredDate},
+  }
+
+  proposals.set(actionId, proposal)
+  auditAction('proposed', proposal, {subscription: subscriptionRef})
+
+  return {
+    ok: true,
+    intent: 'action-proposal',
+    source: 'tool-fast',
+    reply:
+      `Sul servizio "${target.label}" modificherò la scadenza della sottoscrizione ` +
+      `${subscriptionRef.type === 'supplier' ? 'fornitore' : 'cliente'} ` +
+      `(ID ${subscriptionRef.id}${subscriptionRef.planName ? `, piano ${subscriptionRef.planName}` : ''}) ` +
+      `dal ${currentDate ? formatInvoiceDate(currentDate) : 'non impostata'} ` +
+      `al ${formatInvoiceDate(desiredDate)}. La modifica riguarda solo la scadenza nel CRM e non rinnova il servizio né aggiorna automaticamente Plesk o altri sistemi. Confermi?`,
+    data: {
+      type: 'action-preview',
+      action: {
+        actionId,
+        tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+        requiresConfirmation: true,
+        expiresAt: new Date(proposal.expiresAt).toISOString(),
+        target,
+        subscription: subscriptionRef,
+        changes,
+      },
+    },
+    meta: buildActionMeta('action-proposal', {
+      tool: SUBSCRIPTION_END_DATE_TOOL_ID,
+      actionId,
+      actionStatus: 'pending',
+    }),
+  }
+}
+
+
+export function buildCopySupplierExpiryToCustomerActionPreview({
+  request,
+  services = [],
+  settings = {},
+  history = [],
+  scope = {},
+  actorToken = '',
+} = {}) {
+  cleanupProposals()
+  cleanupPendingClarifications()
+  cleanupRecentActionContexts()
+
+  const resolvedScope = resolveRecentActionScope(request, scope, actorToken)
+  const resolution =
+    request.selectorSource === 'previous-list'
+      ? resolveFromPreviousList({
+          request,
+          services,
+          settings,
+          history,
+          scope: resolvedScope,
+          message: request.message || '',
+        })
+      : request.selectorSource === 'named-target'
+        ? resolveNamedTarget({request, services, scope: resolvedScope})
+        : resolveContextTarget({services, scope: resolvedScope})
+
+  if (resolution.status !== 'resolved') {
+    if (resolution.status === 'ambiguous') {
+      rememberPendingClarification({
+        request,
+        resolution,
+        services,
+        scope: resolvedScope,
+        actorToken,
+      })
+    }
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildResolutionClarification(resolution, services, request),
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolution.status || 'unresolved'}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: `action-target-${resolution.status || 'unresolved'}`,
+      }),
+    }
+  }
+
+  const resolvedService = findResolvedService(services, resolution.item)
+
+  if (resolvedService.status !== 'resolved') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        resolvedService.status === 'grouped-row'
+          ? 'La riga selezionata raggruppa più servizi. Indica il singolo servizio di cui vuoi allineare le scadenze.'
+          : 'Il servizio selezionato non è più disponibile. Ripeti la ricerca prima di procedere.',
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolvedService.status}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: `action-target-${resolvedService.status}`,
+      }),
+    }
+  }
+
+  const service = resolvedService.service
+  const target = {
+    type: 'service',
+    id: String(service.id),
+    label: getServiceLabel(service),
+  }
+
+  rememberRecentActionTarget(actorToken, target)
+
+  const supplierResolution = resolveSubscriptionForRequest(service, {
+    subscriptionType: 'supplier',
+    subscriptionId: request.supplierSubscriptionId || null,
+  })
+
+  if (supplierResolution.status === 'empty') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `Il servizio "${target.label}" non ha sottoscrizioni fornitore da cui copiare la scadenza.`,
+      data: {type: 'clarification', reason: 'action-copy-supplier-subscription-not-found'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-supplier-subscription-not-found',
+      }),
+    }
+  }
+
+  if (supplierResolution.status === 'not-found') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `Non ho trovato la sottoscrizione fornitore indicata sul servizio "${target.label}".`,
+      data: {type: 'clarification', reason: 'action-copy-supplier-subscription-id-not-found'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-supplier-subscription-id-not-found',
+      }),
+    }
+  }
+
+  if (supplierResolution.status === 'ambiguous') {
+    rememberPendingSubscriptionClarification({
+      request: {...request, clarificationRole: 'supplier'},
+      service,
+      candidates: supplierResolution.candidates,
+      scope: resolvedScope,
+      actorToken,
+    })
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: [
+        `Il servizio "${target.label}" ha più sottoscrizioni fornitore.`,
+        'Da quale vuoi copiare la scadenza?',
+        '',
+        ...supplierResolution.candidates.map(buildSubscriptionChoiceLine),
+        '',
+        'Rispondi con il numero, l’ID, il piano, il fornitore oppure la scadenza.',
+      ].join('\n'),
+      data: {type: 'clarification', reason: 'action-copy-supplier-subscription-ambiguous'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-supplier-subscription-ambiguous',
+      }),
+    }
+  }
+
+  const supplierSubscription = supplierResolution.subscription
+  const supplierRef = buildSubscriptionReference(supplierSubscription)
+  const supplierEndDate = supplierRef.endsOn
+
+  if (!supplierEndDate) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        `La sottoscrizione fornitore selezionata per "${target.label}" non ha una scadenza ` +
+        'da copiare.',
+      data: {type: 'clarification', reason: 'action-copy-supplier-expiry-missing'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-supplier-expiry-missing',
+      }),
+    }
+  }
+
+  const customerResolution = resolveSubscriptionForRequest(service, {
+    subscriptionType: 'customer',
+    subscriptionId: request.customerSubscriptionId || null,
+  })
+
+  if (customerResolution.status === 'empty') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `Il servizio "${target.label}" non ha sottoscrizioni cliente su cui copiare la scadenza.`,
+      data: {type: 'clarification', reason: 'action-copy-customer-subscription-not-found'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-customer-subscription-not-found',
+      }),
+    }
+  }
+
+  if (customerResolution.status === 'not-found') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `Non ho trovato la sottoscrizione cliente indicata sul servizio "${target.label}".`,
+      data: {type: 'clarification', reason: 'action-copy-customer-subscription-id-not-found'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-customer-subscription-id-not-found',
+      }),
+    }
+  }
+
+  if (customerResolution.status === 'ambiguous') {
+    rememberPendingSubscriptionClarification({
+      request: {
+        ...request,
+        clarificationRole: 'customer',
+        supplierSubscriptionId: supplierRef.id,
+      },
+      service,
+      candidates: customerResolution.candidates,
+      scope: resolvedScope,
+      actorToken,
+    })
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: [
+        `Il servizio "${target.label}" ha più sottoscrizioni cliente.`,
+        `Su quale vuoi copiare la scadenza fornitore del ${formatInvoiceDate(supplierEndDate)}?`,
+        '',
+        ...customerResolution.candidates.map(buildSubscriptionChoiceLine),
+        '',
+        'Rispondi con il numero, l’ID, il piano oppure la scadenza attuale.',
+      ].join('\n'),
+      data: {type: 'clarification', reason: 'action-copy-customer-subscription-ambiguous'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-customer-subscription-ambiguous',
+      }),
+    }
+  }
+
+  const customerSubscription = customerResolution.subscription
+  const customerRef = buildSubscriptionReference(customerSubscription)
+  const currentCustomerEndDate = customerRef.endsOn
+  const customerStartsOn = customerRef.startsOn
+
+  if (customerStartsOn && supplierEndDate.slice(0, 10) < customerStartsOn.slice(0, 10)) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        `La scadenza fornitore (${formatInvoiceDate(supplierEndDate)}) precede l’inizio della ` +
+        `sottoscrizione cliente (${formatInvoiceDate(customerStartsOn)}). Non posso copiarla.`,
+      data: {type: 'clarification', reason: 'action-copy-end-before-customer-start'},
+      meta: buildActionMeta('clarification', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        guard: 'action-copy-end-before-customer-start',
+      }),
+    }
+  }
+
+  if (currentCustomerEndDate === supplierEndDate) {
+    return {
+      ok: true,
+      intent: 'action-result',
+      source: 'tool-fast',
+      reply:
+        `La sottoscrizione cliente del servizio "${target.label}" ha già la stessa scadenza ` +
+        `del fornitore: ${formatInvoiceDate(supplierEndDate)}.`,
+      data: {
+        type: 'action-result',
+        action: {
+          tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+          requiresConfirmation: false,
+          target,
+          subscription: customerRef,
+          sourceSubscription: supplierRef,
+          changes: [],
+        },
+        result: {status: 'noop', changed: false},
+      },
+      meta: buildActionMeta('action-result', {
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        actionStatus: 'noop',
+      }),
+    }
+  }
+
+  const changes = [
+    buildChange(
+      'subscriptionEndDate',
+      'SCADENZA CLIENTE',
+      currentCustomerEndDate,
+      supplierEndDate
+    ),
+  ]
+  const now = Date.now()
+  const actionId = randomUUID()
+  const actorFingerprint = fingerprintToken(actorToken)
+
+  supersedePendingProposals(actorFingerprint)
+
+  const proposal = {
+    actionId,
+    tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+    operation: 'subscription-end-date',
+    executionMode: 'copy-supplier-expiry-to-customer',
+    status: 'pending',
+    actorFingerprint,
+    createdAt: now,
+    expiresAt: now + PROPOSAL_TTL_MS,
+    target,
+    subscription: customerRef,
+    sourceSubscription: supplierRef,
+    changes,
+    field: 'subscriptionEndDate',
+    label: 'SCADENZA CLIENTE',
+    requestedValue: supplierEndDate,
+    expectedValues: {subscriptionEndDate: currentCustomerEndDate},
+    desiredValues: {subscriptionEndDate: supplierEndDate},
+    expectedSourceEndDate: supplierEndDate,
+  }
+
+  proposals.set(actionId, proposal)
+  auditAction('proposed', proposal, {
+    subscription: customerRef,
+    sourceSubscription: supplierRef,
+  })
+
+  return {
+    ok: true,
+    intent: 'action-proposal',
+    source: 'tool-fast',
+    reply:
+      `Sul servizio "${target.label}" copierò la scadenza della sottoscrizione fornitore ` +
+      `(ID ${supplierRef.id}${supplierRef.planName ? `, piano ${supplierRef.planName}` : ''}) ` +
+      `del ${formatInvoiceDate(supplierEndDate)} sulla sottoscrizione cliente ` +
+      `(ID ${customerRef.id}${customerRef.planName ? `, piano ${customerRef.planName}` : ''}), ` +
+      `che ora scade ${currentCustomerEndDate ? `il ${formatInvoiceDate(currentCustomerEndDate)}` : 'senza una data impostata'}. ` +
+      'La modifica riguarda solo il CRM e non rinnova il servizio né aggiorna automaticamente Plesk o altri sistemi. Confermi?',
+    data: {
+      type: 'action-preview',
+      action: {
+        actionId,
+        tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+        requiresConfirmation: true,
+        expiresAt: new Date(proposal.expiresAt).toISOString(),
+        target,
+        subscription: customerRef,
+        sourceSubscription: supplierRef,
+        changes,
+      },
+    },
+    meta: buildActionMeta('action-proposal', {
+      tool: COPY_SUPPLIER_EXPIRY_TOOL_ID,
+      actionId,
+      actionStatus: 'pending',
+    }),
+  }
+}
+
+
+export function buildServicePleskPlanSyncActionPreview({
+  request,
+  services = [],
+  settings = {},
+  history = [],
+  scope = {},
+  actorToken = '',
+} = {}) {
+  cleanupProposals()
+  cleanupPendingClarifications()
+  cleanupRecentActionContexts()
+
+  const resolvedScope = resolveRecentActionScope(request, scope, actorToken)
+  const resolution =
+    request.selectorSource === 'previous-list'
+      ? resolveFromPreviousList({
+          request,
+          services,
+          settings,
+          history,
+          scope: resolvedScope,
+          message: request.message || '',
+        })
+      : request.selectorSource === 'named-target'
+        ? resolveNamedTarget({request, services, scope: resolvedScope})
+        : resolveContextTarget({services, scope: resolvedScope})
+
+  if (resolution.status !== 'resolved') {
+    if (resolution.status === 'ambiguous') {
+      rememberPendingClarification({
+        request,
+        resolution,
+        services,
+        scope: resolvedScope,
+        actorToken,
+      })
+    }
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildResolutionClarification(resolution, services, request),
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolution.status || 'unresolved'}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: PLESK_PLAN_SYNC_TOOL_ID,
+        guard: `action-target-${resolution.status || 'unresolved'}`,
+      }),
+    }
+  }
+
+  const resolvedService = findResolvedService(services, resolution.item)
+
+  if (resolvedService.status !== 'resolved') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        resolvedService.status === 'grouped-row'
+          ? 'La riga selezionata raggruppa più servizi. Indica il singolo servizio per cui vuoi modificare la sincronizzazione del piano con Plesk.'
+          : 'Il servizio selezionato non è più disponibile. Ripeti la ricerca prima di procedere.',
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolvedService.status}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: PLESK_PLAN_SYNC_TOOL_ID,
+        guard: `action-target-${resolvedService.status}`,
+      }),
+    }
+  }
+
+  const service = resolvedService.service
+  const target = {
+    type: 'service',
+    id: String(service.id),
+    label: getServiceLabel(service),
+  }
+
+  rememberRecentActionTarget(actorToken, target)
+
+  if (!hasPleskService(service)) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `Il servizio "${target.label}" non è collegato a Plesk. La sincronizzazione del piano può essere modificata solo per servizi gestiti da Plesk.`,
+      data: {
+        type: 'clarification',
+        reason: 'action-plesk-plan-sync-not-linked',
+      },
+      meta: buildActionMeta('clarification', {
+        tool: PLESK_PLAN_SYNC_TOOL_ID,
+        guard: 'action-plesk-plan-sync-not-linked',
+      }),
+    }
+  }
+
+  const currentValue = getServicePleskPlanSyncValue(service)
+  const desiredValue = request.desiredValue === true
+
+  if (currentValue === desiredValue) {
+    return {
+      ok: true,
+      intent: 'action-result',
+      source: 'tool-fast',
+      reply: desiredValue
+        ? `La sincronizzazione del piano con Plesk è già attiva per il servizio "${target.label}".`
+        : `La sincronizzazione del piano con Plesk è già disattivata per il servizio "${target.label}".`,
+      data: {
+        type: 'action-result',
+        action: {
+          tool: PLESK_PLAN_SYNC_TOOL_ID,
+          requiresConfirmation: false,
+          target,
+          changes: [],
+        },
+        result: {
+          status: 'noop',
+          changed: false,
+        },
+      },
+      meta: buildActionMeta('action-result', {
+        tool: PLESK_PLAN_SYNC_TOOL_ID,
+        actionStatus: 'noop',
+      }),
+    }
+  }
+
+  const changes = [
+    buildChange(
+      'pleskPlansSync',
+      'SINCRONIZZAZIONE PIANO PLESK',
+      currentValue,
+      desiredValue
+    ),
+  ]
+  const now = Date.now()
+  const actionId = randomUUID()
+  const actorFingerprint = fingerprintToken(actorToken)
+
+  supersedePendingProposals(actorFingerprint)
+
+  const proposal = {
+    actionId,
+    tool: PLESK_PLAN_SYNC_TOOL_ID,
+    operation: 'plesk-plan-sync',
+    status: 'pending',
+    actorFingerprint,
+    createdAt: now,
+    expiresAt: now + PROPOSAL_TTL_MS,
+    target,
+    changes,
+    field: 'pleskPlansSync',
+    label: 'SINCRONIZZAZIONE PIANO PLESK',
+    requestedValue: desiredValue,
+    expectedValues: {
+      pleskPlansSync: currentValue,
+    },
+    desiredValues: {
+      pleskPlansSync: desiredValue,
+    },
+  }
+
+  proposals.set(actionId, proposal)
+  auditAction('proposed', proposal)
+
+  const effect = desiredValue
+    ? 'I futuri cambi piano potranno essere sincronizzati con Plesk. Il piano attuale non viene modificato da questa operazione.'
+    : 'I futuri cambi piano effettuati nel CRM non verranno sincronizzati automaticamente con Plesk. Il piano attuale non viene modificato.'
+
+  return {
+    ok: true,
+    intent: 'action-proposal',
+    source: 'tool-fast',
+    reply: `Sul servizio "${target.label}" ${describePlannedChanges(changes)}. ${effect} Confermi?`,
+    data: {
+      type: 'action-preview',
+      action: {
+        actionId,
+        tool: PLESK_PLAN_SYNC_TOOL_ID,
+        requiresConfirmation: true,
+        expiresAt: new Date(proposal.expiresAt).toISOString(),
+        target,
+        changes,
+        effects: {
+          changesCurrentPlan: false,
+          affectsFuturePlanChanges: true,
+          synchronizesFuturePlanChanges: desiredValue,
+        },
+      },
+    },
+    meta: buildActionMeta('action-proposal', {
+      tool: PLESK_PLAN_SYNC_TOOL_ID,
+      actionId,
+      actionStatus: 'pending',
+    }),
+  }
+}
+
+
+export function buildServiceAuthCodeActionPreview({
+  request,
+  services = [],
+  settings = {},
+  history = [],
+  scope = {},
+  actorToken = '',
+} = {}) {
+  cleanupProposals()
+  cleanupPendingClarifications()
+  cleanupRecentActionContexts()
+
+  const resolvedScope = resolveRecentActionScope(request, scope, actorToken)
+
+  const resolution =
+    request.selectorSource === 'previous-list'
+      ? resolveFromPreviousList({
+          request,
+          services,
+          settings,
+          history,
+          scope: resolvedScope,
+          message: request.message || '',
+        })
+      : request.selectorSource === 'named-target'
+        ? resolveNamedTarget({request, services, scope: resolvedScope})
+        : resolveContextTarget({services, scope: resolvedScope})
+
+  if (resolution.status !== 'resolved') {
+    if (resolution.status === 'ambiguous') {
+      rememberPendingClarification({
+        request,
+        resolution,
+        services,
+        scope: resolvedScope,
+        actorToken,
+      })
+    }
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildResolutionClarification(resolution, services, request),
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolution.status || 'unresolved'}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: AUTH_CODE_TOOL_ID,
+        guard: `action-target-${resolution.status || 'unresolved'}`,
+      }),
+    }
+  }
+
+  const resolvedService = findResolvedService(services, resolution.item)
+
+  if (resolvedService.status !== 'resolved') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        resolvedService.status === 'grouped-row'
+          ? 'La riga selezionata raggruppa più servizi. Indica il singolo servizio per cui vuoi modificare l’AUTH CODE.'
+          : 'Il servizio selezionato non è più disponibile. Ripeti la ricerca prima di procedere.',
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolvedService.status}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: AUTH_CODE_TOOL_ID,
+        guard: `action-target-${resolvedService.status}`,
+      }),
+    }
+  }
+
+  const service = resolvedService.service
+  const target = {
+    type: 'service',
+    id: String(service.id),
+    label: getServiceLabel(service),
+  }
+
+  rememberRecentActionTarget(actorToken, target)
+
+  const currentAuthCode = normalizeAuthCodeValue(service?.authCode ?? service?.auth_code ?? null)
+  const desiredAuthCode = request.clear
+    ? null
+    : normalizeAuthCodeValue(request.desiredAuthCode)
+
+  if (!request.clear && !desiredAuthCode) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        'Indica il nuovo AUTH CODE. Per codici con spazi o punteggiatura è preferibile racchiuderlo tra virgolette.',
+      data: {
+        type: 'clarification',
+        reason: 'action-auth-code-missing',
+      },
+      meta: buildActionMeta('clarification', {
+        tool: AUTH_CODE_TOOL_ID,
+        guard: 'action-auth-code-missing',
+      }),
+    }
+  }
+
+  if (desiredAuthCode && desiredAuthCode.length > AUTH_CODE_MAX_LENGTH) {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: `L’AUTH CODE supera la lunghezza massima consentita di ${AUTH_CODE_MAX_LENGTH} caratteri.`,
+      data: {
+        type: 'clarification',
+        reason: 'action-auth-code-too-long',
+      },
+      meta: buildActionMeta('clarification', {
+        tool: AUTH_CODE_TOOL_ID,
+        guard: 'action-auth-code-too-long',
+      }),
+    }
+  }
+
+  if (sameActionValue('authCode', currentAuthCode, desiredAuthCode)) {
+    return {
+      ok: true,
+      intent: 'action-result',
+      source: 'tool-fast',
+      reply: desiredAuthCode
+        ? `Il servizio "${target.label}" ha già questo AUTH CODE impostato.`
+        : `Il servizio "${target.label}" non ha un AUTH CODE impostato.`,
+      data: {
+        type: 'action-result',
+        action: {
+          tool: AUTH_CODE_TOOL_ID,
+          requiresConfirmation: false,
+          target,
+          changes: [],
+        },
+        result: {
+          status: 'noop',
+          changed: false,
+        },
+      },
+      meta: buildActionMeta('action-result', {
+        tool: AUTH_CODE_TOOL_ID,
+        actionStatus: 'noop',
+      }),
+    }
+  }
+
+  const changes = [buildAuthCodeChange(currentAuthCode, desiredAuthCode)]
+  const now = Date.now()
+  const actionId = randomUUID()
+  const actorFingerprint = fingerprintToken(actorToken)
+
+  supersedePendingProposals(actorFingerprint)
+
+  const proposal = {
+    actionId,
+    tool: AUTH_CODE_TOOL_ID,
+    operation: 'auth-code',
+    status: 'pending',
+    actorFingerprint,
+    createdAt: now,
+    expiresAt: now + PROPOSAL_TTL_MS,
+    target,
+    changes,
+    field: 'authCode',
+    label: 'AUTH CODE',
+    requestedValue: authCodeState(desiredAuthCode),
+    expectedValues: {
+      authCode: currentAuthCode,
+    },
+    desiredValues: {
+      authCode: desiredAuthCode,
+    },
+  }
+
+  proposals.set(actionId, proposal)
+  auditAction('proposed', proposal)
+
+  return {
+    ok: true,
+    intent: 'action-proposal',
+    source: 'tool-fast',
+    reply:
+      `Sul servizio "${target.label}" ${describePlannedChanges(changes)}. ` +
+      'Il valore non verrà mostrato nelle risposte né inserito nell’audit dell’action. Confermi?',
+    data: {
+      type: 'action-preview',
+      action: {
+        actionId,
+        tool: AUTH_CODE_TOOL_ID,
+        requiresConfirmation: true,
+        expiresAt: new Date(proposal.expiresAt).toISOString(),
+        target,
+        changes,
+        effects: {
+          sensitiveValue: true,
+          valueExposedInResponse: false,
+          valueIncludedInActionAudit: false,
+        },
+      },
+    },
+    meta: buildActionMeta('action-proposal', {
+      tool: AUTH_CODE_TOOL_ID,
+      actionId,
+      actionStatus: 'pending',
+    }),
+  }
+}
+
+export function buildServiceTransferTargetActionPreview({
+  request,
+  services = [],
+  providers = [],
+  settings = {},
+  history = [],
+  scope = {},
+  actorToken = '',
+} = {}) {
+  cleanupProposals()
+  cleanupPendingClarifications()
+  cleanupRecentActionContexts()
+
+  const resolvedScope = resolveRecentActionScope(request, scope, actorToken)
+
+  const resolution =
+    request.selectorSource === 'previous-list'
+      ? resolveFromPreviousList({
+          request,
+          services,
+          settings,
+          history,
+          scope: resolvedScope,
+          message: request.message || '',
+        })
+      : request.selectorSource === 'named-target'
+        ? resolveNamedTarget({
+            request,
+            services,
+            scope: resolvedScope,
+          })
+        : resolveContextTarget({
+            services,
+            scope: resolvedScope,
+          })
+
+  if (resolution.status !== 'resolved') {
+    if (resolution.status === 'ambiguous') {
+      rememberPendingClarification({
+        request,
+        resolution,
+        services,
+        providers,
+        scope: resolvedScope,
+        actorToken,
+      })
+    }
+
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildResolutionClarification(resolution, services, request),
+      data: {
+        type: 'clarification',
+        reason: `action-target-${resolution.status || 'unresolved'}`,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: TRANSFER_TOOL_ID,
+        guard: `action-target-${resolution.status || 'unresolved'}`,
+      }),
+    }
+  }
+
+  const resolvedService = findResolvedService(services, resolution.item)
+
+  if (resolvedService.status === 'grouped-row') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        'La riga selezionata raggruppa più servizi. Indica il nome esatto del singolo servizio da marcare come DA TRASFERIRE.',
+      data: {
+        type: 'clarification',
+        reason: 'action-target-grouped-row',
+        serviceIds: resolvedService.ids,
+      },
+      meta: buildActionMeta('clarification', {
+        tool: TRANSFER_TOOL_ID,
+        guard: 'action-target-grouped-row',
+      }),
+    }
+  }
+
+  if (resolvedService.status !== 'resolved') {
+    return {
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: 'Il servizio selezionato non è più disponibile. Ripeti la ricerca prima di procedere.',
+      data: {
+        type: 'clarification',
+        reason: 'action-target-not-found',
+      },
+      meta: buildActionMeta('clarification', {
+        tool: TRANSFER_TOOL_ID,
+        guard: 'action-target-not-found',
+      }),
+    }
+  }
+
+  const service = resolvedService.service
+  const target = {
+    type: 'service',
+    id: String(service.id),
+    label: getServiceLabel(service),
+  }
+
+  rememberRecentActionTarget(actorToken, target)
+
+  const currentProvider = getServiceTransferProvider(service)
+  let desiredProvider = null
+
+  if (!request.clear) {
+    const providerResolution = resolveTransferProvider(request.providerQuery, providers)
+
+    if (providerResolution.status === 'ambiguous') {
+      rememberPendingProviderClarification({
+        request,
+        providerResolution,
+        scope: {
+          ...resolvedScope,
+          serviceId: service.id,
+        },
+        actorToken,
+      })
+
+      return {
+        ok: true,
+        intent: 'clarification',
+        source: 'tool-fast',
+        reply: [
+          `Ho trovato più fornitori corrispondenti a "${providerResolution.term || ''}".`,
+          'Quale vuoi impostare come destinazione del trasferimento?',
+          '',
+          ...providerResolution.candidates.map(
+            (provider, index) => `${index + 1}. ${providerLabel(provider)} (ID ${provider.id})`
+          ),
+        ].join('\n'),
+        data: {
+          type: 'clarification',
+          reason: 'action-provider-ambiguous',
+        },
+        meta: buildActionMeta('clarification', {
+          tool: TRANSFER_TOOL_ID,
+          guard: 'action-provider-ambiguous',
+        }),
+      }
+    }
+
+    if (providerResolution.status !== 'resolved') {
+      return {
+        ok: true,
+        intent: 'clarification',
+        source: 'tool-fast',
+        reply:
+          providerResolution.status === 'missing-provider'
+            ? 'Indica anche il fornitore verso cui vuoi marcare il servizio come DA TRASFERIRE.'
+            : `Non ho trovato il fornitore "${providerResolution.term || request.providerQuery || ''}". Indica il nome completo o l’ID.`,
+        data: {
+          type: 'clarification',
+          reason: `action-provider-${providerResolution.status || 'unresolved'}`,
+        },
+        meta: buildActionMeta('clarification', {
+          tool: TRANSFER_TOOL_ID,
+          guard: `action-provider-${providerResolution.status || 'unresolved'}`,
+        }),
+      }
+    }
+
+    desiredProvider = providerResolution.provider
+  }
+
+  if (sameProvider(currentProvider, desiredProvider)) {
+    return {
+      ok: true,
+      intent: 'action-result',
+      source: 'tool-fast',
+      reply: desiredProvider
+        ? `Il servizio "${target.label}" è già marcato DA TRASFERIRE verso ${providerLabel(
+            desiredProvider
+          )}.`
+        : `Il servizio "${target.label}" non è marcato DA TRASFERIRE.`,
+      data: {
+        type: 'action-result',
+        action: {
+          tool: TRANSFER_TOOL_ID,
+          requiresConfirmation: false,
+          target,
+          changes: [],
+        },
+        result: {
+          status: 'noop',
+          changed: false,
+        },
+      },
+      meta: buildActionMeta('action-result', {
+        tool: TRANSFER_TOOL_ID,
+        actionStatus: 'noop',
+      }),
+    }
+  }
+
+  const changes = [
+    buildChange('toTransfer', 'DA TRASFERIRE', currentProvider, desiredProvider),
+  ]
+
+  const now = Date.now()
+  const actionId = randomUUID()
+  const actorFingerprint = fingerprintToken(actorToken)
+
+  supersedePendingProposals(actorFingerprint)
+
+  const proposal = {
+    actionId,
+    tool: TRANSFER_TOOL_ID,
+    operation: 'transfer-target',
+    status: 'pending',
+    actorFingerprint,
+    createdAt: now,
+    expiresAt: now + PROPOSAL_TTL_MS,
+    target,
+    changes,
+    field: 'toTransfer',
+    label: 'DA TRASFERIRE',
+    requestedValue: desiredProvider,
+    expectedValues: {
+      toTransfer: currentProvider?.id || null,
+    },
+    desiredValues: {
+      toTransfer: desiredProvider?.id || null,
+    },
+  }
+
+  proposals.set(actionId, proposal)
+  auditAction('proposed', proposal)
+
+  const operationDescription = desiredProvider
+    ? `imposterò DA TRASFERIRE verso ${providerLabel(desiredProvider)}`
+    : `rimuoverò DA TRASFERIRE${
+        currentProvider ? ` verso ${providerLabel(currentProvider)}` : ''
+      }`
+
+  return {
+    ok: true,
+    intent: 'action-proposal',
+    source: 'tool-fast',
+    reply:
+      `Sul servizio "${target.label}" ${operationDescription}. ` +
+      'Questa marcatura non avvia il trasferimento e non modifica fornitore attuale, sottoscrizioni o auth code. Confermi?',
+    data: {
+      type: 'action-preview',
+      action: {
+        actionId,
+        tool: TRANSFER_TOOL_ID,
+        requiresConfirmation: true,
+        expiresAt: new Date(proposal.expiresAt).toISOString(),
+        target,
+        changes,
+        effects: {
+          startsTransfer: false,
+          changesCurrentSupplier: false,
+          changesSubscriptions: false,
+          changesAuthCode: false,
+        },
+      },
+    },
+    meta: buildActionMeta('action-proposal', {
+      tool: TRANSFER_TOOL_ID,
+      actionId,
+      actionStatus: 'pending',
+    }),
+  }
+}
+
 function actionError(proposal, code, reply, details = null) {
   return {
     ok: false,
@@ -1443,6 +4467,7 @@ function actionError(proposal, code, reply, details = null) {
             actionId: proposal.actionId,
             tool: proposal.tool,
             target: proposal.target,
+            subscription: proposal.subscription || null,
             changes: proposal.changes,
           }
         : null,
@@ -1452,6 +4477,7 @@ function actionError(proposal, code, reply, details = null) {
       },
     },
     meta: buildActionMeta('action-error', {
+      tool: proposal?.tool || TOOL_ID,
       actionId: proposal?.actionId || null,
       actionStatus: proposal?.status || 'not-found',
       errorCode: code,
@@ -1558,12 +4584,15 @@ export async function handleRenewalsActionDecision({action = null, actorToken = 
           actionId: proposal.actionId,
           tool: proposal.tool,
           target: proposal.target,
+          subscription: proposal.subscription || null,
+          sourceSubscription: proposal.sourceSubscription || null,
           changes: proposal.changes,
         },
         decision: 'cancel',
         status: 'cancelled',
       },
       meta: buildActionMeta('action-confirmation', {
+        tool: proposal.tool || TOOL_ID,
         actionId: proposal.actionId,
         actionStatus: 'cancelled',
       }),
@@ -1574,12 +4603,34 @@ export async function handleRenewalsActionDecision({action = null, actorToken = 
   auditAction('confirmed', proposal)
 
   try {
-    const result = await updateServiceFlags({
-      serviceId: proposal.target.id,
-      expected: proposal.expectedFlags,
-      changes: proposal.desiredFlags,
-      actionId: proposal.actionId,
-    })
+    const result =
+      proposal.executionMode === 'copy-supplier-expiry-to-customer'
+        ? await copySupplierExpiryToCustomer({
+            serviceId: proposal.target.id,
+            customerSubscriptionId: proposal.subscription?.id,
+            supplierSubscriptionId: proposal.sourceSubscription?.id,
+            expectedCustomerEndDate:
+              (proposal.expectedValues || proposal.expectedFlags)?.subscriptionEndDate ?? null,
+            expectedSupplierEndDate: proposal.expectedSourceEndDate ?? null,
+            actionId: proposal.actionId,
+          })
+        : proposal.operation === 'subscription-end-date'
+          ? await updateSubscriptionEndDate({
+              serviceId: proposal.target.id,
+              subscriptionId: proposal.subscription?.id,
+              expectedEndDate:
+                (proposal.expectedValues || proposal.expectedFlags)?.subscriptionEndDate ?? null,
+              newEndDate:
+                (proposal.desiredValues || proposal.desiredFlags)?.subscriptionEndDate ?? null,
+              expectedIsSupplier: proposal.subscription?.type === 'supplier',
+              actionId: proposal.actionId,
+            })
+          : await updateServiceFlags({
+            serviceId: proposal.target.id,
+            expected: proposal.expectedValues || proposal.expectedFlags,
+            changes: proposal.desiredValues || proposal.desiredFlags,
+            actionId: proposal.actionId,
+          })
 
     proposal.status = 'completed'
     proposal.finishedAt = Date.now()
@@ -1602,10 +4653,10 @@ export async function handleRenewalsActionDecision({action = null, actorToken = 
       source: 'tool-fast',
       reply:
         proposal.kind === 'undo'
-          ? `Stato precedente ripristinato sul servizio "${proposal.target.label}": ${describeCompletedFlagChanges(
+          ? `Stato precedente ripristinato sul servizio "${proposal.target.label}": ${describeCompletedChanges(
               proposal.changes
             )}.`
-          : `Operazione completata sul servizio "${proposal.target.label}": ${describeCompletedFlagChanges(
+          : `Operazione completata sul servizio "${proposal.target.label}": ${describeCompletedChanges(
               proposal.changes
             )}.`,
       data: {
@@ -1614,15 +4665,19 @@ export async function handleRenewalsActionDecision({action = null, actorToken = 
           actionId: proposal.actionId,
           tool: proposal.tool,
           target: proposal.target,
+          subscription: proposal.subscription || null,
+          sourceSubscription: proposal.sourceSubscription || null,
           changes: proposal.changes,
         },
         result: {
           status: 'completed',
           changed: result?.changed === true,
           service: result?.service || null,
+          subscription: result?.subscription || null,
         },
       },
       meta: buildActionMeta('action-result', {
+        tool: proposal.tool || TOOL_ID,
         actionId: proposal.actionId,
         actionStatus: 'completed',
       }),

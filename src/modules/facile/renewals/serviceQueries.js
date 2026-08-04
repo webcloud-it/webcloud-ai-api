@@ -108,15 +108,92 @@ function isReservedBareServiceTerm(value = '') {
   if (!text) return true
 
   if (
-    /^(con|senza|di|tipo|piano|plan|spazio|fornitore|provider|supplier|collegato|collegati|non|marcato|marcati|da|in)\b/.test(
+    /^(che|con|senza|di|tipo|piano|plan|spazio|fornitore|provider|supplier|collegato|collegati|non|marcato|marcati|da|in|nel|nell|hanno|ha|sono)\b/.test(
       text
     )
   ) {
     return true
   }
 
-  return /^(hosting|web hosting|pec|casella pec|dominio|domini|email|mail|backup|licenza|licenze|server|vps|cloud|plesk|rinnovo|rinnovi|scadenza|scadenze|scaduto|scaduti|fatturazione|auth code|record dominio|traffico|spazio)\b/.test(
+  return /^(hosting|web hosting|pec|casella pec|dominio|domini|email|mail|backup|licenza|licenze|server|vps|cloud|plesk|rinnovo|rinnovi|rinnovano|scadenza|scadenze|scade|scadono|scadra|scadranno|scaduto|scaduti|imminente|imminenti|fatturazione|auth code|record dominio|traffico|spazio)\b/.test(
     text
+  )
+}
+
+function isOperationalScopeTerm(value = '') {
+  const text = normalizeSearchText(value)
+
+  if (!text) return true
+
+  return (
+    isReservedBareServiceTerm(text) ||
+    /\b(?:scadenza|scadenze|scade|scadono|scadra|scadranno|rinnovo|rinnovi|rinnovano|imminente|imminenti|spazio|quota|plesk|fatturazione|fornitore|provider|supplier|auth\s*code|comunicazioni|traffico)\b/.test(
+      text
+    )
+  )
+}
+
+function stripCustomerOrGroupTail(value = '') {
+  return compactText(
+    stripAfterKnownTail(value)
+      .replace(
+        /\b(?:che\s+)?(?:scade|scadono|scadra|scadranno|rinnova|rinnovano|termina|terminano|ha|hanno|è|sono)\b.*$/i,
+        ''
+      )
+      .replace(
+        /\b(?:con|senza|in|da|per)\s+(?:rinnovi?|scadenz[ae]|spazio|quota|plesk|fatturazione|fornitor[ei]|provider|supplier|auth\s*code|comunicazioni|traffico)\b.*$/i,
+        ''
+      )
+      .trim()
+  )
+}
+
+function normalizeCustomerOrGroupTerm(value = '') {
+  const term = cleanTerm(stripCustomerOrGroupTail(value))
+
+  if (!term || isOperationalScopeTerm(term)) {
+    return null
+  }
+
+  return term
+}
+
+function isExplicitSupplierExpiryRequest(message = '') {
+  const text = normalizeSearchText(message)
+
+  return (
+    /\b(?:scadenza|scadenze|scade|scadono|scadra|scadranno)\b.{0,40}\b(?:fornitore|supplier|provider)\b/.test(
+      text
+    ) ||
+    /\b(?:fornitore|supplier|provider)\b.{0,40}\b(?:scadenza|scadenze|scade|scadono|scadra|scadranno)\b/.test(
+      text
+    )
+  )
+}
+
+function isTemporalOrOperationalTerm(value = '') {
+  const text = normalizeSearchText(value)
+
+  if (!text) return true
+
+  const isOnlyYear = /^(?:(?:nel|nell|del|dell|al|dal|entro|tra|fra|in)\s+)?20\d{2}$/.test(
+    text
+  )
+  const isOnlyMonth = MONTHS.some(month =>
+    month.names.some(name =>
+      new RegExp(
+        `^(?:(?:nel|nell|del|dell|al|dal|entro|tra|fra|in)\\s+)?${name}(?:\\s+20\\d{2})?$`,
+        'i'
+      ).test(text)
+    )
+  )
+
+  return (
+    isOnlyYear ||
+    isOnlyMonth ||
+    /\b(?:scadenza|scadenze|scade|scadono|scadra|scadranno|rinnovo|rinnovi|imminente|imminenti|servizio|servizi|dominio|domini)\b/.test(
+      text
+    )
   )
 }
 
@@ -257,6 +334,13 @@ function buildMonthRange(monthIndex, year) {
   return {start, end}
 }
 
+function buildYearRange(year) {
+  return {
+    start: new Date(year, 0, 1),
+    end: new Date(year, 11, 31, 23, 59, 59, 999),
+  }
+}
+
 function resolveMonthYear(monthIndex, explicitYear = null, now = new Date()) {
   if (explicitYear) return Number(explicitYear)
 
@@ -360,6 +444,27 @@ function extractDateRange(message = '', now = new Date()) {
       type: 'month',
       ...range,
       label: `${month.names[0]} ${year}`,
+    }
+  }
+
+  /*
+   * Un anno isolato è un intervallo temporale soltanto quando la frase
+   * contiene anche un concetto di scadenza/rinnovo/fatturazione. In questo
+   * modo "piano 2027" non viene trasformato accidentalmente in un filtro data.
+   */
+  const yearOnly = text.match(/\b(20\d{2})\b/)
+  const hasTemporalContext =
+    /\b(?:scadenza|scadenze|scade|scadono|scadra|scadranno|rinnovo|rinnovi|rinnovano|termina|terminano|fatturazione|fattura|invoice)\b/.test(
+      text
+    )
+
+  if (yearOnly?.[1] && hasTemporalContext) {
+    const year = Number(yearOnly[1])
+
+    return {
+      type: 'year',
+      ...buildYearRange(year),
+      label: String(year),
     }
   }
 
@@ -716,11 +821,21 @@ function extractSupplierTerm(message = '') {
   const match = text.match(
     /\b(?:fornitor[ei]|supplier|provider)\b\s*(?:con|di|del|della|nome)?\s*([a-z0-9._@/+ -]{2,})?/i
   )
-  const term = stripAfterKnownTail(match?.[1] || '')
-    .replace(/\b(in scadenza|scadut[oi]|rinnovi?|automatic[oi]|servizi?|pian[oi])\b.*$/i, '')
-    .trim()
+  const term = cleanTerm(
+    stripAfterKnownTail(match?.[1] || '')
+      .replace(
+        /\b(?:con|in|da|per)?\s*(?:scadenz[ae]|scade|scadono|scadra|scadranno|scadut[oi]|rinnovi?|automatic[oi]|servizi?|pian[oi])\b.*$/i,
+        ''
+      )
+      .replace(/\b(?:con|in|da|per)$/i, '')
+      .trim()
+  )
 
-  return cleanTerm(term) || null
+  if (!term || isTemporalOrOperationalTerm(term)) {
+    return null
+  }
+
+  return term
 }
 
 function extractServiceTypeTerm(message = '') {
@@ -764,7 +879,7 @@ function extractCustomerOrGroupTerm(message = '') {
   const explicit = text.match(/\b(?:cliente|azienda|gruppo)\b\s+([a-z0-9._@/+ -]{2,})/i)
 
   if (explicit?.[1]) {
-    return cleanTerm(stripAfterKnownTail(explicit[1]))
+    return normalizeCustomerOrGroupTerm(explicit[1])
   }
 
   const servicesOf = text.match(
@@ -772,29 +887,29 @@ function extractCustomerOrGroupTerm(message = '') {
   )
 
   if (servicesOf?.[1]) {
-    return cleanTerm(stripAfterKnownTail(servicesOf[1]))
+    return normalizeCustomerOrGroupTerm(servicesOf[1])
   }
 
   const terseServicesOf = text.match(
-    /\b(?:servizi|domini)\s+(?!di\b|con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b|collegat[oi]\b|non\b|marcat[oi]\b|rinnovi?\b|scadenze?\b|scadut[oi]\b|in\b|da\b|auth\b|record\b|fatturazione\b|traffico\b)([a-z0-9._@/+ -]{2,})/i
+    /\b(?:servizi|domini)\s+(?!che\b|di\b|con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b|collegat[oi]\b|non\b|marcat[oi]\b|rinnovi?\b|rinnovano\b|scadenze?\b|scade\b|scadono\b|scadra\b|scadranno\b|scadut[oi]\b|hanno\b|ha\b|sono\b|in\b|da\b|auth\b|record\b|fatturazione\b|traffico\b)([a-z0-9._@/+ -]{2,})/i
   )
 
   if (terseServicesOf?.[1]) {
-    const term = cleanTerm(stripAfterKnownTail(terseServicesOf[1]))
+    const term = normalizeCustomerOrGroupTerm(terseServicesOf[1])
 
-    if (term && !isReservedBareServiceTerm(term)) {
+    if (term) {
       return term
     }
   }
 
   const listOf = text.match(
-    /\b(?:elenco|lista)\s+(?:servizi|domini)?\s*(?:di\s+)?(?!con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b)([a-z0-9._@/+ -]{2,})/i
+    /\b(?:elenco|lista)\s+(?:servizi|domini)?\s*(?:di\s+)?(?!che\b|con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b|scade\b|scadono\b|scadra\b|scadranno\b|rinnovi?\b)([a-z0-9._@/+ -]{2,})/i
   )
 
   if (listOf?.[1]) {
-    const term = cleanTerm(stripAfterKnownTail(listOf[1]))
+    const term = normalizeCustomerOrGroupTerm(listOf[1])
 
-    if (term && !isReservedBareServiceTerm(term)) {
+    if (term) {
       return term
     }
   }
@@ -925,6 +1040,7 @@ function detectExpiryFilters(message = '', dateRange = null) {
 
   if (
     dateRange &&
+    !isExplicitSupplierExpiryRequest(message) &&
     /\b(scadenza|scadenze|scade|scadono|scadra|scadranno|rinnovo|rinnovi|rinnovano|termina|terminano)\b/.test(
       text
     )
@@ -1399,6 +1515,60 @@ function applyScope(services = [], {customerId = null, groupId = null, serviceId
   }
 
   return out
+}
+
+export function assessServiceListQuery({message = '', query = null} = {}) {
+  const text = normalizeSearchText(message)
+  const filters = Array.isArray(query?.filters) ? query.filters : []
+  const activeFilters = filters.filter(filter => filter?.kind && filter.kind !== 'all')
+  const warnings = []
+
+  const scopeFilter = activeFilters.find(filter => filter.kind === 'customer-or-group')
+
+  if (scopeFilter?.term && isOperationalScopeTerm(scopeFilter.term)) {
+    warnings.push('operational-text-interpreted-as-customer-or-group')
+  }
+
+  const hasExplicitYear = /\b20\d{2}\b/.test(text)
+  const hasExpiryLanguage =
+    /\b(?:scadenza|scadenze|scade|scadono|scadra|scadranno|rinnovo|rinnovi|rinnovano|termina|terminano)\b/.test(
+      text
+    )
+  const hasExpiryRange = activeFilters.some(filter =>
+    ['expires-in-range', 'supplier-expires-in-range'].includes(filter.kind)
+  )
+
+  if (hasExplicitYear && hasExpiryLanguage && !hasExpiryRange) {
+    warnings.push('explicit-year-without-expiry-range')
+  }
+
+  const supplierFilter = activeFilters.find(filter => filter.kind === 'supplier')
+
+  if (supplierFilter?.term && isTemporalOrOperationalTerm(supplierFilter.term)) {
+    warnings.push('temporal-text-interpreted-as-supplier')
+  }
+
+  if (
+    isExplicitSupplierExpiryRequest(message) &&
+    activeFilters.some(filter => filter.kind === 'expires-in-range') &&
+    activeFilters.some(filter => filter.kind === 'supplier-expires-in-range')
+  ) {
+    warnings.push('supplier-expiry-also-interpreted-as-customer-expiry')
+  }
+
+  const hasOperationalFilterLanguage =
+    /\b(?:rinnovi|scadenze|scade|scadono|scadra|scadranno|scaduti|imminenti|spazio|quota|plesk|fatturazione|fornitore|provider|supplier|piano|plan|non\s+rinnovare|da\s+rinnovare|da\s+trasferire)\b/.test(
+      text
+    )
+
+  if (hasOperationalFilterLanguage && activeFilters.length === 0) {
+    warnings.push('operational-list-without-filters')
+  }
+
+  return {
+    valid: warnings.length === 0,
+    warnings,
+  }
 }
 
 export function parseServiceListQuery({

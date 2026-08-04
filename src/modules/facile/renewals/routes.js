@@ -1,4 +1,14 @@
-import {getAllServices, getSettings, getPanelCounts} from './service.js'
+import {getAllServices, getSettings, getPanelCounts, getServiceOptions} from './service.js'
+import {
+  handlePendingRenewalsDiagnosticClarification,
+  handlePleskAuditRequest,
+  handleServiceHttpCheckRequest,
+  handleServiceSubscriptionExpiryRequest,
+  hasPendingRenewalsDiagnosticClarification,
+  parsePleskAuditRequest,
+  parseServiceHttpCheckRequest,
+  parseServiceSubscriptionExpiryRequest,
+} from './diagnostics.js'
 import {getClientSubscriptions, isLowOnSpace, buildServiceSnapshot} from './snapshots.js'
 import {matchesText} from './intents.js'
 import {buildCommunicationsIndex} from './communications.js'
@@ -8,14 +18,27 @@ import {httpError} from '../../../utils/httpError.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 import {
+  buildCopySupplierExpiryToCustomerActionPreview,
   buildRecentRenewalsActionUndoPreview,
+  getRecentRenewalsActionTarget,
+  buildServiceAuthCodeActionPreview,
   buildServiceFlagActionPreview,
+  buildServiceInvoiceDateActionPreview,
+  buildServicePleskPlanSyncActionPreview,
+  buildServiceSubscriptionEndDateActionPreview,
+  buildServiceTransferTargetActionPreview,
   handlePendingRenewalsActionClarification,
   handlePendingRenewalsActionDecisionMessage,
   hasPendingRenewalsActionClarification,
   handleRenewalsActionDecision,
   isRecentRenewalsActionUndoRequest,
+  parseCopySupplierExpiryToCustomerAction,
+  parseServiceAuthCodeAction,
   parseServiceFlagAction,
+  parseServiceInvoiceDateAction,
+  parseServicePleskPlanSyncAction,
+  parseServiceSubscriptionEndDateAction,
+  parseServiceTransferTargetAction,
 } from './actions.js'
 
 export async function summary(req, res) {
@@ -439,7 +462,14 @@ export async function chat(req, res) {
     })
   }
 
-  const actionRequest = parseServiceFlagAction(message)
+  const actionRequest =
+    parseServiceAuthCodeAction(message) ||
+    parseServiceInvoiceDateAction(message) ||
+    parseCopySupplierExpiryToCustomerAction(message) ||
+    parseServiceSubscriptionEndDateAction(message) ||
+    parseServicePleskPlanSyncAction(message) ||
+    parseServiceTransferTargetAction(message) ||
+    parseServiceFlagAction(message)
 
   if (
     !actionRequest &&
@@ -484,11 +514,79 @@ export async function chat(req, res) {
 
   if (actionRequest) {
     const dataLoadStartedAt = Date.now()
-    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+    const needsProviders = actionRequest.type === 'renewals-transfer-target-request'
+
+    const [services, settings, serviceOptions] = await Promise.all([
+      getAllServices(),
+      getSettings(),
+      needsProviders ? getServiceOptions() : Promise.resolve({providers: []}),
+    ])
+
     const dataLoadMs = Date.now() - dataLoadStartedAt
 
-    const result = buildServiceFlagActionPreview({
+    const previewArgs = {
       request: actionRequest,
+      services,
+      providers: serviceOptions.providers || [],
+      settings,
+      history: Array.isArray(history) ? history : [],
+      scope: {
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+        serviceId: resolvedServiceId,
+      },
+      actorToken: req.auth.token,
+    }
+
+    const result =
+      actionRequest.type === 'renewals-transfer-target-request'
+        ? buildServiceTransferTargetActionPreview(previewArgs)
+        : actionRequest.type === 'renewals-invoice-date-request'
+          ? buildServiceInvoiceDateActionPreview(previewArgs)
+          : actionRequest.type === 'renewals-copy-supplier-expiry-to-customer-request'
+            ? buildCopySupplierExpiryToCustomerActionPreview(previewArgs)
+            : actionRequest.type === 'renewals-subscription-end-date-request'
+              ? buildServiceSubscriptionEndDateActionPreview(previewArgs)
+              : actionRequest.type === 'renewals-plesk-plan-sync-request'
+              ? buildServicePleskPlanSyncActionPreview(previewArgs)
+              : actionRequest.type === 'renewals-auth-code-request'
+                ? buildServiceAuthCodeActionPreview(previewArgs)
+                : buildServiceFlagActionPreview(previewArgs)
+
+    return res.json({
+      ...result,
+      meta: {
+        ...(result.meta || {}),
+        timings: {
+          ...(result.meta?.timings || {}),
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+        servicesCount: Array.isArray(services) ? services.length : null,
+      },
+    })
+  }
+
+  const diagnosticRequest =
+    parsePleskAuditRequest(message) ||
+    parseServiceSubscriptionExpiryRequest(message) ||
+    parseServiceHttpCheckRequest(message)
+
+  if (
+    !diagnosticRequest &&
+    hasPendingRenewalsDiagnosticClarification({
+      actorToken: req.auth.token,
+    })
+  ) {
+    const dataLoadStartedAt = Date.now()
+    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+    const recentActionTarget = getRecentRenewalsActionTarget({
+      actorToken: req.auth.token,
+    })
+
+    const pendingDiagnosticResult = await handlePendingRenewalsDiagnosticClarification({
+      message,
       services,
       settings,
       history: Array.isArray(history) ? history : [],
@@ -498,7 +596,53 @@ export async function chat(req, res) {
         serviceId: resolvedServiceId,
       },
       actorToken: req.auth.token,
+      recentServiceId: recentActionTarget?.id || null,
     })
+
+    if (pendingDiagnosticResult) {
+      return res.json({
+        ...pendingDiagnosticResult,
+        meta: {
+          ...(pendingDiagnosticResult.meta || {}),
+          timings: {
+            ...(pendingDiagnosticResult.meta?.timings || {}),
+            dataLoadMs,
+            totalMs: Date.now() - startedAt,
+          },
+          servicesCount: Array.isArray(services) ? services.length : null,
+        },
+      })
+    }
+  }
+
+  if (diagnosticRequest) {
+    const dataLoadStartedAt = Date.now()
+    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+    const recentActionTarget = getRecentRenewalsActionTarget({
+      actorToken: req.auth.token,
+    })
+
+    const diagnosticArgs = {
+      request: diagnosticRequest,
+      services,
+      settings,
+      history: Array.isArray(history) ? history : [],
+      scope: {
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+        serviceId: resolvedServiceId,
+      },
+      actorToken: req.auth.token,
+      recentServiceId: recentActionTarget?.id || null,
+    }
+
+    const result =
+      diagnosticRequest.type === 'renewals-plesk-audit-request'
+        ? await handlePleskAuditRequest(diagnosticArgs)
+        : diagnosticRequest.type === 'renewals-subscription-expiry-request'
+          ? await handleServiceSubscriptionExpiryRequest(diagnosticArgs)
+          : await handleServiceHttpCheckRequest(diagnosticArgs)
 
     return res.json({
       ...result,
