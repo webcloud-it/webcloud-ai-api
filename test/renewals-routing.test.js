@@ -25,6 +25,11 @@ import {
   parseServiceSubscriptionExpiryRequest,
 } from '../src/modules/facile/renewals/diagnostics.js'
 import {shouldResolveRenewalsIntentSemantically} from '../src/modules/facile/renewals/intentResolver.js'
+import {
+  buildCommunicationsContext,
+  buildCommunicationsReply,
+  extractNamedTarget,
+} from '../src/modules/facile/renewals/communications.js'
 
 const NOW = new Date(2026, 7, 4, 12, 0, 0)
 const SETTINGS = {analysis_period: 30, renewals_low_thresholds: []}
@@ -457,3 +462,88 @@ describe('Fallback semantico Ollama', () => {
     )
   })
 })
+
+describe('Comunicazioni deterministiche', () => {
+  const servicesWithCommunications = [
+    {
+      id: 'service-eco-pv',
+      name: 'eco-pv.it',
+      customer: {
+        id: 'customer-eco-pv',
+        name: 'Consorzio Eco-Pv',
+        group: {id: 'group-zilio', name: 'Zilio Group Srl'},
+      },
+      renewalsCommunications: [
+        {
+          id: 'communication-old',
+          type: '1',
+          typeLabel: 'Inviato richiesta rinnovo',
+          communicationDate: '2026-05-10T08:30:00.000Z',
+        },
+        {
+          id: 'communication-latest',
+          type: '2',
+          typeLabel: 'Inviato richiesta upgrade',
+          communicationDate: '2026-06-11T18:51:00.000Z',
+        },
+      ],
+    },
+  ]
+
+  test('estrae il dominio senza lasciare "qual è" nel target', () => {
+    assert.equal(
+      extractNamedTarget("qual è l'ultima email inviata per eco-pv.it?"),
+      'eco-pv.it'
+    )
+  })
+
+  test('estrae cliente e gruppo dopo la preposizione', () => {
+    assert.equal(
+      extractNamedTarget("qual è l'ultima email inviata per Consorzio Eco-Pv?"),
+      'Consorzio Eco-Pv'
+    )
+    assert.equal(
+      extractNamedTarget('ultima comunicazione inviata per Zilio Group Srl'),
+      'Zilio Group Srl'
+    )
+  })
+
+  test('costruisce la risposta puntuale senza usare Ollama', () => {
+    const payload = {
+      type: 'communications',
+      ...buildCommunicationsContext({
+        services: servicesWithCommunications,
+        message: "qual è l'ultima email inviata per eco-pv.it?",
+      }),
+    }
+
+    const reply = buildCommunicationsReply(payload, {
+      message: "qual è l'ultima email inviata per eco-pv.it?",
+    })
+
+    assert.equal(payload.totalCommunications, 2)
+    assert.equal(payload.latestCommunication.typeLabel, 'Inviato richiesta upgrade')
+    assert.match(reply, /L’ultima comunicazione inviata/i)
+    assert.match(reply, /Inviato richiesta upgrade/i)
+    assert.match(reply, /eco-pv\.it/i)
+  })
+
+  test('mantiene la lista per una richiesta plurale', () => {
+    const payload = {
+      type: 'communications',
+      ...buildCommunicationsContext({
+        services: servicesWithCommunications,
+        message: 'quali sono le ultime email inviate?',
+      }),
+    }
+
+    const reply = buildCommunicationsReply(payload, {
+      message: 'quali sono le ultime email inviate?',
+    })
+
+    assert.match(reply, /Ho trovato 2 comunicazioni inviate/i)
+    assert.match(reply, /Inviato richiesta upgrade/i)
+    assert.match(reply, /Inviato richiesta rinnovo/i)
+  })
+})
+

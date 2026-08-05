@@ -100,7 +100,21 @@ function getCanonicalNames(item = {}, entityId = '') {
   const values = []
 
   if (entityId === 'plan-prices') {
-    values.push(item?.plan?.name, item?.name)
+    const planName = item?.plan?.name || null
+    const listName = item?.priceListVersion?.name || null
+    const listVersion = item?.priceListVersion?.version
+
+    values.push(item?.name, planName)
+
+    if (planName && listName) {
+      values.push(`${planName} · ${listName}`)
+      values.push(`${planName} nel listino ${listName}`)
+
+      if (listVersion !== null && listVersion !== undefined && listVersion !== '') {
+        values.push(`${planName} · ${listName} v.${listVersion}`)
+        values.push(`${planName} nel listino ${listName} v.${listVersion}`)
+      }
+    }
   } else {
     values.push(item?.name, item?.label)
   }
@@ -124,6 +138,26 @@ function getTargetField(entityId = '') {
   return entityId === 'plan-prices' ? 'plan.name' : 'name'
 }
 
+function getCatalogTargetFilter(definition, target = '') {
+  if (definition?.id !== 'plan-prices') {
+    return {
+      field: getTargetField(definition?.id),
+      value: target,
+    }
+  }
+
+  const raw = String(target || '').trim()
+  const planName = raw
+    .split(/\s+·\s+/)[0]
+    .split(/\s+nel\s+listino\s+/i)[0]
+    .trim()
+
+  return {
+    field: 'plan.name',
+    value: planName || raw,
+  }
+}
+
 function getCandidateIdentity(item = {}, entityId = '', matchedName = '') {
   if (item?.id !== null && item?.id !== undefined && item?.id !== '') {
     return {
@@ -141,12 +175,31 @@ function getCandidateIdentity(item = {}, entityId = '', matchedName = '') {
 }
 
 function buildCandidate({definition, item, matchedName, matchKind, source}) {
+  const displayName =
+    definition.id === 'plan-prices'
+      ? [
+          item?.plan?.name || matchedName,
+          item?.priceListVersion?.name
+            ? `${item.priceListVersion.name}${
+                item.priceListVersion.version !== null &&
+                item.priceListVersion.version !== undefined &&
+                item.priceListVersion.version !== ''
+                  ? ` v.${item.priceListVersion.version}`
+                  : ''
+              }`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : matchedName
+
   return {
     entityId: definition.id,
     entityLabel: definition.label,
     entitySingular: definition.singular,
     item,
     name: matchedName,
+    displayName,
     normalizedName: normalizeText(matchedName),
     matchKind,
     source,
@@ -270,18 +323,23 @@ function buildResolved(candidate, target, reason) {
     entitySingular: candidate.entitySingular,
     name: candidate.name,
     filter: candidate.filter,
+    item: candidate.item || null,
+    targetId: candidate.item?.id ? String(candidate.item.id) : null,
     source: candidate.source,
     reason,
   }
 }
 
-function resolveCandidateSet(candidates = [], {target = '', entityHint = null} = {}) {
+function resolveCandidateSet(
+  candidates = [],
+  {target = '', entityHint = null, requireUniqueRecord = false} = {}
+) {
   const best = pickBestCandidates(candidates, {target, entityHint})
 
   if (!best.length) return null
   if (best.length === 1) return buildResolved(best[0], target, 'unique-match')
 
-  const collapsed = collapseSameEntityCandidates(best)
+  const collapsed = requireUniqueRecord ? null : collapseSameEntityCandidates(best)
   if (collapsed) return buildResolved(collapsed, target, 'same-entity-same-name')
 
   return {
@@ -292,6 +350,7 @@ function resolveCandidateSet(candidates = [], {target = '', entityHint = null} =
       entityLabel: candidate.entityLabel,
       entitySingular: candidate.entitySingular,
       name: candidate.name,
+      displayName: candidate.displayName || candidate.name,
       source: candidate.source,
       filter: candidate.filter,
     })),
@@ -320,12 +379,18 @@ async function resolveFromCatalog({
 
   const settled = await Promise.allSettled(
     definitions.map(async definition => {
-      const field = getTargetField(definition.id)
+      const targetFilter = getCatalogTargetFilter(definition, variant.target)
       const result = await queryCatalog({
         type: 'read-query-plan',
         operation: 'detail',
         entity: definition.id,
-        filters: [{field, operator: 'equals', value: variant.target}],
+        filters: [
+          {
+            field: targetFilter.field,
+            operator: 'equals',
+            value: targetFilter.value,
+          },
+        ],
         sort: definition.defaultSort || [{field, direction: 'asc'}],
         limit: REMOTE_RESOLUTION_LIMIT,
         offset: 0,
@@ -361,6 +426,7 @@ export async function resolveReadQueryDetailTarget({
   options = {},
   queryCatalog = null,
   readUtterance = null,
+  requireUniqueRecord = false,
 } = {}) {
   if (!shouldResolveReadQueryDetailTarget(message, readUtterance)) {
     return {status: 'not-applicable'}
@@ -392,7 +458,10 @@ export async function resolveReadQueryDetailTarget({
         source: 'operational-services',
       })
     )
-    const operationalResolution = resolveCandidateSet(operationalCandidates, variant)
+    const operationalResolution = resolveCandidateSet(operationalCandidates, {
+      ...variant,
+      requireUniqueRecord,
+    })
 
     if (operationalResolution?.status === 'resolved') return operationalResolution
     if (operationalResolution?.status === 'ambiguous') return operationalResolution
@@ -404,7 +473,10 @@ export async function resolveReadQueryDetailTarget({
       variant,
       queryCatalog,
     })
-    const catalogResolution = resolveCandidateSet(catalogCandidates || [], variant)
+    const catalogResolution = resolveCandidateSet(catalogCandidates || [], {
+      ...variant,
+      requireUniqueRecord,
+    })
 
     if (catalogResolution) return catalogResolution
   }
@@ -417,7 +489,7 @@ export async function resolveReadQueryDetailTarget({
 
 function formatCandidate(candidate = {}) {
   const entity = candidate.entitySingular || candidate.entityLabel || candidate.entityId
-  return `${entity} “${candidate.name}”`
+  return `${entity} “${candidate.displayName || candidate.name}”`
 }
 
 export function buildReadQueryTargetClarification(resolution = {}) {

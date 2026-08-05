@@ -4,6 +4,9 @@ import {
   getPanelCounts,
   getServiceOptions,
   queryRenewalsCatalog,
+  previewRenewalsCatalogMutation,
+  commitRenewalsCatalogMutation,
+  getPleskRenewalsAudit,
 } from './service.js'
 import {
   handlePendingRenewalsDiagnosticClarification,
@@ -18,6 +21,18 @@ import {
 import {getClientSubscriptions, isLowOnSpace, buildServiceSnapshot} from './snapshots.js'
 import {matchesText} from './intents.js'
 import {buildCommunicationsIndex} from './communications.js'
+import {
+  buildCommunicationDraftPreview,
+  handlePendingCommunicationDraftClarification,
+  hasPendingCommunicationDraftClarification,
+  planCommunicationDraftRequest,
+} from './communicationDrafts.js'
+import {
+  buildOpenEmailGenerationAction,
+  handlePendingOpenEmailGenerationClarification,
+  hasPendingOpenEmailGenerationClarification,
+  planOpenEmailGenerationAction,
+} from './appActions.js'
 import {buildChatContextFromSnapshots} from './context.js'
 import {handleRenewalsChat} from './chat.js'
 import {httpError} from '../../../utils/httpError.js'
@@ -46,8 +61,22 @@ import {
   parseReadQueryUtterance,
 } from './readQueryUtterance.js'
 import {
+  buildEntityMutationProposal,
+  buildRecentEntityMutationUndoProposal,
+  getRecentCompletedEntityMutationContext,
+  handlePendingEntityMutationDecisionMessage,
+  isRecentEntityMutationUndoRequest,
+} from './entityMutationActions.js'
+import {planEntityMutationRequest} from './entityMutationPlanner.js'
+import {
+  isGenericOperationUndoRequest,
+  pickLatestCompletedOperation,
+} from './operationUndoResolver.js'
+import {verifyCompletedOperationResult} from './operationVerification.js'
+import {
   buildCopySupplierExpiryToCustomerActionPreview,
   buildRecentRenewalsActionUndoPreview,
+  getRecentCompletedRenewalsActionContext,
   getRecentRenewalsActionTarget,
   buildServiceAuthCodeActionPreview,
   buildServiceFlagActionPreview,
@@ -460,6 +489,15 @@ export async function chatContext(req, res) {
   })
 }
 
+async function verifyOperationResult(result) {
+  return verifyCompletedOperationResult({
+    result,
+    loadServices: () => getAllServices({force: true}),
+    queryCatalog: queryRenewalsCatalog,
+    auditPlesk: getPleskRenewalsAudit,
+  })
+}
+
 export async function chat(req, res) {
   const startedAt = Date.now()
   const {
@@ -505,13 +543,14 @@ export async function chat(req, res) {
         action,
         actorToken: req.auth.token,
       }))
+    const verifiedResult = await verifyOperationResult(result)
 
     return res.json({
-      ...result,
+      ...verifiedResult,
       meta: {
-        ...(result.meta || {}),
+        ...(verifiedResult.meta || {}),
         timings: {
-          ...(result.meta?.timings || {}),
+          ...(verifiedResult.meta?.timings || {}),
           dataLoadMs: 0,
           totalMs: Date.now() - startedAt,
         },
@@ -530,12 +569,14 @@ export async function chat(req, res) {
     })
 
   if (pendingFullRenewalDecisionResult) {
+    const pendingFullRenewalVerifiedResult = await verifyOperationResult(pendingFullRenewalDecisionResult)
+
     return res.json({
-      ...pendingFullRenewalDecisionResult,
+      ...pendingFullRenewalVerifiedResult,
       meta: {
-        ...(pendingFullRenewalDecisionResult.meta || {}),
+        ...(pendingFullRenewalVerifiedResult.meta || {}),
         timings: {
-          ...(pendingFullRenewalDecisionResult.meta?.timings || {}),
+          ...(pendingFullRenewalVerifiedResult.meta?.timings || {}),
           dataLoadMs: 0,
           totalMs: Date.now() - startedAt,
         },
@@ -550,12 +591,14 @@ export async function chat(req, res) {
     })
 
   if (pendingSupplierRenewalDecisionResult) {
+    const pendingSupplierRenewalVerifiedResult = await verifyOperationResult(pendingSupplierRenewalDecisionResult)
+
     return res.json({
-      ...pendingSupplierRenewalDecisionResult,
+      ...pendingSupplierRenewalVerifiedResult,
       meta: {
-        ...(pendingSupplierRenewalDecisionResult.meta || {}),
+        ...(pendingSupplierRenewalVerifiedResult.meta || {}),
         timings: {
-          ...(pendingSupplierRenewalDecisionResult.meta?.timings || {}),
+          ...(pendingSupplierRenewalVerifiedResult.meta?.timings || {}),
           dataLoadMs: 0,
           totalMs: Date.now() - startedAt,
         },
@@ -569,12 +612,14 @@ export async function chat(req, res) {
   })
 
   if (pendingRenewalDecisionResult) {
+    const pendingRenewalVerifiedResult = await verifyOperationResult(pendingRenewalDecisionResult)
+
     return res.json({
-      ...pendingRenewalDecisionResult,
+      ...pendingRenewalVerifiedResult,
       meta: {
-        ...(pendingRenewalDecisionResult.meta || {}),
+        ...(pendingRenewalVerifiedResult.meta || {}),
         timings: {
-          ...(pendingRenewalDecisionResult.meta?.timings || {}),
+          ...(pendingRenewalVerifiedResult.meta?.timings || {}),
           dataLoadMs: 0,
           totalMs: Date.now() - startedAt,
         },
@@ -588,12 +633,282 @@ export async function chat(req, res) {
   })
 
   if (pendingDecisionResult) {
+    const pendingVerifiedResult = await verifyOperationResult(pendingDecisionResult)
+
     return res.json({
-      ...pendingDecisionResult,
+      ...pendingVerifiedResult,
       meta: {
-        ...(pendingDecisionResult.meta || {}),
+        ...(pendingVerifiedResult.meta || {}),
         timings: {
-          ...(pendingDecisionResult.meta?.timings || {}),
+          ...(pendingVerifiedResult.meta?.timings || {}),
+          dataLoadMs: 0,
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
+  }
+
+
+  const pendingEntityMutationDecision =
+    await handlePendingEntityMutationDecisionMessage({
+      message,
+      actorToken: req.auth.token,
+      commitFn: commitRenewalsCatalogMutation,
+    })
+
+  if (pendingEntityMutationDecision) {
+    const pendingEntityMutationVerifiedResult = await verifyOperationResult(pendingEntityMutationDecision)
+
+    return res.json({
+      ...pendingEntityMutationVerifiedResult,
+      meta: {
+        ...(pendingEntityMutationVerifiedResult.meta || {}),
+        timings: {
+          ...(pendingEntityMutationVerifiedResult.meta?.timings || {}),
+          dataLoadMs: 0,
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
+  }
+
+  const openEmailGenerationRequest = await planOpenEmailGenerationAction({
+    message,
+  })
+
+  if (
+    !openEmailGenerationRequest &&
+    hasPendingOpenEmailGenerationClarification({actorToken: req.auth.token})
+  ) {
+    const pendingAppActionResult = handlePendingOpenEmailGenerationClarification({
+      message,
+      actorToken: req.auth.token,
+    })
+
+    if (pendingAppActionResult) {
+      return res.json({
+        ...pendingAppActionResult,
+        meta: {
+          ...(pendingAppActionResult.meta || {}),
+          timings: {
+            ...(pendingAppActionResult.meta?.timings || {}),
+            dataLoadMs: 0,
+            totalMs: Date.now() - startedAt,
+          },
+        },
+      })
+    }
+  }
+
+  if (openEmailGenerationRequest) {
+    const dataLoadStartedAt = Date.now()
+    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+
+    const appActionResult = buildOpenEmailGenerationAction({
+      request: openEmailGenerationRequest,
+      services,
+      settings,
+      history: Array.isArray(history) ? history : [],
+      scope: {
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+        serviceId: resolvedServiceId,
+      },
+      actorToken: req.auth.token,
+    })
+
+    return res.json({
+      ...appActionResult,
+      meta: {
+        ...(appActionResult.meta || {}),
+        timings: {
+          ...(appActionResult.meta?.timings || {}),
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+        servicesCount: Array.isArray(services) ? services.length : null,
+      },
+    })
+  }
+
+  const communicationDraftRequest = await planCommunicationDraftRequest({
+    message,
+  })
+
+  if (
+    !communicationDraftRequest &&
+    hasPendingCommunicationDraftClarification({actorToken: req.auth.token})
+  ) {
+    const dataLoadStartedAt = Date.now()
+    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+
+    const clarificationResult = await handlePendingCommunicationDraftClarification({
+      message,
+      services,
+      settings,
+      history: Array.isArray(history) ? history : [],
+      scope: {
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+        serviceId: resolvedServiceId,
+      },
+      actorToken: req.auth.token,
+    })
+
+    if (clarificationResult) {
+      return res.json({
+        ...clarificationResult,
+        meta: {
+          ...(clarificationResult.meta || {}),
+          timings: {
+            ...(clarificationResult.meta?.timings || {}),
+            dataLoadMs,
+            totalMs: Date.now() - startedAt,
+          },
+          servicesCount: Array.isArray(services) ? services.length : null,
+        },
+      })
+    }
+  }
+
+  if (communicationDraftRequest) {
+    const dataLoadStartedAt = Date.now()
+    const [services, settings] = await Promise.all([getAllServices(), getSettings()])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+
+    const draftResult = await buildCommunicationDraftPreview({
+      request: communicationDraftRequest,
+      services,
+      settings,
+      history: Array.isArray(history) ? history : [],
+      scope: {
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+        serviceId: resolvedServiceId,
+      },
+      actorToken: req.auth.token,
+    })
+
+    return res.json({
+      ...draftResult,
+      meta: {
+        ...(draftResult.meta || {}),
+        timings: {
+          ...(draftResult.meta?.timings || {}),
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+        servicesCount: Array.isArray(services) ? services.length : null,
+      },
+    })
+  }
+
+  if (isGenericOperationUndoRequest(message)) {
+    const latestOperation = pickLatestCompletedOperation([
+      {
+        kind: 'full-renewal',
+        context: getRecentCompletedFullRenewalContext({actorToken: req.auth.token}),
+      },
+      {
+        kind: 'supplier-renewal',
+        context: getRecentCompletedSupplierRenewalContext({actorToken: req.auth.token}),
+      },
+      {
+        kind: 'customer-renewal',
+        context: getRecentCompletedRenewalContext({actorToken: req.auth.token}),
+      },
+      {
+        kind: 'service-action',
+        context: getRecentCompletedRenewalsActionContext({actorToken: req.auth.token}),
+      },
+      {
+        kind: 'entity-mutation',
+        context: getRecentCompletedEntityMutationContext({actorToken: req.auth.token}),
+      },
+    ])
+
+    if (!latestOperation) {
+      return res.json({
+        ok: true,
+        intent: 'action-error',
+        source: 'tool-fast',
+        reply: 'Non ho un’operazione recente da annullare.',
+        data: {
+          type: 'action-error',
+          error: {code: 'recent-operation-undo-missing'},
+        },
+        meta: {
+          timings: {
+            dataLoadMs: 0,
+            totalMs: Date.now() - startedAt,
+          },
+        },
+      })
+    }
+
+    if (latestOperation.kind === 'entity-mutation') {
+      const undoResult = await buildRecentEntityMutationUndoProposal({
+        actorToken: req.auth.token,
+        previewFn: previewRenewalsCatalogMutation,
+      })
+
+      return res.json({
+        ...undoResult,
+        meta: {
+          ...(undoResult.meta || {}),
+          undoSource: 'latest-completed-operation',
+          latestOperationKind: latestOperation.kind,
+          timings: {
+            ...(undoResult.meta?.timings || {}),
+            dataLoadMs: 0,
+            totalMs: Date.now() - startedAt,
+          },
+        },
+      })
+    }
+
+    if (latestOperation.kind === 'service-action') {
+      const dataLoadStartedAt = Date.now()
+      const services = await getAllServices()
+      const dataLoadMs = Date.now() - dataLoadStartedAt
+      const undoResult = buildRecentRenewalsActionUndoPreview({
+        services,
+        actorToken: req.auth.token,
+      })
+
+      return res.json({
+        ...undoResult,
+        meta: {
+          ...(undoResult.meta || {}),
+          undoSource: 'latest-completed-operation',
+          latestOperationKind: latestOperation.kind,
+          timings: {
+            ...(undoResult.meta?.timings || {}),
+            dataLoadMs,
+            totalMs: Date.now() - startedAt,
+          },
+          servicesCount: Array.isArray(services) ? services.length : null,
+        },
+      })
+    }
+
+    const undoResult =
+      latestOperation.kind === 'full-renewal'
+        ? buildRecentCompletedFullRenewalUndoReply({actorToken: req.auth.token})
+        : latestOperation.kind === 'supplier-renewal'
+          ? buildRecentCompletedSupplierRenewalUndoReply({actorToken: req.auth.token})
+          : buildRecentCompletedRenewalUndoReply({actorToken: req.auth.token})
+
+    return res.json({
+      ...undoResult,
+      meta: {
+        ...(undoResult.meta || {}),
+        undoSource: 'latest-completed-operation',
+        latestOperationKind: latestOperation.kind,
+        timings: {
+          ...(undoResult.meta?.timings || {}),
           dataLoadMs: 0,
           totalMs: Date.now() - startedAt,
         },
@@ -646,6 +961,25 @@ export async function chat(req, res) {
         ...(result.meta || {}),
         timings: {
           ...(result.meta?.timings || {}),
+          dataLoadMs: 0,
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
+  }
+
+  if (isRecentEntityMutationUndoRequest(message)) {
+    const undoResult = await buildRecentEntityMutationUndoProposal({
+      actorToken: req.auth.token,
+      previewFn: previewRenewalsCatalogMutation,
+    })
+
+    return res.json({
+      ...undoResult,
+      meta: {
+        ...(undoResult.meta || {}),
+        timings: {
+          ...(undoResult.meta?.timings || {}),
           dataLoadMs: 0,
           totalMs: Date.now() - startedAt,
         },
@@ -1332,6 +1666,44 @@ export async function chat(req, res) {
         ...(result.meta || {}),
         timings: {
           ...(result.meta?.timings || {}),
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+        servicesCount: Array.isArray(services) ? services.length : null,
+      },
+    })
+  }
+
+  const entityMutationPlan = await planEntityMutationRequest({
+    message,
+    history: Array.isArray(history) ? history : [],
+  })
+
+  if (entityMutationPlan) {
+    const dataLoadStartedAt = Date.now()
+    const [services, serviceOptions] = await Promise.all([
+      getAllServices(),
+      getServiceOptions(),
+    ])
+    const dataLoadMs = Date.now() - dataLoadStartedAt
+
+    const mutationResult = await buildEntityMutationProposal({
+      plan: entityMutationPlan,
+      services,
+      options: serviceOptions,
+      actorToken: req.auth.token,
+      queryCatalog: queryRenewalsCatalog,
+      previewFn: previewRenewalsCatalogMutation,
+    })
+
+    return res.json({
+      ...mutationResult,
+      meta: {
+        ...(mutationResult.meta || {}),
+        entity: entityMutationPlan.entity,
+        operation: 'update',
+        timings: {
+          ...(mutationResult.meta?.timings || {}),
           dataLoadMs,
           totalMs: Date.now() - startedAt,
         },

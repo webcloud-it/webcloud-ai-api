@@ -403,6 +403,20 @@ export function getRecentRenewalsActionTarget({actorToken = ''} = {}) {
     : null
 }
 
+export function getRecentCompletedRenewalsActionContext({actorToken = ''} = {}) {
+  const completed = getRecentActionContext(actorToken)?.lastCompleted || null
+
+  if (!completed) return null
+
+  return {
+    actionId: completed.actionId || null,
+    operation: completed.operation || null,
+    target: completed.target ? {...completed.target} : null,
+    completedAt: Number(completed.completedAt || 0),
+    undoneAt: completed.undoneAt || null,
+  }
+}
+
 function rememberRecentActionTarget(actorToken = '', target = null) {
   if (!target?.id) return
 

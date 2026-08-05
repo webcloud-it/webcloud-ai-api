@@ -9,15 +9,15 @@ import {
   pickExplicitChatIntent,
 } from './intents.js'
 import {matchesText} from '../../../utils/text.js'
-import {buildCommunicationsContext, buildCommunicationsIndex} from './communications.js'
+import {
+  buildCommunicationsContext,
+  buildCommunicationsIndex,
+  buildCommunicationsReply,
+} from './communications.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {buildServiceDetailPayload} from './serviceDetails.js'
-import {
-  assessServiceListQuery,
-  buildServiceListPayload,
-  parseServiceListQuery,
-} from './serviceQueries.js'
+import {buildServiceListPayload} from './serviceQueries.js'
 import {planServiceListRequest} from './serviceQueryPlanner.js'
 import {
   buildServiceListPagination,
@@ -33,10 +33,6 @@ import {
   pickPreviousServiceListState,
 } from './serviceListState.js'
 import {buildDetailedFastToolReply, buildFastToolReply} from './utils/replyFormatters.js'
-import {
-  resolveRenewalsReadIntent,
-  shouldResolveRenewalsIntentSemantically,
-} from './intentResolver.js'
 
 export async function handleRenewalsChat({
   message,
@@ -93,7 +89,7 @@ export async function handleRenewalsChat({
     previousServiceListState && serviceListPaginationRequest
       ? buildServiceListPagination(previousServiceListState, serviceListPaginationRequest)
       : null
-  let serviceListPlan =
+  const serviceListPlan =
     serviceListPaginationRequest || serviceListReferenceRequest
       ? null
       : planServiceListRequest({
@@ -101,7 +97,7 @@ export async function handleRenewalsChat({
           previousState: previousServiceListState,
           settings,
         })
-  let explicitIntent = serviceListReferenceRequest
+  const explicitIntent = serviceListReferenceRequest
     ? serviceListReference?.status === 'resolved'
       ? 'service-detail'
       : 'clarification'
@@ -111,105 +107,6 @@ export async function handleRenewalsChat({
         ? 'clarification'
         : pickExplicitChatIntent(message, {customerId, groupId})
 
-  const plannerIntent = plan.type === 'tool' ? plan.intent : null
-  const deterministicServiceListMessage = serviceListPlan?.sourceMessage || String(message).trim()
-  let activeServiceListQuery = null
-  let activeServiceListAssessment = null
-  let semanticIntentResolution = null
-
-  if (
-    explicitIntent === 'service-list' &&
-    !serviceListReferenceRequest &&
-    !serviceListPaginationRequest
-  ) {
-    activeServiceListQuery = serviceListPlan?.previousQuery?.filters?.length
-      ? serviceListPlan.previousQuery
-      : parseServiceListQuery({
-          message: deterministicServiceListMessage,
-          settings,
-        })
-
-    activeServiceListAssessment = assessServiceListQuery({
-      message: deterministicServiceListMessage,
-      query: activeServiceListQuery,
-    })
-  }
-
-  if (
-    !serviceListReferenceRequest &&
-    !serviceListPaginationRequest &&
-    shouldResolveRenewalsIntentSemantically({
-      message,
-      explicitIntent,
-      serviceListPlan,
-      serviceListQueryAssessment: activeServiceListAssessment,
-      plan,
-    })
-  ) {
-    semanticIntentResolution = await resolveRenewalsReadIntent({
-      message,
-      history,
-      scope: {
-        customerId,
-        groupId,
-        serviceId,
-      },
-      deterministic: {
-        explicitIntent,
-        plannerIntent,
-        serviceListPlanIntent: serviceListPlan?.intent || null,
-        serviceListQuery: activeServiceListQuery
-          ? {
-              label: activeServiceListQuery.label || null,
-              filters: (activeServiceListQuery.filters || []).map(filter => ({
-                kind: filter.kind || null,
-                term: filter.term || null,
-                dateRange: filter.dateRange?.label || null,
-              })),
-            }
-          : null,
-        serviceListQueryWarnings: activeServiceListAssessment?.warnings || [],
-      },
-    })
-
-    if (semanticIntentResolution?.intent === 'service-list') {
-      const canonicalMessage = semanticIntentResolution.canonicalMessage || message
-      const semanticServiceListQuery = parseServiceListQuery({
-        message: canonicalMessage,
-        settings,
-      })
-      const semanticServiceListAssessment = assessServiceListQuery({
-        message: canonicalMessage,
-        query: semanticServiceListQuery,
-      })
-      const semanticServiceListPlan = planServiceListRequest({
-        message: canonicalMessage,
-        previousState: previousServiceListState,
-        settings,
-      })
-
-      if (
-        semanticServiceListPlan?.intent === 'service-list' &&
-        semanticServiceListAssessment.valid
-      ) {
-        serviceListPlan = semanticServiceListPlan
-        explicitIntent = 'service-list'
-        activeServiceListQuery = semanticServiceListPlan.previousQuery?.filters?.length
-          ? semanticServiceListPlan.previousQuery
-          : semanticServiceListQuery
-        activeServiceListAssessment = semanticServiceListAssessment
-      }
-    } else if (
-      semanticIntentResolution?.intent &&
-      semanticIntentResolution.intent !== 'unknown'
-    ) {
-      explicitIntent = semanticIntentResolution.intent
-      activeServiceListQuery = null
-      activeServiceListAssessment = null
-    }
-  }
-
-  const semanticMessage = semanticIntentResolution?.canonicalMessage || String(message).trim()
   const parsedIntent = explicitIntent || pickChatIntent(message, {customerId, groupId})
   const isDetailRequest = isDetailsFollowUp(message)
   const isStandaloneDetailRequest = isDetailRequest && !explicitIntent
@@ -218,6 +115,7 @@ export async function handleRenewalsChat({
     ? pickPreviousIntentFromHistory(history, {customerId, groupId})
     : null
 
+  const plannerIntent = plan.type === 'tool' ? plan.intent : null
   const intent = explicitIntent || previousIntent || plannerIntent || parsedIntent
 
   const baseMeta = {
@@ -228,24 +126,10 @@ export async function handleRenewalsChat({
     plannerIntent,
     previousIntent,
     planType: plan.type,
-    semanticIntent: semanticIntentResolution
-      ? {
-          intent: semanticIntentResolution.intent,
-          confidence: semanticIntentResolution.confidence,
-          targetMode: semanticIntentResolution.targetMode,
-          reason: semanticIntentResolution.reason,
-        }
-      : null,
     serviceListPlan: serviceListPlan
       ? {
           mode: serviceListPlan.mode,
           confidence: serviceListPlan.confidence,
-        }
-      : null,
-    serviceListQueryAssessment: activeServiceListAssessment
-      ? {
-          valid: activeServiceListAssessment.valid,
-          warnings: activeServiceListAssessment.warnings,
         }
       : null,
     serviceListReference: serviceListReferenceRequest
@@ -259,29 +143,6 @@ export async function handleRenewalsChat({
     timings: {
       dataLoadMs: debug.dataLoadMs ?? null,
     },
-  }
-
-  if (explicitIntent === 'service-list' && activeServiceListAssessment?.valid === false) {
-    return {
-      ok: true,
-      intent: 'clarification',
-      source: 'tool-fast',
-      reply: [
-        'Ho capito che vuoi una lista di servizi, ma il filtro non è stato interpretato in modo sicuro.',
-        'Riformula indicando la scadenza, il periodo, il cliente/gruppo oppure il piano da usare.',
-      ].join(' '),
-      data: {
-        type: 'clarification',
-        reason: 'unsafe-service-list-query',
-        warnings: activeServiceListAssessment.warnings,
-      },
-      meta: {
-        ...baseMeta,
-        intent: 'clarification',
-        source: 'tool-fast',
-        guard: 'unsafe-service-list-query',
-      },
-    }
   }
 
   if (serviceListPlan?.intent === 'clarification') {
@@ -452,7 +313,7 @@ export async function handleRenewalsChat({
     payload = buildServiceDetailPayload({
       services,
       settings,
-      message: referencedItem?.servizio || referencedItem?.dominio || semanticMessage,
+      message: referencedItem?.servizio || referencedItem?.dominio || String(message).trim(),
       customerId: referencedItem?.customerId || customerId,
       groupId: referencedItem?.groupId || groupId,
       serviceId:
@@ -491,7 +352,7 @@ export async function handleRenewalsChat({
       serviceId,
     })
   } else if (intent === 'search') {
-    const q = extractSearchQuery(semanticMessage)
+    const q = extractSearchQuery(message)
 
     if (!q) {
       const error = new Error('Impossibile estrarre una chiave di ricerca valida')
@@ -749,9 +610,11 @@ export async function handleRenewalsChat({
       intent,
       source: 'tool-fast',
       reply:
-        isStandaloneDetailRequest && previousIntent
-          ? buildDetailedFastToolReply(intent, payload)
-          : buildFastToolReply(intent, payload, {message}),
+        intent === 'communications'
+          ? buildCommunicationsReply(payload, {message})
+          : isStandaloneDetailRequest && previousIntent
+            ? buildDetailedFastToolReply(intent, payload)
+            : buildFastToolReply(intent, payload, {message}),
       data: payload,
       meta: {
         ...baseMeta,
@@ -858,6 +721,7 @@ function shouldUseFastToolReply(plan, intent) {
     'to-transfer',
     'anomalies',
     'service-detail',
+    'communications',
   ].includes(intent)
 }
 

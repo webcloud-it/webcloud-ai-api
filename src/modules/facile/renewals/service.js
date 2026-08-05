@@ -85,6 +85,29 @@ async function fetchRenewalsCatalog(plan = {}) {
   )
 }
 
+async function fetchRenewalsCatalogMutation(path, payload = {}) {
+  return fetchJson(
+    joinUrl(env.renewalsApiBaseUrl, path),
+    {
+      method: 'POST',
+      headers: {
+        ...authHeaders(env.crmToken),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    },
+    'Errore modifica catalogo rinnovi'
+  )
+}
+
+function invalidateCatalogRelatedCaches() {
+  servicesCache.value = null
+  servicesCache.expiresAt = 0
+  serviceOptionsCache.value = null
+  serviceOptionsCache.expiresAt = 0
+}
+
 async function fetchServiceOptions() {
   const json = await fetchJson(
     joinUrl(env.renewalsApiBaseUrl, '/services/options'),
@@ -231,6 +254,16 @@ export async function getSettings({force = false} = {}) {
 
 export async function queryRenewalsCatalog(plan = {}) {
   return fetchRenewalsCatalog(plan)
+}
+
+export async function previewRenewalsCatalogMutation(payload = {}) {
+  return fetchRenewalsCatalogMutation('/catalog/actions/preview', payload)
+}
+
+export async function commitRenewalsCatalogMutation(payload = {}) {
+  const result = await fetchRenewalsCatalogMutation('/catalog/actions/commit', payload)
+  invalidateCatalogRelatedCaches()
+  return result
 }
 
 export async function getServiceOptions({force = false} = {}) {
