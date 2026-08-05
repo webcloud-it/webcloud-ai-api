@@ -1,4 +1,10 @@
-import {getAllServices, getSettings, getPanelCounts, getServiceOptions} from './service.js'
+import {
+  getAllServices,
+  getSettings,
+  getPanelCounts,
+  getServiceOptions,
+  queryRenewalsCatalog,
+} from './service.js'
 import {
   handlePendingRenewalsDiagnosticClarification,
   handlePleskAuditRequest,
@@ -20,6 +26,25 @@ import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 import {planReadQuery} from './readQueryPlanner.js'
 import {executeReadQuery} from './readQueryExecutor.js'
 import {buildReadQueryReply} from './readQueryFormatters.js'
+import {
+  clearRememberedReadQueryContext,
+  rememberReadQueryContext,
+} from './readQueryContext.js'
+import {
+  buildReadQueryTargetClarification,
+  resolveReadQueryDetailTarget,
+  shouldResolveReadQueryDetailTarget,
+} from './readQueryTargetResolver.js'
+import {
+  clearPendingReadQueryTargetClarification,
+  rememberReadQueryTargetClarification,
+  resolvePendingReadQueryTargetClarification,
+} from './readQueryClarifications.js'
+import {canExecuteReadQueryFromCatalog} from './readEntityRegistry.js'
+import {
+  interpretReadQueryUtterance,
+  parseReadQueryUtterance,
+} from './readQueryUtterance.js'
 import {
   buildCopySupplierExpiryToCustomerActionPreview,
   buildRecentRenewalsActionUndoPreview,
@@ -1315,14 +1340,156 @@ export async function chat(req, res) {
     })
   }
 
-  const readQueryPlan = await planReadQuery({
+  let resolvedDetailTarget = null
+  let resolvedServiceDetailMessage = null
+  let skipReadQueryForServiceTarget = false
+  let targetResolutionMs = 0
+
+  const deterministicReadUtterance = parseReadQueryUtterance(message)
+  const pendingReadTargetSelection = resolvePendingReadQueryTargetClarification({
+    actorToken: req.auth.token,
     message,
-    history: Array.isArray(history) ? history : [],
+    readUtterance: deterministicReadUtterance,
   })
+
+  if (pendingReadTargetSelection.status === 'resolved') {
+    const pendingResolution = pendingReadTargetSelection.resolution
+
+    if (pendingResolution.entityId === 'services') {
+      clearRememberedReadQueryContext({actorToken: req.auth.token})
+      skipReadQueryForServiceTarget = true
+      resolvedServiceDetailMessage = `dettagli di ${pendingResolution.name || pendingResolution.target}`
+    } else {
+      resolvedDetailTarget = pendingResolution
+    }
+  } else if (pendingReadTargetSelection.status === 'invalid') {
+    const pending = pendingReadTargetSelection.pending
+
+    return res.json({
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply: buildReadQueryTargetClarification({
+        status: 'ambiguous',
+        target: pending?.target || null,
+        candidates: pending?.candidates || [],
+      }),
+      data: {
+        type: 'clarification',
+        reason: 'read-query-target-selection-invalid',
+        target: pending?.target || null,
+        candidates: pending?.candidates || [],
+      },
+      meta: {
+        moduleId: 'facile.renewals',
+        intent: 'clarification',
+        targetResolution: 'pending-invalid',
+        timings: {
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
+  }
+
+  const readUtterance =
+    deterministicReadUtterance ||
+    (await interpretReadQueryUtterance({
+      message,
+      history: Array.isArray(history) ? history : [],
+    }))
+
+  if (
+    !resolvedDetailTarget &&
+    shouldResolveReadQueryDetailTarget(message, readUtterance)
+  ) {
+    const targetResolutionStartedAt = Date.now()
+    const [resolutionServices, resolutionOptions] = await Promise.all([
+      getAllServices(),
+      getServiceOptions(),
+    ])
+    const resolution = await resolveReadQueryDetailTarget({
+      message,
+      services: resolutionServices,
+      options: resolutionOptions,
+      queryCatalog: queryRenewalsCatalog,
+      readUtterance,
+    })
+    targetResolutionMs = Date.now() - targetResolutionStartedAt
+
+    if (resolution.status === 'ambiguous' || resolution.status === 'not-found') {
+      if (resolution.status === 'ambiguous') {
+        rememberReadQueryTargetClarification({
+          actorToken: req.auth.token,
+          resolution,
+        })
+      } else {
+        clearPendingReadQueryTargetClarification({actorToken: req.auth.token})
+      }
+
+      return res.json({
+        ok: true,
+        intent: 'clarification',
+        source: 'tool-fast',
+        reply: buildReadQueryTargetClarification(resolution),
+        data: {
+          type: 'clarification',
+          reason: `read-query-target-${resolution.status}`,
+          target: resolution.target || null,
+          candidates: resolution.candidates || [],
+        },
+        meta: {
+          moduleId: 'facile.renewals',
+          intent: 'clarification',
+          targetResolution: resolution.status,
+          timings: {
+            targetResolutionMs,
+            totalMs: Date.now() - startedAt,
+          },
+          servicesCount: Array.isArray(resolutionServices)
+            ? resolutionServices.length
+            : null,
+        },
+      })
+    }
+
+    if (resolution.status === 'resolved') {
+      clearPendingReadQueryTargetClarification({actorToken: req.auth.token})
+
+      if (resolution.entityId === 'services') {
+        clearRememberedReadQueryContext({actorToken: req.auth.token})
+        skipReadQueryForServiceTarget = true
+        resolvedServiceDetailMessage = `dettagli di ${resolution.name || resolution.target}`
+      } else {
+        resolvedDetailTarget = resolution
+      }
+    }
+  }
+
+  const readQueryPlan = skipReadQueryForServiceTarget
+    ? null
+    : await planReadQuery({
+        message,
+        history: Array.isArray(history) ? history : [],
+        actorToken: req.auth.token,
+        resolvedDetailTarget,
+        readUtterance,
+      })
 
   if (readQueryPlan) {
     const dataLoadStartedAt = Date.now()
-    const [services, serviceOptions] = await Promise.all([
+    const useCatalog = canExecuteReadQueryFromCatalog(readQueryPlan)
+    let catalogError = null
+
+    const catalogPromise = useCatalog
+      ? queryRenewalsCatalog(readQueryPlan).catch(error => {
+          catalogError = error
+          console.warn('[renewals-catalog] fallback to operational data:', error.message)
+          return null
+        })
+      : Promise.resolve(null)
+
+    const [catalogResult, services, serviceOptions] = await Promise.all([
+      catalogPromise,
       getAllServices(),
       getServiceOptions(),
     ])
@@ -1331,6 +1498,13 @@ export async function chat(req, res) {
       plan: readQueryPlan,
       services,
       options: serviceOptions,
+      catalogResult,
+    })
+
+    rememberReadQueryContext({
+      actorToken: req.auth.token,
+      plan: readQueryPlan,
+      result: readResult,
     })
 
     return res.json({
@@ -1345,7 +1519,13 @@ export async function chat(req, res) {
         entity: readQueryPlan.entity,
         operation: readQueryPlan.operation,
         plannerSource: readQueryPlan.source,
+        readUtteranceSource: readUtterance?.source || null,
+        dataSource: readResult.dataSource || null,
+        catalogRequested: useCatalog,
+        catalogFallback: Boolean(useCatalog && !catalogResult),
+        catalogError: catalogError?.message || null,
         timings: {
+          targetResolutionMs,
           dataLoadMs,
           totalMs: Date.now() - startedAt,
         },
@@ -1354,8 +1534,10 @@ export async function chat(req, res) {
     })
   }
 
+  const downstreamMessage = resolvedServiceDetailMessage || message
+
   const directPlan = planChatRequest({
-    message,
+    message: downstreamMessage,
     context: {
       ...context,
       customerId: resolvedCustomerId,
@@ -1398,7 +1580,7 @@ export async function chat(req, res) {
   const dataLoadMs = Date.now() - dataLoadStartedAt
 
   const result = await handleRenewalsChat({
-    message,
+    message: downstreamMessage,
     customerId: resolvedCustomerId,
     groupId: resolvedGroupId,
     serviceId: resolvedServiceId,

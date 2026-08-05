@@ -9,6 +9,8 @@ import {
   getReadEntityDefinitions,
   getReadEntityRegistry,
 } from './readEntityRegistry.js'
+import {buildReadQueryDetailReference} from './readQueryReferences.js'
+import {getRememberedReadQueryContext} from './readQueryContext.js'
 
 function normalizeText(value = '') {
   return String(value ?? '')
@@ -36,29 +38,183 @@ function getHistoryData(item = {}) {
   return item?.data || item?.payload || item?.response?.data || item?.result?.data || null
 }
 
-export function getPreviousReadQueryState(history = []) {
-  const items = Array.isArray(history) ? history : []
+function toFiniteNumber(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
 
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index]
-    if (item?.role !== 'assistant') continue
-    const data = getHistoryData(item)
-    if (data?.type !== 'read-query-result' || !data?.plan?.entity) continue
+function buildReadQueryStateFromData(data = {}) {
+  const plan = data?.plan || null
+  if (data?.type !== 'read-query-result' || !plan?.entity) return null
 
+  const offset = toFiniteNumber(data.offset, toFiniteNumber(plan.offset, 0))
+  const shown = toFiniteNumber(
+    data.shown,
+    Array.isArray(data.items) ? data.items.length : 0
+  )
+  const limit = toFiniteNumber(data.limit, toFiniteNumber(plan.limit, DEFAULT_READ_QUERY_LIMIT))
+
+  return {
+    plan,
+    entity: data.entity || plan.entity,
+    total: toFiniteNumber(data.total, 0),
+    shown,
+    offset,
+    limit,
+    hasMore: data.hasMore === true,
+    nextOffset: toFiniteNumber(data.nextOffset, offset + shown),
+    previousOffset: toFiniteNumber(data.previousOffset, Math.max(offset - limit, 0)),
+    items: Array.isArray(data.items) ? data.items : [],
+    dataSource: data.dataSource || null,
+  }
+}
+
+function buildReadQueryStateFromPlan(plan = null, previousState = null) {
+  if (!plan?.entity || plan.entity === 'services') return null
+
+  const sameEntity = previousState?.entity === plan.entity
+  const offset = toFiniteNumber(plan.offset, 0)
+  const limit = toFiniteNumber(plan.limit, DEFAULT_READ_QUERY_LIMIT)
+
+  return {
+    plan,
+    entity: plan.entity,
+    total: sameEntity ? toFiniteNumber(previousState.total, 0) : 0,
+    shown: 0,
+    offset,
+    limit,
+    hasMore: sameEntity ? previousState.hasMore === true : false,
+    nextOffset: offset + limit,
+    previousOffset: Math.max(offset - limit, 0),
+    items: sameEntity && Array.isArray(previousState.items) ? previousState.items : [],
+    dataSource: sameEntity ? previousState.dataSource || null : null,
+  }
+}
+
+function buildTextHistoryItem(name = '', entityId = '') {
+  const normalizedName = String(name || '').trim()
+  if (!normalizedName) return null
+
+  if (entityId === 'plan-prices') {
     return {
-      plan: data.plan,
-      entity: data.entity,
-      total: Number(data.total || 0),
-      shown: Number(data.shown || 0),
-      offset: Number(data.offset || 0),
-      limit: Number(data.limit || data.plan.limit || DEFAULT_READ_QUERY_LIMIT),
-      hasMore: data.hasMore === true,
-      nextOffset: Number(data.nextOffset ?? data.offset + data.shown),
-      previousOffset: Number(data.previousOffset ?? Math.max(data.offset - data.limit, 0)),
+      name: normalizedName,
+      plan: {name: normalizedName},
     }
   }
 
-  return null
+  return {name: normalizedName}
+}
+
+function parseAssistantReadQueryState(content = '', previousState = null) {
+  if (!previousState?.plan || !content) return previousState
+
+  const text = String(content || '').trim()
+  if (!text) return previousState
+
+  const totalMatch = text.match(/\bHo trovato\s+(\d+)\b/i)
+  const rangeMatch = text.match(/\brisultati\s+(\d+)\s*-\s*(\d+)\b/i)
+  const detailHeadingPattern = /^Dettagli\s+(?:per|del|della|dell['’]|dello|dei|degli|delle)\s+/i
+  const isDetail = detailHeadingPattern.test(text)
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+
+  const itemLines = lines.filter(line => /^[-•]\s+/.test(line))
+  if (isDetail && !itemLines.length) {
+    const detailLine = lines.find(
+      line => !detailHeadingPattern.test(line) && line.includes('|')
+    )
+    if (detailLine) itemLines.push(detailLine)
+  }
+
+  const items = itemLines
+    .map(line => line.replace(/^[-•]\s+/, '').split('|')[0].trim())
+    .map(name => buildTextHistoryItem(name, previousState.entity))
+    .filter(Boolean)
+
+  const rangeStart = rangeMatch ? Number(rangeMatch[1]) : null
+  const rangeEnd = rangeMatch ? Number(rangeMatch[2]) : null
+  const offset = Number.isFinite(rangeStart)
+    ? Math.max(rangeStart - 1, 0)
+    : isDetail
+      ? 0
+      : previousState.offset
+  const shown = Number.isFinite(rangeStart) && Number.isFinite(rangeEnd)
+    ? Math.max(rangeEnd - rangeStart + 1, 0)
+    : items.length || (isDetail ? 1 : previousState.shown)
+  const total = totalMatch
+    ? Number(totalMatch[1])
+    : isDetail
+      ? 1
+      : previousState.total
+  const dataSource = /nel catalogo completo/i.test(text)
+    ? 'catalog'
+    : /nei dati operativi dei servizi/i.test(text)
+      ? 'operational-services'
+      : previousState.dataSource
+
+  return {
+    ...previousState,
+    total,
+    shown,
+    offset,
+    hasMore: /Puoi chiedermi\s+["“”']altri/i.test(text),
+    nextOffset: offset + shown,
+    previousOffset: Math.max(offset - previousState.limit, 0),
+    items: items.length ? items : previousState.items,
+    dataSource,
+  }
+}
+
+export function getPreviousReadQueryState(history = [], {fallbackState = null} = {}) {
+  const items = Array.isArray(history) ? history : []
+  let state = null
+  let hasExplicitTopicAnchor = false
+
+  for (const item of items) {
+    const role = item?.role
+    const content = getHistoryContent(item)
+
+    if (role === 'user') {
+      if (!content) continue
+
+      const explicitEntity = detectPrimaryEntity(content)
+
+      if (explicitEntity?.id === 'services') {
+        state = null
+        hasExplicitTopicAnchor = true
+        continue
+      }
+
+      const plan = buildDeterministicPlan(content, state)
+
+      if (plan?.entity && plan.entity !== 'services') {
+        state = buildReadQueryStateFromPlan(plan, state)
+        hasExplicitTopicAnchor = true
+      }
+
+      continue
+    }
+
+    if (role !== 'assistant') continue
+
+    const dataState = buildReadQueryStateFromData(getHistoryData(item))
+    if (dataState) {
+      state = dataState
+      hasExplicitTopicAnchor = true
+      continue
+    }
+
+    if (state && content) {
+      state = parseAssistantReadQueryState(content, state)
+    }
+  }
+
+  if (state) return state
+  if (hasExplicitTopicAnchor) return null
+
+  return fallbackState || null
 }
 
 function parsePagination(message = '', previousState = null) {
@@ -108,6 +264,10 @@ function detectPrimaryEntity(text = '') {
     ['macro-service-types', /\bmacro\s+(?:tipi|tipo|categorie|categoria)\s+di\s+servizio\b/i],
     ['service-types', /\b(?:tipi|tipo|categorie|categoria)\s+di\s+servizio\b/i],
     ['resources', /\b(?:tipi|tipo)\s+di\s+risors[ae]\b|\brisors[ae]\b/i],
+    [
+      'plan-prices',
+      /\b(?:prezz[oi]|cost[oi]|tariff[ae])\b.{0,80}\b(?:pian[oi]|add[- ]?on|listino)\b|\b(?:pian[oi]|add[- ]?on)\b.{0,80}\b(?:prezz[oi]|cost[oi]|tariff[ae])\b|\bquanto\s+costa\b/i,
+    ],
     ['addons', /\b(?:add[- ]?on|componenti aggiuntivi)\b/i],
     ['plans', /\b(?:piani|piano|plans?|offerte)\b/i],
     ['services', /\b(?:servizi|servizio)\b/i],
@@ -136,7 +296,15 @@ function detectPrimaryEntity(text = '') {
 }
 
 function detectOperation(text = '') {
-  if (/\b(quanti|quante|quanto|numero|totale|conta|conteggio)\b/i.test(text)) return 'count'
+  if (
+    /\bquanto\s+costa\b|\bqual(?:e|i)\s+(?:e|è)\s+(?:il\s+)?prezzo\b|\bprezzo\s+(?:del|della|di)\s+piano\b/i.test(
+      text
+    )
+  ) {
+    return 'detail'
+  }
+
+  if (/\b(quanti|quante|numero|totale|conta|conteggio)\b/i.test(text)) return 'count'
   if (/\b(dettagli|dettaglio|scheda|informazioni|info|descrivi|descrizione)\b/i.test(text)) {
     return 'detail'
   }
@@ -206,6 +374,61 @@ function buildDeterministicFilters(entityId, message = '') {
     if (year) filters.push({field: 'expiryYears', operator: 'contains', value: year})
     if (/\bsenza prezzo\b|\bprezzo mancante\b/i.test(text)) {
       filters.push({field: 'missingPrice', operator: 'truthy', value: null})
+    }
+  }
+
+  if (entityId === 'plan-prices') {
+    const plan = extractNamedAfter(text, [
+      /\b(?:prezz[oi]|costo|tariffa)\s+(?:del|della|di)\s+(?:piano|add[- ]?on)\s+(.+?)(?=\s+(?:nel|del|per|con)\s+listino\b|\s+del\s+fornitore\b|$)/i,
+      /\bquanto\s+costa\s+(?:il|lo|la)?\s*(?:piano|add[- ]?on)\s+(.+?)(?=\s+(?:nel|del|per|con)\s+listino\b|$)/i,
+      /\bquanto\s+costa\s+(.+?)(?=\s+(?:nel|del|per|con)\s+listino\b|$)/i,
+      /\b(?:piano|add[- ]?on)\s+(.+?)(?=\s+(?:nel|del|per|con)\s+listino\b|\s+(?:ha|con)\s+prezzo\b|$)/i,
+    ])
+    if (
+      plan &&
+      !/^(?:piani|piano|add-on|addon|tutti|tutte)$/i.test(plan) &&
+      !/^(?:nel|del|della|per|con)\s+listino\b/i.test(plan)
+    ) {
+      filters.push({field: 'plan.name', operator: 'contains', value: plan})
+    }
+
+    const priceList = extractNamedAfter(text, [
+      /\b(?:nel|del|della|per il|per la|di)\s+listino\s+(.+)$/i,
+      /\blistino\s+(.+)$/i,
+    ])
+    if (priceList && !/^(?:listino|listini|tutti|tutte)$/i.test(priceList)) {
+      if (/^20\d{2}$/.test(priceList)) {
+        filters.push({
+          field: 'priceListVersion.version',
+          operator: 'equals',
+          value: Number(priceList),
+        })
+      } else {
+        filters.push({
+          field: 'priceListVersion.name',
+          operator: 'contains',
+          value: priceList,
+        })
+      }
+    } else if (year && /\blistino\b/i.test(text)) {
+      filters.push({
+        field: 'priceListVersion.version',
+        operator: 'equals',
+        value: year,
+      })
+    }
+
+    const supplier = extractNamedAfter(text, [
+      /\b(?:del|della|di|con)\s+fornitore\s+(.+)$/i,
+    ])
+    if (supplier) {
+      filters.push({field: 'supplier.name', operator: 'contains', value: supplier})
+    }
+
+    if (/\badd[- ]?on\b|\bcomponenti aggiuntivi\b/i.test(text)) {
+      filters.push({field: 'plan.kind', operator: 'equals', value: 'addon'})
+    } else if (/\bpiani base\b|\bpiano base\b/i.test(text)) {
+      filters.push({field: 'plan.kind', operator: 'equals', value: 'base'})
     }
   }
 
@@ -296,14 +519,77 @@ function buildDeterministicFilters(entityId, message = '') {
   return filters
 }
 
-function buildDeterministicPlan(message = '', previousState = null) {
+function buildDeterministicPlan(
+  message = '',
+  previousState = null,
+  resolvedDetailTarget = null,
+  readUtterance = null
+) {
   const text = normalizeText(message)
   if (!text) return null
 
   const pagination = parsePagination(message, previousState)
   if (pagination) return pagination
 
-  const entity = detectPrimaryEntity(text)
+  if (resolvedDetailTarget?.entityId) {
+    if (resolvedDetailTarget.entityId === 'services') return null
+
+    const resolvedEntity = getReadEntityRegistry().get(resolvedDetailTarget.entityId)
+    if (!resolvedEntity || !resolvedDetailTarget.filter) return null
+
+    return {
+      type: 'read-query-plan',
+      operation: 'detail',
+      entity: resolvedEntity.id,
+      filters: [resolvedDetailTarget.filter],
+      sort: resolvedEntity.defaultSort || [{field: 'name', direction: 'asc'}],
+      limit: 10,
+      offset: 0,
+      confidence: 1,
+      source: 'deterministic-target-resolution',
+      sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
+
+  const utteranceEntity = readUtterance?.entityHint
+    ? getReadEntityRegistry().get(readUtterance.entityHint) || null
+    : null
+  const entity = utteranceEntity || detectPrimaryEntity(text)
+  const previousEntity = previousState?.entity
+    ? getReadEntityRegistry().get(previousState.entity) || null
+    : null
+  const detailReference = buildReadQueryDetailReference({
+    message,
+    explicitEntity: entity,
+    readUtterance,
+    previousState: previousState
+      ? {
+          ...previousState,
+          entityDefinition: previousEntity,
+        }
+      : null,
+  })
+
+  if (detailReference) {
+    const detailEntity = getReadEntityRegistry().get(detailReference.entityId)
+    if (!detailEntity) return null
+
+    return {
+      type: 'read-query-plan',
+      operation: 'detail',
+      entity: detailEntity.id,
+      filters: [detailReference.filter],
+      sort: detailEntity.defaultSort || [{field: 'name', direction: 'asc'}],
+      limit: detailReference.limit,
+      offset: 0,
+      confidence: 0.99,
+      source: 'deterministic-reference',
+      sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
+
   if (!entity) return null
 
   // Le liste di servizi restano inizialmente affidate al planner storico già coperto dai test.
@@ -347,9 +633,10 @@ function extractJsonObject(value = '') {
   }
 }
 
-function shouldUseSemanticPlanner(message = '', previousState = null) {
+function shouldUseSemanticPlanner(message = '', previousState = null, readUtterance = null) {
   const text = normalizeText(message)
   if (!text) return false
+  if (readUtterance?.operation === 'detail') return false
 
   if (previousState && /^(?:e|ora|adesso|solo|soltanto|quelli|quelle|questi|queste|tra questi|fra questi)\b/i.test(text)) {
     return true
@@ -418,17 +705,28 @@ export async function planReadQuery({
   history = [],
   callLlm = callOllamaChat,
   allowSemantic = true,
+  actorToken = '',
+  resolvedDetailTarget = null,
+  readUtterance = null,
 } = {}) {
-  const previousState = getPreviousReadQueryState(history)
+  const rememberedState = getRememberedReadQueryContext({actorToken})
+  const previousState = getPreviousReadQueryState(history, {
+    fallbackState: rememberedState,
+  })
   const registry = getReadEntityRegistry()
-  const deterministic = buildDeterministicPlan(message, previousState)
+  const deterministic = buildDeterministicPlan(
+    message,
+    previousState,
+    resolvedDetailTarget,
+    readUtterance
+  )
 
   if (deterministic) {
     const validation = validateReadQueryPlan(deterministic, registry)
     if (validation.ok) return validation.plan
   }
 
-  if (!allowSemantic || !shouldUseSemanticPlanner(message, previousState)) {
+  if (!allowSemantic || !shouldUseSemanticPlanner(message, previousState, readUtterance)) {
     return null
   }
 

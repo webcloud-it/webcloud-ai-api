@@ -177,7 +177,148 @@ function sortRecords(records, sort = [], fields = {}) {
   })
 }
 
-export function executeReadQuery({plan, services = [], options = {}} = {}) {
+
+const OPERATIONAL_ENRICHMENT_FIELDS = [
+  'serviceCount',
+  'subscriptionCount',
+  'planCount',
+  'customerCount',
+  'groupCount',
+  'serviceTypeCount',
+  'planInCount',
+  'planOutCount',
+  'planNames',
+  'customerNames',
+  'groupNames',
+  'providerNames',
+  'supplierNames',
+  'amounts',
+  'planUsages',
+  'expiryYears',
+  'nextExpiry',
+  'present',
+]
+
+function recordIdentity(record = {}, entityId = '') {
+  const id = record?.id === null || record?.id === undefined ? '' : String(record.id)
+  const name = normalizeComparable(record?.name || record?.label || '')
+
+  if (entityId === 'plan-prices') {
+    const plan = String(record?.plan?.id || normalizeComparable(record?.plan?.name || ''))
+    const priceList = String(
+      record?.priceListVersion?.id || normalizeComparable(record?.priceListVersion?.name || '')
+    )
+    const price = record?.price === null || record?.price === undefined ? '' : String(record.price)
+
+    return {
+      id,
+      name,
+      semanticKey: [plan, priceList, price].join('|'),
+    }
+  }
+
+  return {id, name, semanticKey: ''}
+}
+
+function buildOperationalRecordIndex(records = [], entityId = '') {
+  const byId = new Map()
+  const byName = new Map()
+  const bySemanticKey = new Map()
+
+  for (const record of records) {
+    const identity = recordIdentity(record, entityId)
+    if (identity.id && !byId.has(identity.id)) byId.set(identity.id, record)
+    if (identity.name && !byName.has(identity.name)) byName.set(identity.name, record)
+    if (identity.semanticKey && !bySemanticKey.has(identity.semanticKey)) {
+      bySemanticKey.set(identity.semanticKey, record)
+    }
+  }
+
+  return {byId, byName, bySemanticKey}
+}
+
+function isOperationallyUsed(entityId, record = null) {
+  if (!record) return false
+
+  if (entityId === 'providers') {
+    return record.present === true || Number(record.serviceCount || 0) > 0
+  }
+  if (entityId === 'customers' || entityId === 'groups') {
+    return Number(record.serviceCount || 0) > 0
+  }
+  if (entityId === 'plans' || entityId === 'addons' || entityId === 'plan-prices') {
+    return Number(record.subscriptionCount || 0) > 0 || Number(record.serviceCount || 0) > 0
+  }
+  if (entityId === 'resources') {
+    return Number(record.planCount || 0) > 0
+  }
+  if (entityId === 'service-types') {
+    return (
+      Number(record.serviceCount || 0) > 0 ||
+      Number(record.planInCount || 0) > 0 ||
+      Number(record.planOutCount || 0) > 0
+    )
+  }
+  if (entityId === 'macro-service-types') {
+    return (
+      Number(record.serviceCount || 0) > 0 ||
+      Number(record.serviceTypeCount || 0) > 0 ||
+      Number(record.planInCount || 0) > 0 ||
+      Number(record.planOutCount || 0) > 0
+    )
+  }
+  if (entityId === 'price-lists') {
+    return Number(record.customerCount || 0) > 0 || Number(record.groupCount || 0) > 0
+  }
+
+  return true
+}
+
+function enrichCatalogItems(entityId, catalogItems = [], operationalRecords = []) {
+  const index = buildOperationalRecordIndex(operationalRecords, entityId)
+
+  return catalogItems.map(item => {
+    const identity = recordIdentity(item, entityId)
+    const operational =
+      (identity.id ? index.byId.get(identity.id) : null) ||
+      (identity.semanticKey ? index.bySemanticKey.get(identity.semanticKey) : null) ||
+      (identity.name ? index.byName.get(identity.name) : null) ||
+      null
+    const enrichment = {}
+
+    for (const field of OPERATIONAL_ENRICHMENT_FIELDS) {
+      if (item?.[field] === undefined && operational?.[field] !== undefined) {
+        enrichment[field] = operational[field]
+      }
+    }
+
+    const used = isOperationallyUsed(entityId, operational)
+
+    return {
+      ...item,
+      ...enrichment,
+      usage: {
+        status: used ? 'used' : 'unused',
+        source: 'operational-services',
+        serviceCount: Number(operational?.serviceCount || 0),
+        subscriptionCount: Number(operational?.subscriptionCount || 0),
+        ...(entityId === 'plan-prices'
+          ? {
+              planId: item?.plan?.id || null,
+              priceListVersionId: item?.priceListVersion?.id || null,
+            }
+          : {}),
+      },
+    }
+  })
+}
+
+export function executeReadQuery({
+  plan,
+  services = [],
+  options = {},
+  catalogResult = null,
+} = {}) {
   const registry = getReadEntityRegistry()
   const validation = validateReadQueryPlan(plan, registry)
 
@@ -192,6 +333,35 @@ export function executeReadQuery({plan, services = [], options = {}} = {}) {
   const normalizedPlan = validation.plan
   const entity = validation.entity
   const records = buildReadEntityRecords(entity.id, {services, options})
+
+  if (
+    catalogResult?.ok === true &&
+    catalogResult?.source === 'catalog' &&
+    String(catalogResult?.entity || '') === entity.id
+  ) {
+    const items = enrichCatalogItems(entity.id, catalogResult.items || [], records)
+
+    return {
+      ok: true,
+      type: 'read-query-result',
+      entity: entity.id,
+      entityLabel: entity.label,
+      entitySingular: entity.singular || entity.label,
+      operation: normalizedPlan.operation,
+      plan: normalizedPlan,
+      dataSource: 'catalog',
+      sourceScope: catalogResult.sourceScope || 'complete-master-data',
+      catalogVersion: catalogResult.catalogVersion || null,
+      total: Number(catalogResult.total || 0),
+      shown: normalizedPlan.operation === 'count' ? 0 : items.length,
+      offset: Number(catalogResult.offset || 0),
+      limit: Number(catalogResult.limit || 0),
+      nextOffset: Number(catalogResult.nextOffset || 0),
+      previousOffset: Number(catalogResult.previousOffset || 0),
+      hasMore: catalogResult.hasMore === true,
+      items: normalizedPlan.operation === 'count' ? [] : items,
+    }
+  }
   const filtered = records.filter(record =>
     normalizedPlan.filters.every(filter =>
       matchesFilter(record, filter, entity.fields?.[filter.field])
@@ -205,8 +375,11 @@ export function executeReadQuery({plan, services = [], options = {}} = {}) {
       type: 'read-query-result',
       entity: entity.id,
       entityLabel: entity.label,
+      entitySingular: entity.singular || entity.label,
       operation: 'count',
       plan: normalizedPlan,
+      dataSource: 'operational-services',
+      sourceScope: 'used-or-referenced-data',
       total: sorted.length,
       shown: 0,
       offset: 0,
@@ -225,8 +398,11 @@ export function executeReadQuery({plan, services = [], options = {}} = {}) {
     type: 'read-query-result',
     entity: entity.id,
     entityLabel: entity.label,
+    entitySingular: entity.singular || entity.label,
     operation: normalizedPlan.operation,
     plan: normalizedPlan,
+    dataSource: 'operational-services',
+    sourceScope: 'used-or-referenced-data',
     total: sorted.length,
     shown: items.length,
     offset,

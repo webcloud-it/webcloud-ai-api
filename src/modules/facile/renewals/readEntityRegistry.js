@@ -91,7 +91,16 @@ function relationName(value) {
   return String(value)
 }
 
-function createBaseDefinition({id, label, singular, aliases, fields, defaultSort, buildRecords}) {
+function createBaseDefinition({
+  id,
+  label,
+  singular,
+  aliases,
+  fields,
+  defaultSort,
+  buildRecords,
+  catalog = null,
+}) {
   return {
     id,
     label,
@@ -100,6 +109,7 @@ function createBaseDefinition({id, label, singular, aliases, fields, defaultSort
     fields,
     defaultSort,
     buildRecords,
+    catalog,
   }
 }
 
@@ -373,6 +383,8 @@ function buildPlans({services = []} = {}, {addonsOnly = false} = {}) {
     id: item.id,
     name: item.name,
     description: item.description,
+    type: item.sourceKinds.has('addon') ? '2' : '1',
+    kind: item.sourceKinds.has('addon') ? 'addon' : 'base',
     duration: item.duration,
     supplier: item.supplier,
     sourceKinds: [...item.sourceKinds].sort(),
@@ -668,6 +680,97 @@ function buildPriceLists({services = []} = {}) {
   }))
 }
 
+function buildPlanPrices({services = []} = {}) {
+  const map = new Map()
+
+  for (const service of services) {
+    const priceListVersion =
+      service?.customer?.priceListVersionRef ||
+      service?.customer?.group?.priceListVersionRef ||
+      null
+
+    for (const ref of flattenPlanRefs(service)) {
+      const plan = ref.plan || {}
+      const planId = relationId(plan)
+      const planName = relationName(plan)
+      if (!planId && !planName) continue
+
+      const candidates = [
+        {
+          price: plan?.priceList,
+          priceListVersion,
+          source: 'applied-price-list',
+        },
+        {
+          price: plan?.priceListStandard,
+          priceListVersion: {id: null, name: 'Listino standard', version: null},
+          source: 'standard-price-list',
+        },
+      ]
+
+      for (const candidate of candidates) {
+        if (candidate.price === null || candidate.price === undefined || candidate.price === '') {
+          continue
+        }
+
+        const numericPrice = Number(candidate.price)
+        if (!Number.isFinite(numericPrice)) continue
+
+        const versionId = relationId(candidate.priceListVersion)
+        const versionName = relationName(candidate.priceListVersion)
+        const key = stableKey(
+          planId || planName,
+          versionId || versionName || candidate.source,
+          numericPrice
+        )
+
+        if (!map.has(key)) {
+          map.set(key, {
+            id: key,
+            name: [planName || planId, versionName].filter(Boolean).join(' · '),
+            price: numericPrice,
+            plan: {
+              id: planId,
+              name: planName,
+              kind: ref.kind === 'addon' ? 'addon' : 'base',
+            },
+            supplier: plan?.supplier
+              ? {id: relationId(plan.supplier), name: relationName(plan.supplier)}
+              : null,
+            priceListVersion: candidate.priceListVersion
+              ? {
+                  id: versionId,
+                  name: versionName,
+                  version: candidate.priceListVersion?.version ?? null,
+                }
+              : null,
+            source: candidate.source,
+            serviceIds: new Set(),
+            subscriptionIds: new Set(),
+          })
+        }
+
+        const target = map.get(key)
+        if (service?.id) target.serviceIds.add(String(service.id))
+        if (ref.subscription?.id) target.subscriptionIds.add(String(ref.subscription.id))
+      }
+    }
+  }
+
+  return [...map.values()].map(item => ({
+    id: item.id,
+    name: item.name,
+    price: item.price,
+    plan: item.plan,
+    supplier: item.supplier,
+    priceListVersion: item.priceListVersion,
+    source: item.source,
+    missingPrice: false,
+    serviceCount: item.serviceIds.size,
+    subscriptionCount: item.subscriptionIds.size,
+  }))
+}
+
 function buildServices({services = []} = {}) {
   return services.map(service => ({
     id: service?.id || null,
@@ -740,6 +843,11 @@ const definitions = [
       present: {type: 'boolean'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: ['id', 'name'],
+      sortableFields: ['id', 'name'],
+    },
     buildRecords: buildProviders,
   }),
   createBaseDefinition({
@@ -749,13 +857,32 @@ const definitions = [
     aliases: ['clienti', 'cliente', 'aziende', 'azienda'],
     fields: {
       ...COMMON_NAME_FIELDS,
+      type: {type: 'string'},
+      'group.id': {type: 'string'},
       'group.name': {type: 'string'},
+      'priceListVersion.id': {type: 'string'},
+      'priceListVersion.name': {type: 'string'},
+      'priceListVersion.version': {type: 'number'},
       serviceCount: {type: 'number'},
       planCount: {type: 'number'},
       providerNames: {type: 'string-array'},
       expiryYears: {type: 'number-array'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: [
+        'id',
+        'name',
+        'type',
+        'group.id',
+        'group.name',
+        'priceListVersion.id',
+        'priceListVersion.name',
+        'priceListVersion.version',
+      ],
+      sortableFields: ['id', 'name', 'type', 'group.name'],
+    },
     buildRecords: buildCustomers,
   }),
   createBaseDefinition({
@@ -765,12 +892,26 @@ const definitions = [
     aliases: ['gruppi', 'gruppo', 'gruppi aziendali', 'gruppo aziendale'],
     fields: {
       ...COMMON_NAME_FIELDS,
+      'priceListVersion.id': {type: 'string'},
+      'priceListVersion.name': {type: 'string'},
+      'priceListVersion.version': {type: 'number'},
       customerCount: {type: 'number'},
       serviceCount: {type: 'number'},
       providerNames: {type: 'string-array'},
       expiryYears: {type: 'number-array'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: [
+        'id',
+        'name',
+        'priceListVersion.id',
+        'priceListVersion.name',
+        'priceListVersion.version',
+      ],
+      sortableFields: ['id', 'name'],
+    },
     buildRecords: buildGroups,
   }),
   createBaseDefinition({
@@ -781,7 +922,11 @@ const definitions = [
     fields: {
       ...COMMON_NAME_FIELDS,
       description: {type: 'string'},
+      type: {type: 'string'},
+      kind: {type: 'string'},
       duration: {type: 'number'},
+      activationFee: {type: 'number'},
+      'supplier.id': {type: 'string'},
       'supplier.name': {type: 'string'},
       sourceKinds: {type: 'string-array'},
       isAddon: {type: 'boolean'},
@@ -794,9 +939,38 @@ const definitions = [
       serviceTypeOutNames: {type: 'string-array'},
       expiryYears: {type: 'number-array'},
       prices: {type: 'number-array'},
+      priceListVersionNames: {type: 'string-array'},
       missingPrice: {type: 'boolean'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: [
+        'id',
+        'name',
+        'type',
+        'kind',
+        'description',
+        'duration',
+        'activationFee',
+        'supplier.id',
+        'supplier.name',
+        'resourceNames',
+        'serviceTypeInNames',
+        'serviceTypeOutNames',
+        'prices',
+        'priceListVersionNames',
+      ],
+      sortableFields: [
+        'id',
+        'name',
+        'type',
+        'kind',
+        'duration',
+        'activationFee',
+        'supplier.name',
+      ],
+    },
     buildRecords: context => buildPlans(context),
   }),
   createBaseDefinition({
@@ -807,16 +981,110 @@ const definitions = [
     fields: {
       ...COMMON_NAME_FIELDS,
       description: {type: 'string'},
+      type: {type: 'string'},
+      kind: {type: 'string'},
       duration: {type: 'number'},
+      activationFee: {type: 'number'},
+      'supplier.id': {type: 'string'},
       'supplier.name': {type: 'string'},
       serviceCount: {type: 'number'},
       subscriptionCount: {type: 'number'},
       customerNames: {type: 'string-array'},
+      groupNames: {type: 'string-array'},
       resourceNames: {type: 'string-array'},
+      serviceTypeInNames: {type: 'string-array'},
+      serviceTypeOutNames: {type: 'string-array'},
+      prices: {type: 'number-array'},
+      priceListVersionNames: {type: 'string-array'},
       missingPrice: {type: 'boolean'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: [
+        'id',
+        'name',
+        'type',
+        'kind',
+        'description',
+        'duration',
+        'activationFee',
+        'supplier.id',
+        'supplier.name',
+        'resourceNames',
+        'serviceTypeInNames',
+        'serviceTypeOutNames',
+        'prices',
+        'priceListVersionNames',
+      ],
+      sortableFields: [
+        'id',
+        'name',
+        'type',
+        'kind',
+        'duration',
+        'activationFee',
+        'supplier.name',
+      ],
+    },
     buildRecords: context => buildPlans(context, {addonsOnly: true}),
+  }),
+  createBaseDefinition({
+    id: 'plan-prices',
+    label: 'prezzi dei piani',
+    singular: 'prezzo del piano',
+    aliases: [
+      'prezzi dei piani',
+      'prezzo del piano',
+      'prezzi di listino',
+      'prezzo di listino',
+      'tariffe dei piani',
+    ],
+    fields: {
+      ...COMMON_NAME_FIELDS,
+      price: {type: 'number'},
+      missingPrice: {type: 'boolean'},
+      'plan.id': {type: 'string'},
+      'plan.name': {type: 'string'},
+      'plan.kind': {type: 'string'},
+      'supplier.id': {type: 'string'},
+      'supplier.name': {type: 'string'},
+      'priceListVersion.id': {type: 'string'},
+      'priceListVersion.name': {type: 'string'},
+      'priceListVersion.version': {type: 'number'},
+      serviceCount: {type: 'number'},
+      subscriptionCount: {type: 'number'},
+    },
+    defaultSort: [
+      {field: 'plan.name', direction: 'asc'},
+      {field: 'priceListVersion.version', direction: 'desc'},
+    ],
+    catalog: {
+      enabled: true,
+      fields: [
+        'id',
+        'name',
+        'price',
+        'plan.id',
+        'plan.name',
+        'plan.kind',
+        'supplier.id',
+        'supplier.name',
+        'priceListVersion.id',
+        'priceListVersion.name',
+        'priceListVersion.version',
+      ],
+      sortableFields: [
+        'id',
+        'name',
+        'price',
+        'plan.name',
+        'supplier.name',
+        'priceListVersion.name',
+        'priceListVersion.version',
+      ],
+    },
+    buildRecords: buildPlanPrices,
   }),
   createBaseDefinition({
     id: 'resources',
@@ -825,12 +1093,20 @@ const definitions = [
     aliases: ['risorse', 'risorsa', 'tipi di risorsa', 'tipo di risorsa', 'resource'],
     fields: {
       ...COMMON_NAME_FIELDS,
+      key: {type: 'string'},
+      category: {type: 'string'},
+      unitOfMeasurement: {type: 'string'},
       planCount: {type: 'number'},
       planNames: {type: 'string-array'},
       supplierNames: {type: 'string-array'},
       amounts: {type: 'number-array'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: ['id', 'name', 'key', 'category', 'unitOfMeasurement'],
+      sortableFields: ['id', 'name', 'key', 'category', 'unitOfMeasurement'],
+    },
     buildRecords: buildResources,
   }),
   createBaseDefinition({
@@ -840,12 +1116,18 @@ const definitions = [
     aliases: ['tipi di servizio', 'tipo di servizio', 'categorie di servizio'],
     fields: {
       ...COMMON_NAME_FIELDS,
+      'macro.id': {type: 'string'},
       'macro.name': {type: 'string'},
       serviceCount: {type: 'number'},
       planInCount: {type: 'number'},
       planOutCount: {type: 'number'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: ['id', 'name', 'macro.id', 'macro.name'],
+      sortableFields: ['id', 'name', 'macro.name'],
+    },
     buildRecords: buildServiceTypes,
   }),
   createBaseDefinition({
@@ -861,6 +1143,11 @@ const definitions = [
       planOutCount: {type: 'number'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: ['id', 'name'],
+      sortableFields: ['id', 'name'],
+    },
     buildRecords: buildMacroServiceTypes,
   }),
   createBaseDefinition({
@@ -926,10 +1213,16 @@ const definitions = [
     aliases: ['listini', 'listino', 'versioni listino', 'versione listino'],
     fields: {
       ...COMMON_NAME_FIELDS,
+      version: {type: 'number'},
       customerCount: {type: 'number'},
       groupCount: {type: 'number'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
+    catalog: {
+      enabled: true,
+      fields: ['id', 'name', 'version'],
+      sortableFields: ['id', 'name', 'version'],
+    },
     buildRecords: buildPriceLists,
   }),
 ]
@@ -947,6 +1240,13 @@ export function getReadEntityDefinitions() {
     singular: definition.singular,
     aliases: definition.aliases,
     fields: definition.fields,
+    catalog: definition.catalog
+      ? {
+          enabled: definition.catalog.enabled === true,
+          fields: definition.catalog.fields,
+          sortableFields: definition.catalog.sortableFields,
+        }
+      : null,
   }))
 }
 
@@ -973,3 +1273,21 @@ export function buildReadEntityRecords(entityId, context = {}) {
   if (!definition) return []
   return definition.buildRecords(context)
 }
+
+export function canExecuteReadQueryFromCatalog(plan = {}) {
+  const definition = registry.get(String(plan?.entity || '').trim())
+  const catalog = definition?.catalog
+
+  if (!catalog?.enabled) return false
+
+  const allowedFields = new Set(catalog.fields || [])
+  const sortableFields = new Set(catalog.sortableFields || [])
+  const filters = Array.isArray(plan?.filters) ? plan.filters : []
+  const sort = Array.isArray(plan?.sort) ? plan.sort : []
+
+  return (
+    filters.every(filter => allowedFields.has(String(filter?.field || '').trim())) &&
+    sort.every(entry => sortableFields.has(String(entry?.field || '').trim()))
+  )
+}
+

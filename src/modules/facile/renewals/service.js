@@ -62,6 +62,29 @@ async function fetchSettings() {
   return json?.data?.[0] || DEFAULT_SETTINGS
 }
 
+async function fetchRenewalsCatalog(plan = {}) {
+  return fetchJson(
+    joinUrl(env.renewalsApiBaseUrl, '/catalog/query'),
+    {
+      method: 'POST',
+      headers: {
+        ...authHeaders(env.crmToken),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        operation: plan.operation,
+        entity: plan.entity,
+        filters: Array.isArray(plan.filters) ? plan.filters : [],
+        sort: Array.isArray(plan.sort) ? plan.sort : [],
+        limit: plan.limit,
+        offset: plan.offset,
+      }),
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    },
+    'Errore query catalogo rinnovi'
+  )
+}
+
 async function fetchServiceOptions() {
   const json = await fetchJson(
     joinUrl(env.renewalsApiBaseUrl, '/services/options'),
@@ -204,6 +227,10 @@ export async function getSettings({force = false} = {}) {
 
     return buildFallbackSettings(error)
   }
+}
+
+export async function queryRenewalsCatalog(plan = {}) {
+  return fetchRenewalsCatalog(plan)
 }
 
 export async function getServiceOptions({force = false} = {}) {

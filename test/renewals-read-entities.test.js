@@ -4,8 +4,28 @@ import assert from 'node:assert/strict'
 import {planReadQuery, getPreviousReadQueryState} from '../src/modules/facile/renewals/readQueryPlanner.js'
 import {executeReadQuery} from '../src/modules/facile/renewals/readQueryExecutor.js'
 import {buildReadQueryReply} from '../src/modules/facile/renewals/readQueryFormatters.js'
-import {getReadEntityRegistry} from '../src/modules/facile/renewals/readEntityRegistry.js'
+import {
+  canExecuteReadQueryFromCatalog,
+  getReadEntityRegistry,
+} from '../src/modules/facile/renewals/readEntityRegistry.js'
 import {validateReadQueryPlan} from '../src/modules/facile/renewals/readQueryContract.js'
+import {
+  clearAllReadQueryContexts,
+  rememberReadQueryContext,
+} from '../src/modules/facile/renewals/readQueryContext.js'
+import {
+  resolveReadQueryDetailTarget,
+  shouldResolveReadQueryDetailTarget,
+} from '../src/modules/facile/renewals/readQueryTargetResolver.js'
+import {
+  clearAllPendingReadQueryTargetClarifications,
+  rememberReadQueryTargetClarification,
+  resolvePendingReadQueryTargetClarification,
+} from '../src/modules/facile/renewals/readQueryClarifications.js'
+import {
+  interpretReadQueryUtterance,
+  parseReadQueryUtterance,
+} from '../src/modules/facile/renewals/readQueryUtterance.js'
 
 const services = [
   {
@@ -46,6 +66,8 @@ const services = [
             {id: 'type-1', name: 'Hosting', macro: {id: 'macro-1', name: 'Web'}},
           ],
           priceFinal: 300,
+          priceList: 300,
+          priceListStandard: 300,
         },
         addons: [
           {
@@ -54,6 +76,8 @@ const services = [
             name: 'Backup 100 GB',
             resources: [{id: 'resource-backup', name: 'Spazio backup', amount: 100}],
             priceFinal: 50,
+            priceList: 50,
+            priceListStandard: 50,
           },
         ],
         suppliersSubscriptions: [
@@ -103,6 +127,8 @@ const services = [
           resources: [{id: 'resource-disk', name: 'Spazio su disco', amount: 5}],
           servicesTypesOut: [{id: 'type-2', name: 'Dominio'}],
           priceFinal: 120,
+          priceList: 120,
+          priceListStandard: 120,
         },
         addons: [],
         suppliersSubscriptions: [],
@@ -143,6 +169,7 @@ test('registro entità: espone fornitori, piani, risorse e tipi', () => {
     'domains',
     'communications',
     'price-lists',
+    'plan-prices',
   ]) {
     assert.equal(registry.has(entity), true, entity)
   }
@@ -399,4 +426,814 @@ test('contratto: rifiuta campi non registrati', () => {
   )
   assert.equal(validation.ok, true)
   assert.deepEqual(validation.plan.filters, [])
+})
+
+
+test('planner: gli add-on usano il catalogo completo', async () => {
+  const plan = await planReadQuery({
+    message: 'tutti gli add-on di WebCloud',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.deepEqual(plan.filters, [
+    {field: 'supplier.name', operator: 'contains', value: 'webcloud'},
+  ])
+  assert.equal(canExecuteReadQueryFromCatalog(plan), true)
+})
+
+test('planner: prezzo di un piano in una versione del listino', async () => {
+  const plan = await planReadQuery({
+    message: 'quanto costa il piano DomProf170 NoSSL nel listino 2026',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'plan-prices')
+  assert.equal(plan.operation, 'detail')
+  assert.deepEqual(plan.filters, [
+    {field: 'plan.name', operator: 'contains', value: 'domprof170 nossl'},
+    {field: 'priceListVersion.version', operator: 'equals', value: 2026},
+  ])
+  assert.equal(canExecuteReadQueryFromCatalog(plan), true)
+})
+
+test('planner: prezzi degli add-on nel listino', async () => {
+  const plan = await planReadQuery({
+    message: 'prezzi degli add-on nel listino 2026',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'plan-prices')
+  assert.deepEqual(plan.filters, [
+    {field: 'priceListVersion.version', operator: 'equals', value: 2026},
+    {field: 'plan.kind', operator: 'equals', value: 'addon'},
+  ])
+})
+
+test('executor: arricchisce un prezzo di catalogo con l’uso operativo del piano', () => {
+  const plan = {
+    operation: 'list',
+    entity: 'plan-prices',
+    filters: [],
+    sort: [{field: 'plan.name', direction: 'asc'}],
+    limit: 20,
+    offset: 0,
+  }
+
+  const result = executeReadQuery({
+    plan,
+    services,
+    options,
+    catalogResult: {
+      ok: true,
+      source: 'catalog',
+      sourceScope: 'complete-master-data',
+      catalogVersion: 'renewals-v2',
+      entity: 'plan-prices',
+      operation: 'list',
+      total: 1,
+      shown: 1,
+      offset: 0,
+      limit: 20,
+      nextOffset: 1,
+      previousOffset: 0,
+      hasMore: false,
+      items: [
+        {
+          id: 'price-catalog-1',
+          name: 'DomProf170 NoSSL · Listino standard',
+          price: 300,
+          plan: {id: 'plan-c-1', name: 'DomProf170 NoSSL', kind: 'base'},
+          supplier: {id: 'provider-webcloud', name: 'WebCloud'},
+          priceListVersion: {id: 'price-1', name: 'Listino standard', version: 2026},
+        },
+      ],
+    },
+  })
+
+  assert.equal(result.dataSource, 'catalog')
+  assert.equal(result.items[0].usage.status, 'used')
+  assert.equal(result.items[0].serviceCount, 1)
+  assert.match(buildReadQueryReply(result), /300,00/i)
+})
+
+test('planner: dettaglio esplicito di un add-on applica il filtro sul nome', async () => {
+  const plan = await planReadQuery({
+    message: 'dettagli dell’add-on SendInItalyIPDed',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.equal(plan.operation, 'detail')
+  assert.deepEqual(plan.filters, [
+    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+  ])
+})
+
+test('planner: dettaglio senza entità usa l’ultima entità del catalogo', async () => {
+  const history = [
+    {
+      role: 'assistant',
+      content: 'Non ho trovato add-on.',
+      data: {
+        type: 'read-query-result',
+        entity: 'addons',
+        total: 0,
+        shown: 0,
+        offset: 0,
+        limit: 20,
+        hasMore: false,
+        items: [],
+        plan: {
+          type: 'read-query-plan',
+          operation: 'list',
+          entity: 'addons',
+          filters: [{field: 'supplier.name', operator: 'contains', value: 'MisterDomain'}],
+          sort: [{field: 'name', direction: 'asc'}],
+          limit: 20,
+          offset: 0,
+        },
+      },
+    },
+  ]
+
+  const plan = await planReadQuery({
+    message: 'dettagli SendInItalyIPDed',
+    history,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.equal(plan.operation, 'detail')
+  assert.deepEqual(plan.filters, [
+    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+  ])
+})
+
+test('planner: dettaglio del secondo usa l’id della riga mostrata', async () => {
+  const history = [
+    {
+      role: 'assistant',
+      content: 'Ho trovato due add-on.',
+      data: {
+        type: 'read-query-result',
+        entity: 'addons',
+        total: 2,
+        shown: 2,
+        offset: 0,
+        limit: 20,
+        hasMore: false,
+        items: [
+          {id: 'addon-first', name: 'Primo add-on'},
+          {id: 'addon-second', name: 'Secondo add-on'},
+        ],
+        plan: {
+          type: 'read-query-plan',
+          operation: 'list',
+          entity: 'addons',
+          filters: [],
+          sort: [{field: 'name', direction: 'asc'}],
+          limit: 20,
+          offset: 0,
+        },
+      },
+    },
+  ]
+
+  const plan = await planReadQuery({
+    message: 'dettagli del secondo',
+    history,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.equal(plan.operation, 'detail')
+  assert.deepEqual(plan.filters, [
+    {field: 'id', operator: 'equals', value: 'addon-second'},
+  ])
+  assert.equal(plan.limit, 1)
+})
+
+test('formatter: il dettaglio unico non viene presentato come lista generica', () => {
+  const reply = buildReadQueryReply({
+    ok: true,
+    type: 'read-query-result',
+    entity: 'addons',
+    entityLabel: 'add-on',
+    entitySingular: 'add-on',
+    operation: 'detail',
+    dataSource: 'catalog',
+    total: 1,
+    shown: 1,
+    offset: 0,
+    limit: 10,
+    hasMore: false,
+    items: [
+      {
+        id: 'addon-send-in-italy-ip-ded',
+        name: 'SendInItalyIPDed',
+        supplier: {name: 'Webcloud'},
+        serviceCount: 1,
+        resourceNames: ['IP dedicati inclusi'],
+        prices: [228],
+        usage: {status: 'used'},
+      },
+    ],
+  })
+
+  assert.match(reply, /Dettagli dell[’']add-on SendInItalyIPDed nel catalogo completo/i)
+  assert.match(reply, /fornitore Webcloud/i)
+  assert.doesNotMatch(reply, /Ho trovato 1 add-on/i)
+})
+
+
+test('planner: ricostruisce il contesto entità anche da cronologia solo testuale', async () => {
+  const history = [
+    {role: 'user', content: 'dettagli dell’add-on SendInItalyIPDed'},
+    {
+      role: 'assistant',
+      content:
+        'Dettagli dell’add-on SendInItalyIPDed nel catalogo completo:\n\n' +
+        'SendInItalyIPDed | fornitore Webcloud | 1 servizio | utilizzato nei servizi',
+    },
+  ]
+
+  const plan = await planReadQuery({
+    message: 'dettagli di SendInItalyIPDed',
+    history,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.equal(plan.operation, 'detail')
+  assert.deepEqual(plan.filters, [
+    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+  ])
+})
+
+test('planner: ricostruisce il riferimento ordinale da una risposta testuale', async () => {
+  const history = [
+    {role: 'user', content: 'mostrami i primi 2 add-on'},
+    {
+      role: 'assistant',
+      content:
+        'Ho trovato 38 add-on nel catalogo completo. Ti mostro i risultati 1-2.\n\n' +
+        '- Primo add-on | fornitore Webcloud\n' +
+        '- Secondo add-on | fornitore Webcloud\n\n' +
+        'Puoi chiedermi "altri 2" per continuare.',
+    },
+  ]
+
+  const plan = await planReadQuery({
+    message: 'dettagli del secondo',
+    history,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.deepEqual(plan.filters, [
+    {field: 'name', operator: 'equals', value: 'Secondo add-on'},
+  ])
+  assert.equal(plan.limit, 1)
+})
+
+test('planner: usa il contesto server-side quando la cronologia non conserva i dati', async () => {
+  clearAllReadQueryContexts()
+  const actorToken = 'read-context-addons'
+  const previousPlan = {
+    type: 'read-query-plan',
+    operation: 'detail',
+    entity: 'addons',
+    filters: [{field: 'name', operator: 'contains', value: 'SendInItalyIPDed'}],
+    sort: [{field: 'name', direction: 'asc'}],
+    limit: 10,
+    offset: 0,
+  }
+
+  rememberReadQueryContext({
+    actorToken,
+    plan: previousPlan,
+    result: {
+      ok: true,
+      type: 'read-query-result',
+      entity: 'addons',
+      operation: 'detail',
+      total: 1,
+      shown: 1,
+      offset: 0,
+      limit: 10,
+      hasMore: false,
+      items: [{id: 'addon-send', name: 'SendInItalyIPDed'}],
+      dataSource: 'catalog',
+    },
+  })
+
+  const plan = await planReadQuery({
+    message: 'dettagli di SendInItalyIPDed',
+    history: [],
+    actorToken,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.deepEqual(plan.filters, [
+    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+  ])
+})
+
+test('planner: un nuovo argomento servizi non eredita il vecchio contesto catalogo', async () => {
+  clearAllReadQueryContexts()
+  const actorToken = 'read-context-reset-services'
+
+  rememberReadQueryContext({
+    actorToken,
+    plan: {
+      type: 'read-query-plan',
+      operation: 'list',
+      entity: 'addons',
+      filters: [],
+      sort: [{field: 'name', direction: 'asc'}],
+      limit: 20,
+      offset: 0,
+    },
+    result: {
+      ok: true,
+      type: 'read-query-result',
+      entity: 'addons',
+      operation: 'list',
+      total: 1,
+      shown: 1,
+      offset: 0,
+      limit: 20,
+      hasMore: false,
+      items: [{id: 'addon-send', name: 'SendInItalyIPDed'}],
+    },
+  })
+
+  const plan = await planReadQuery({
+    message: 'dettagli di eco-pv.it',
+    history: [
+      {role: 'user', content: 'servizi di Zilio Group'},
+      {role: 'assistant', content: 'Ho trovato 82 servizi.'},
+    ],
+    actorToken,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan, null)
+})
+
+
+test('resolver dettaglio: riconosce un piano anche se il contesto precedente era add-on', async () => {
+  const resolution = await resolveReadQueryDetailTarget({
+    message: 'dettagli di DomProf170 NoSSL',
+    services,
+    options,
+  })
+
+  assert.equal(resolution.status, 'resolved')
+  assert.equal(resolution.entityId, 'plans')
+  assert.equal(resolution.filter.field, 'id')
+  assert.equal(resolution.filter.value, 'plan-c-1')
+})
+
+test('resolver dettaglio: riconosce un add-on senza dipendere dal contesto', async () => {
+  const resolution = await resolveReadQueryDetailTarget({
+    message: "dettagli dell'add-on Backup 100 GB",
+    services,
+    options,
+  })
+
+  assert.equal(resolution.status, 'resolved')
+  assert.equal(resolution.entityId, 'addons')
+  assert.equal(resolution.filter.value, 'plan-addon-1')
+})
+
+test('resolver dettaglio: riconosce un servizio dal dominio e lo preferisce al record dominio', async () => {
+  const resolution = await resolveReadQueryDetailTarget({
+    message: 'dettagli di eco-pv.it',
+    services,
+    options,
+  })
+
+  assert.equal(resolution.status, 'resolved')
+  assert.equal(resolution.entityId, 'services')
+})
+
+test('resolver dettaglio: usa il catalogo per una anagrafica non presente nei servizi', async () => {
+  const resolution = await resolveReadQueryDetailTarget({
+    message: 'dettagli di Piano mai utilizzato',
+    services,
+    options,
+    queryCatalog: async plan => {
+      if (plan.entity !== 'plans') {
+        return {ok: true, items: []}
+      }
+
+      return {
+        ok: true,
+        items: [{id: 'unused-plan', name: 'Piano mai utilizzato'}],
+      }
+    },
+  })
+
+  assert.equal(resolution.status, 'resolved')
+  assert.equal(resolution.entityId, 'plans')
+  assert.equal(resolution.source, 'catalog')
+  assert.equal(resolution.filter.value, 'unused-plan')
+})
+
+test('resolver dettaglio: chiede chiarimento quando lo stesso nome appartiene a più entità', async () => {
+  const ambiguousOptions = {
+    ...options,
+    providers: [...options.providers, {value: 'provider-shared', label: 'Webcloud Shared'}],
+    customers: [...options.customers, {value: 'customer-shared', label: 'Webcloud Shared'}],
+  }
+  const resolution = await resolveReadQueryDetailTarget({
+    message: 'dettagli di Webcloud Shared',
+    services,
+    options: ambiguousOptions,
+  })
+
+  assert.equal(resolution.status, 'ambiguous')
+  assert.equal(
+    resolution.candidates.some(candidate => candidate.entityId === 'providers'),
+    true
+  )
+  assert.equal(
+    resolution.candidates.some(candidate => candidate.entityId === 'customers'),
+    true
+  )
+})
+
+test('resolver dettaglio: non intercetta riferimenti ordinali o puramente contestuali', () => {
+  assert.equal(shouldResolveReadQueryDetailTarget('dettagli del secondo'), false)
+  assert.equal(shouldResolveReadQueryDetailTarget('dettagli di questo'), false)
+  assert.equal(shouldResolveReadQueryDetailTarget('dettagli di DomProf170 NoSSL'), true)
+})
+
+test('planner: una risoluzione esplicita del target sostituisce il vecchio contesto entità', async () => {
+  clearAllReadQueryContexts()
+  const actorToken = 'target-resolution-overrides-context'
+
+  rememberReadQueryContext({
+    actorToken,
+    plan: {
+      type: 'read-query-plan',
+      operation: 'detail',
+      entity: 'addons',
+      filters: [{field: 'name', operator: 'contains', value: 'Backup 100 GB'}],
+      sort: [{field: 'name', direction: 'asc'}],
+      limit: 10,
+      offset: 0,
+    },
+    result: {
+      ok: true,
+      type: 'read-query-result',
+      entity: 'addons',
+      operation: 'detail',
+      total: 1,
+      shown: 1,
+      items: [{id: 'plan-addon-1', name: 'Backup 100 GB'}],
+    },
+  })
+
+  const plan = await planReadQuery({
+    message: 'dettagli di DomProf170 NoSSL',
+    actorToken,
+    allowSemantic: false,
+    resolvedDetailTarget: {
+      entityId: 'plans',
+      filter: {field: 'id', operator: 'equals', value: 'plan-c-1'},
+    },
+  })
+
+  assert.equal(plan.entity, 'plans')
+  assert.deepEqual(plan.filters, [
+    {field: 'id', operator: 'equals', value: 'plan-c-1'},
+  ])
+  assert.equal(plan.source, 'deterministic-target-resolution')
+})
+
+
+test('formatter: il dettaglio del piano dichiara esplicitamente il tipo di entità', () => {
+  const reply = buildReadQueryReply({
+    ok: true,
+    type: 'read-query-result',
+    entity: 'plans',
+    entityLabel: 'piani',
+    entitySingular: 'piano',
+    operation: 'detail',
+    dataSource: 'catalog',
+    total: 1,
+    shown: 1,
+    offset: 0,
+    limit: 10,
+    hasMore: false,
+    items: [
+      {
+        id: 'plan-domprof10',
+        name: 'DomProf10',
+        supplier: {name: 'Webcloud'},
+        duration: 12,
+        serviceCount: 7,
+        usage: {status: 'used'},
+      },
+    ],
+  })
+
+  assert.match(reply, /Dettagli del piano DomProf10 nel catalogo completo/i)
+})
+
+test('chiarimento entità: la risposta gruppo seleziona il gruppo ambiguo', () => {
+  clearAllPendingReadQueryTargetClarifications()
+  const actorToken = 'clarification-group'
+
+  rememberReadQueryTargetClarification({
+    actorToken,
+    resolution: {
+      status: 'ambiguous',
+      target: 'Zilio Group Srl',
+      candidates: [
+        {
+          entityId: 'customers',
+          entityLabel: 'clienti',
+          entitySingular: 'cliente',
+          name: 'Zilio Group Srl',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'customer-zilio'},
+        },
+        {
+          entityId: 'groups',
+          entityLabel: 'gruppi',
+          entitySingular: 'gruppo',
+          name: 'Zilio Group Srl',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'group-zilio'},
+        },
+      ],
+    },
+  })
+
+  const selection = resolvePendingReadQueryTargetClarification({
+    actorToken,
+    message: 'gruppo',
+  })
+
+  assert.equal(selection.status, 'resolved')
+  assert.equal(selection.resolution.entityId, 'groups')
+  assert.equal(selection.resolution.filter.value, 'group-zilio')
+})
+
+test('chiarimento entità: accetta il numero della opzione', () => {
+  clearAllPendingReadQueryTargetClarifications()
+  const actorToken = 'clarification-number'
+
+  rememberReadQueryTargetClarification({
+    actorToken,
+    resolution: {
+      status: 'ambiguous',
+      target: 'Webcloud',
+      candidates: [
+        {
+          entityId: 'providers',
+          entityLabel: 'fornitori',
+          entitySingular: 'fornitore',
+          name: 'Webcloud',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'provider-webcloud'},
+        },
+        {
+          entityId: 'groups',
+          entityLabel: 'gruppi',
+          entitySingular: 'gruppo',
+          name: 'Webcloud',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'group-webcloud'},
+        },
+      ],
+    },
+  })
+
+  const selection = resolvePendingReadQueryTargetClarification({
+    actorToken,
+    message: '2',
+  })
+
+  assert.equal(selection.status, 'resolved')
+  assert.equal(selection.resolution.entityId, 'groups')
+})
+
+test('chiarimento entità: una nuova richiesta esplicita abbandona il chiarimento precedente', () => {
+  clearAllPendingReadQueryTargetClarifications()
+  const actorToken = 'clarification-new-topic'
+
+  rememberReadQueryTargetClarification({
+    actorToken,
+    resolution: {
+      status: 'ambiguous',
+      target: 'Zilio Group Srl',
+      candidates: [
+        {
+          entityId: 'customers',
+          entityLabel: 'clienti',
+          entitySingular: 'cliente',
+          name: 'Zilio Group Srl',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'customer-zilio'},
+        },
+        {
+          entityId: 'groups',
+          entityLabel: 'gruppi',
+          entitySingular: 'gruppo',
+          name: 'Zilio Group Srl',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'group-zilio'},
+        },
+      ],
+    },
+  })
+
+  const selection = resolvePendingReadQueryTargetClarification({
+    actorToken,
+    message: 'dettagli del piano DomProf10',
+  })
+
+  assert.equal(selection.status, 'not-applicable')
+})
+
+
+test('interprete universale: riconosce parlami di come richiesta di dettaglio', () => {
+  const utterance = parseReadQueryUtterance('parlami di eco-pv.it')
+
+  assert.equal(utterance?.operation, 'detail')
+  assert.equal(utterance?.target, 'eco-pv.it')
+  assert.equal(utterance?.entityHint, null)
+  assert.equal(utterance?.source, 'deterministic-utterance')
+})
+
+test('interprete universale: estrae il tipo di entità quando è esplicito', () => {
+  const utterance = parseReadQueryUtterance('raccontami del piano DomProf170 NoSSL')
+
+  assert.equal(utterance?.operation, 'detail')
+  assert.equal(utterance?.target, 'DomProf170 NoSSL')
+  assert.equal(utterance?.entityHint, 'plans')
+})
+
+test('interprete universale: comprende varianti conversazionali comuni', () => {
+  const cases = [
+    ['che mi dici di MisterDomain?', 'MisterDomain'],
+    ['vorrei sapere qualcosa su Zilio Group Srl', 'Zilio Group Srl'],
+    ['spiegami meglio l’add-on SendInItalyIPDed', 'SendInItalyIPDed'],
+    ['cosa sai di DomProf10?', 'DomProf10'],
+  ]
+
+  for (const [message, target] of cases) {
+    const utterance = parseReadQueryUtterance(message)
+    assert.equal(utterance?.operation, 'detail', message)
+    assert.equal(utterance?.target, target, message)
+  }
+})
+
+test('interprete universale: non sottrae le richieste di modifica', () => {
+  assert.equal(
+    parseReadQueryUtterance('imposta la scadenza di eco-pv.it al 3 marzo 2028'),
+    null
+  )
+  assert.equal(parseReadQueryUtterance('rinnova eco-pv.it'), null)
+})
+
+test('interprete universale: usa Ollama solo come fallback strutturato', async () => {
+  let calls = 0
+  const utterance = await interpretReadQueryUtterance({
+    message: 'Mi fai un quadro generale su eco-pv.it?',
+    callLlm: async () => {
+      calls += 1
+      return JSON.stringify({
+        operation: 'detail',
+        target: 'eco-pv.it',
+        entityHint: null,
+        contextual: false,
+        confidence: 0.96,
+      })
+    },
+  })
+
+  assert.equal(calls, 1)
+  assert.equal(utterance?.operation, 'detail')
+  assert.equal(utterance?.target, 'eco-pv.it')
+  assert.equal(utterance?.source, 'semantic-utterance')
+})
+
+test('resolver universale: parlami di risolve il servizio senza passare dalla lista', async () => {
+  const readUtterance = parseReadQueryUtterance('parlami di eco-pv.it')
+  const resolution = await resolveReadQueryDetailTarget({
+    message: 'parlami di eco-pv.it',
+    readUtterance,
+    services,
+    options,
+  })
+
+  assert.equal(resolution.status, 'resolved')
+  assert.equal(resolution.entityId, 'services')
+  assert.equal(resolution.name, 'eco-pv.it')
+})
+
+test('resolver universale: il suggerimento esplicito limita la ricerca ai piani', async () => {
+  const readUtterance = parseReadQueryUtterance('parlami del piano DomProf170 NoSSL')
+  const resolution = await resolveReadQueryDetailTarget({
+    message: 'parlami del piano DomProf170 NoSSL',
+    readUtterance,
+    services,
+    options,
+  })
+
+  assert.equal(resolution.status, 'resolved')
+  assert.equal(resolution.entityId, 'plans')
+  assert.equal(resolution.name, 'DomProf170 NoSSL')
+})
+
+test('planner universale: usa una richiesta conversazionale contestuale', async () => {
+  const history = [
+    {
+      role: 'assistant',
+      data: {
+        type: 'read-query-result',
+        entity: 'addons',
+        operation: 'list',
+        total: 2,
+        shown: 2,
+        offset: 0,
+        limit: 20,
+        hasMore: false,
+        items: [
+          {id: 'addon-one', name: 'Primo add-on'},
+          {id: 'addon-two', name: 'Secondo add-on'},
+        ],
+        plan: {
+          type: 'read-query-plan',
+          operation: 'list',
+          entity: 'addons',
+          filters: [],
+          sort: [{field: 'name', direction: 'asc'}],
+          limit: 20,
+          offset: 0,
+        },
+      },
+    },
+  ]
+  const message = 'parlami del secondo'
+  const readUtterance = parseReadQueryUtterance(message)
+  const plan = await planReadQuery({
+    message,
+    history,
+    readUtterance,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'addons')
+  assert.equal(plan.operation, 'detail')
+  assert.deepEqual(plan.filters, [
+    {field: 'id', operator: 'equals', value: 'addon-two'},
+  ])
+})
+
+test('chiarimento universale: parlami di un nuovo target abbandona il chiarimento precedente', () => {
+  clearAllPendingReadQueryTargetClarifications()
+  const actorToken = 'clarification-universal-new-topic'
+
+  rememberReadQueryTargetClarification({
+    actorToken,
+    resolution: {
+      status: 'ambiguous',
+      target: 'Zilio Group Srl',
+      candidates: [
+        {
+          entityId: 'customers',
+          entityLabel: 'clienti',
+          entitySingular: 'cliente',
+          name: 'Zilio Group Srl',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'customer-zilio'},
+        },
+        {
+          entityId: 'groups',
+          entityLabel: 'gruppi',
+          entitySingular: 'gruppo',
+          name: 'Zilio Group Srl',
+          source: 'catalog',
+          filter: {field: 'id', operator: 'equals', value: 'group-zilio'},
+        },
+      ],
+    },
+  })
+
+  const message = 'parlami del piano DomProf170 NoSSL'
+  const selection = resolvePendingReadQueryTargetClarification({
+    actorToken,
+    message,
+    readUtterance: parseReadQueryUtterance(message),
+  })
+
+  assert.equal(selection.status, 'not-applicable')
 })

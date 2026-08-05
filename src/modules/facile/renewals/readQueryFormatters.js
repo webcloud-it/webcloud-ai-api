@@ -9,6 +9,16 @@ function formatDate(value) {
   return new Intl.DateTimeFormat('it-IT').format(date)
 }
 
+function formatPrice(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+
+  return new Intl.NumberFormat('it-IT', {
+    style: 'currency',
+    currency: 'EUR',
+  }).format(number)
+}
+
 function formatAmountList(values = []) {
   const normalized = values
     .filter(value => value !== null && value !== undefined && value !== '')
@@ -34,8 +44,37 @@ function formatPlan(item) {
   if (item.duration != null) details.push(`durata ${item.duration} mesi`)
   details.push(pluralize(item.serviceCount || 0, 'servizio', 'servizi'))
   if (item.resourceNames?.length) details.push(`risorse: ${item.resourceNames.slice(0, 4).join(', ')}`)
+  if (item.prices?.length) details.push(`prezzi da ${formatPrice(Math.min(...item.prices))}`)
   if (item.missingPrice) details.push('prezzo mancante')
   return `- ${item.name} | ${details.join(' | ')}`
+}
+
+function formatAddon(item) {
+  const details = []
+  if (item.supplier?.name) details.push(`fornitore ${item.supplier.name}`)
+  details.push(pluralize(item.serviceCount || 0, 'servizio', 'servizi'))
+  if (item.resourceNames?.length) details.push(`risorse: ${item.resourceNames.slice(0, 4).join(', ')}`)
+  if (item.prices?.length) details.push(`prezzi da ${formatPrice(Math.min(...item.prices))}`)
+  if (item.missingPrice) details.push('prezzo mancante')
+  return `- ${item.name} | ${details.join(' | ')}`
+}
+
+function formatPlanPrice(item) {
+  const details = []
+  if (item.priceListVersion?.name) {
+    const name = String(item.priceListVersion.name)
+    const baseLabel = /^listino\b/i.test(name) ? name : `listino ${name}`
+    const version = item.priceListVersion.version
+    const versionLabel =
+      version != null && !name.includes(String(version)) ? ` v.${version}` : ''
+
+    details.push(`${baseLabel}${versionLabel}`)
+  }
+  if (item.supplier?.name) details.push(`fornitore ${item.supplier.name}`)
+  if (item.plan?.kind === 'addon') details.push('add-on')
+  details.push(item.price == null ? 'prezzo mancante' : formatPrice(item.price))
+
+  return `- ${item.plan?.name || item.name || '—'} | ${details.join(' | ')}`
 }
 
 function formatResource(item, result = {}) {
@@ -120,7 +159,8 @@ function formatGeneric(item) {
 const formatters = {
   providers: formatProvider,
   plans: formatPlan,
-  addons: formatPlan,
+  addons: formatAddon,
+  'plan-prices': formatPlanPrice,
   resources: formatResource,
   customers: formatCustomer,
   groups: formatGroup,
@@ -132,27 +172,112 @@ const formatters = {
   'price-lists': formatPriceList,
 }
 
+function getEntityLabel(result = {}, value = 0) {
+  return Number(value) === 1
+    ? result.entitySingular || result.entityLabel
+    : result.entityLabel
+}
+
+function buildSourceSuffix(result = {}) {
+  return result.dataSource === 'catalog'
+    ? ' nel catalogo completo'
+    : ' nei dati operativi dei servizi'
+}
+
+function appendUsage(line, item = {}, result = {}) {
+  if (result.dataSource !== 'catalog' || !item?.usage?.status) return line
+
+  const label =
+    item.usage.status === 'used'
+      ? 'utilizzato nei servizi'
+      : 'non utilizzato nei servizi'
+
+  return `${line} | ${label}`
+}
+
+
+
+const detailEntityHeadings = {
+  providers: 'del fornitore',
+  plans: 'del piano',
+  addons: "dell’add-on",
+  'plan-prices': 'del prezzo del piano',
+  resources: 'della risorsa',
+  customers: 'del cliente',
+  groups: 'del gruppo',
+  'service-types': 'del tipo di servizio',
+  'macro-service-types': 'del macro tipo di servizio',
+  subscriptions: 'della sottoscrizione',
+  domains: 'del dominio',
+  communications: 'della comunicazione',
+  'price-lists': 'del listino',
+}
+
+function getDetailEntityHeading(result = {}) {
+  if (detailEntityHeadings[result.entity]) return detailEntityHeadings[result.entity]
+
+  const singular = result.entitySingular || result.entityLabel || 'entità'
+  return `dell’entità ${singular}`
+}
+
+function getDetailItemName(item = {}, result = {}) {
+  if (result.entity === 'plan-prices') {
+    return item?.plan?.name || item?.name || item?.id || '—'
+  }
+
+  return item?.name || item?.label || item?.id || '—'
+}
+
+function buildDetailReply(result = {}, formatter = formatGeneric) {
+  if (result.total === 1 && result.items?.length === 1) {
+    const item = result.items[0]
+    const line = appendUsage(formatter(item, result), item, result).replace(/^[-•]\s*/, '')
+
+    return `Dettagli ${getDetailEntityHeading(result)} ${getDetailItemName(item, result)}${buildSourceSuffix(result)}:
+
+${line}`
+  }
+
+  const start = result.offset + 1
+  const end = result.offset + result.shown
+  const lines = result.items.map(item => appendUsage(formatter(item, result), item, result))
+  const tail = result.hasMore
+    ? `
+
+Puoi chiedermi "altri ${result.limit}" per continuare.`
+    : ''
+
+  return `Ho trovato ${result.total} possibili ${getEntityLabel(result, result.total)}${buildSourceSuffix(result)}. Ti mostro i risultati ${start}-${end}.
+
+${lines.join('\n')}${tail}`
+}
+
 export function buildReadQueryReply(result = {}) {
   if (!result?.ok) {
     return result?.error || 'Non è stato possibile eseguire la richiesta.'
   }
 
   if (result.operation === 'count') {
-    return `Ho trovato ${result.total} ${result.entityLabel}.`
+    return `Ho trovato ${result.total} ${getEntityLabel(result, result.total)}${buildSourceSuffix(result)}.`
   }
 
   if (!result.total) {
-    return `Non ho trovato ${result.entityLabel} corrispondenti ai filtri richiesti.`
+    return `Non ho trovato ${result.entityLabel} corrispondenti ai filtri richiesti${buildSourceSuffix(result)}.`
+  }
+
+  const formatter = formatters[result.entity] || formatGeneric
+
+  if (result.operation === 'detail') {
+    return buildDetailReply(result, formatter)
   }
 
   const start = result.offset + 1
   const end = result.offset + result.shown
   const heading =
     result.total > result.shown || result.offset > 0
-      ? `Ho trovato ${result.total} ${result.entityLabel}. Ti mostro i risultati ${start}-${end}.`
-      : `Ho trovato ${result.total} ${result.entityLabel}.`
-  const formatter = formatters[result.entity] || formatGeneric
-  const lines = result.items.map(item => formatter(item, result))
+      ? `Ho trovato ${result.total} ${getEntityLabel(result, result.total)}${buildSourceSuffix(result)}. Ti mostro i risultati ${start}-${end}.`
+      : `Ho trovato ${result.total} ${getEntityLabel(result, result.total)}${buildSourceSuffix(result)}.`
+  const lines = result.items.map(item => appendUsage(formatter(item, result), item, result))
   const tail = result.hasMore
     ? `\n\nPuoi chiedermi "altri ${result.limit}" per continuare.`
     : ''
