@@ -15,4 +15,17 @@ export const env = {
 
   facileIntegrationsApiBaseUrl: process.env.FACILE_INTEGRATIONS_API_BASE_URL,
   facileAccessToken: process.env.ACCESS_TOKEN,
+
+  webcamgoDirectusBaseUrl: process.env.WEBCAMGO_DIRECTUS_BASE_URL,
+  webcamgoFetchTimeoutMs: Number(process.env.WEBCAMGO_FETCH_TIMEOUT_MS || 15000),
+
+  sendInItalyApiBaseUrl:
+    process.env.SENDINITALY_API_BASE_URL ||
+    (process.env.NODE_ENV === 'production' ? null : 'http://127.0.0.1:3001/v1'),
+
+  businessHoursApiBaseUrl:
+    process.env.BUSINESS_HOURS_API_BASE_URL ||
+    (process.env.NODE_ENV === 'production'
+      ? 'https://business-hours-api.webcloud.cloud/v1'
+      : 'http://127.0.0.1:3002/v1'),
 }

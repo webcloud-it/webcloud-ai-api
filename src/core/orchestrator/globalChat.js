@@ -1,0 +1,356 @@
+import {buildCapabilitySummary, getAvailableModuleIds} from '../capabilities/catalog.js'
+import {normalizeText} from '../../utils/text.js'
+import {callOllamaChat} from '../providers/ollamaProvider.js'
+
+const DOMAIN_PATTERNS = {
+  'facile.businesshours': [
+    /\borari\b/,
+    /\bapertur[aeo]\b/,
+    /\bchiusur[aeo]\b/,
+    /\bminisito\b/,
+  ],
+  'facile.sendinitaly': [
+    /\bsend\s*in\s*italy\b/,
+    /\bnewsletter\b/,
+    /\bcampagn[ae]\b/,
+    /\bpostal\b/,
+    /\bmittent[ei]\b/,
+  ],
+  'facile.webcamgo': [
+    /\bwebcam(?:go)?\b/,
+    /\btelecamer[ae]\b/,
+    /\bsnapshot\b/,
+    /\bstream\b/,
+    /\bptz\b/,
+    /\bmikrotik\b/,
+    /\bconnettivit[aà]\b/,
+  ],
+  'facile.renewals': [
+    /\brinnov/,
+    /\bscadenz/,
+    /\bservizi?\b/,
+    /\bclient[ei]\b/,
+    /\bgrupp[oi]\b/,
+    /\bfornitor/,
+    /\bpiani?\b/,
+    /\bplesk\b/,
+    /\bfattur/,
+    /\bnon rinnovare\b/,
+  ],
+}
+
+const HELP_PATTERN = /\b(cosa puoi fare|come puoi aiut|funzioni|capacit[aà]|strumenti disponibili)\b/
+const GREETING_PATTERN = /^(ciao|salve|buongiorno|buonasera|hey|ehi)(\b|[!,.])/i
+
+const UNSUPPORTED_DOMAINS = [
+  {id: 'asiago', label: 'Asiago.it e CMS', pattern: /\b(asiago(?:\.it)?|cms|eventi|minisiti|bollettino neve)\b/},
+  {id: 'assets', label: 'Assets Manager', pattern: /\b(asset|wam|immagin[ei])\b/},
+  {id: 'cloudflare', label: 'Cloudflare', pattern: /\bcloudflare\b/},
+]
+
+function moduleFromContext(context = {}) {
+  const explicit = context.activeModuleId || context.moduleId
+
+  if (
+    explicit &&
+    ['facile.renewals', 'facile.webcamgo', 'facile.sendinitaly', 'facile.businesshours'].includes(explicit)
+  ) {
+    return explicit
+  }
+
+  const section = normalizeText(`${context.section || ''} ${context.path || ''}`)
+
+  if (section.includes('webcamgo')) return 'facile.webcamgo'
+  if (section.includes('sendinitaly')) return 'facile.sendinitaly'
+  if (section.includes('minisite') && (section.includes('hour') || section.includes('orari'))) {
+    return 'facile.businesshours'
+  }
+  if (section.includes('renewal') || section.includes('/crm')) return 'facile.renewals'
+
+  return null
+}
+
+function unsupportedDomainFromContext(context = {}) {
+  const value = normalizeText(`${context.section || ''} ${context.path || ''}`)
+
+  if (/asiagoit|cms/.test(value)) return {id: 'asiago', label: 'Asiago.it e CMS'}
+  if (/assets-manager|wam/.test(value)) return {id: 'assets', label: 'Assets Manager'}
+  if (/cloudflare/.test(value)) return {id: 'cloudflare', label: 'Cloudflare'}
+
+  return null
+}
+
+function moduleFromHistory(history = []) {
+  for (const item of [...history].reverse()) {
+    const moduleId = item?.meta?.moduleId || item?.data?.meta?.moduleId
+
+    if (['facile.renewals', 'facile.webcamgo', 'facile.sendinitaly', 'facile.businesshours'].includes(moduleId)) {
+      return moduleId
+    }
+
+    const dataType = String(item?.data?.type || '')
+    if (dataType.startsWith('webcam')) return 'facile.webcamgo'
+    if (dataType.startsWith('sendinitaly')) return 'facile.sendinitaly'
+    if (dataType.startsWith('business-hours')) return 'facile.businesshours'
+  }
+
+  return null
+}
+
+function scoreModules(message = '') {
+  const text = normalizeText(message)
+
+  return Object.entries(DOMAIN_PATTERNS)
+    .map(([moduleId, patterns]) => ({
+      moduleId,
+      score: patterns.reduce((total, pattern) => total + (pattern.test(text) ? 1 : 0), 0),
+    }))
+    .sort((a, b) => b.score - a.score)
+}
+
+export function planGlobalChat({message = '', context = {}, history = [], credentials = {}} = {}) {
+  const availableModuleIds = getAvailableModuleIds({credentials})
+  const text = normalizeText(message)
+
+  const unsupportedDomain = UNSUPPORTED_DOMAINS.find(domain => domain.pattern.test(text))
+
+  if (unsupportedDomain) {
+    return {type: 'unsupported-domain', domain: unsupportedDomain}
+  }
+
+  if (HELP_PATTERN.test(text)) {
+    return {type: 'help', capabilities: buildCapabilitySummary({credentials})}
+  }
+
+  if (GREETING_PATTERN.test(String(message || '').trim())) {
+    return {type: 'greeting'}
+  }
+
+  const scores = scoreModules(text)
+  const best = scores[0]
+  const second = scores[1]
+
+  let moduleId = null
+  let source = null
+
+  if (best?.score > 0 && best.score > (second?.score || 0)) {
+    moduleId = best.moduleId
+    source = 'message'
+  } else {
+    moduleId = moduleFromHistory(history)
+    source = moduleId ? 'history' : null
+  }
+
+  if (!moduleId) {
+    moduleId = moduleFromContext(context)
+    source = moduleId ? 'context' : null
+  }
+
+  if (!moduleId && availableModuleIds.length === 1) {
+    moduleId = availableModuleIds[0]
+    source = 'only-available'
+  }
+
+  if (!moduleId) {
+    const contextDomain = unsupportedDomainFromContext(context)
+
+    if (contextDomain) {
+      return {type: 'unsupported-domain', domain: contextDomain}
+    }
+
+    return {type: 'clarification', reason: 'domain-required', availableModuleIds}
+  }
+
+  if (!availableModuleIds.includes(moduleId)) {
+    return {
+      type: 'unavailable',
+      reason: 'credential-unavailable',
+      moduleId,
+      availableModuleIds,
+    }
+  }
+
+  return {type: 'module', moduleId, source}
+}
+
+export async function resolveGlobalChatPlan(options = {}, callModel = callOllamaChat) {
+  const deterministicPlan = planGlobalChat(options)
+
+  if (deterministicPlan.type !== 'clarification') {
+    return deterministicPlan
+  }
+
+  const availableModuleIds = deterministicPlan.availableModuleIds || []
+  if (!availableModuleIds.length || typeof callModel !== 'function') return deterministicPlan
+
+  const context = options.context || {}
+  const safeContext = {
+    app: context.app || null,
+    section: context.section || null,
+    path: context.path || null,
+    activeModuleId: context.activeModuleId || null,
+  }
+
+  try {
+    const raw = await callModel({
+      timeoutMs: 8000,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Sei il router dell’assistente Webcloud.',
+            `Puoi scegliere esclusivamente uno di questi moduli: ${availableModuleIds.join(', ')}.`,
+            'facile.renewals riguarda CRM, servizi, domini, clienti, fornitori, piani, Plesk, scadenze e rinnovi.',
+            'facile.webcamgo riguarda webcam, stream, snapshot, connettività, monitoraggio, hardware e downtime.',
+            'facile.sendinitaly riguarda newsletter, campagne email, invii, statistiche, mittenti e utenti Send in Italy.',
+            'facile.businesshours riguarda orari, aperture e chiusure dei minisiti.',
+            'Se la richiesta non permette una scelta affidabile restituisci moduleId null.',
+            'Rispondi solo con JSON: {"moduleId": string|null, "confidence": number}.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({message: String(options.message || '').slice(0, 1000), context: safeContext}),
+        },
+      ],
+    })
+
+    const semantic = parseSemanticPlan(raw)
+
+    if (
+      semantic &&
+      semantic.confidence >= 0.65 &&
+      availableModuleIds.includes(semantic.moduleId)
+    ) {
+      return {
+        type: 'module',
+        moduleId: semantic.moduleId,
+        source: 'semantic',
+        confidence: semantic.confidence,
+      }
+    }
+  } catch (_) {
+    // The deterministic clarification remains available when Ollama is down,
+    // slow, or returns an invalid plan.
+  }
+
+  return deterministicPlan
+}
+
+function parseSemanticPlan(value = '') {
+  const text = String(value || '').trim()
+  const jsonText = text.match(/\{[\s\S]*\}/)?.[0]
+  if (!jsonText) return null
+
+  try {
+    const parsed = JSON.parse(jsonText)
+    const confidence = Number(parsed?.confidence)
+
+    return {
+      moduleId: typeof parsed?.moduleId === 'string' ? parsed.moduleId : null,
+      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+    }
+  } catch (_) {
+    return null
+  }
+}
+
+export function buildGlobalGreetingResponse({credentials = {}} = {}) {
+  const capabilities = buildCapabilitySummary({credentials})
+  const labels = capabilities.map(item => item.title)
+
+  return {
+    ok: true,
+    intent: 'greeting',
+    source: 'global',
+    reply: labels.length
+      ? `Ciao! Posso aiutarti trasversalmente con ${labels.join(' e ')}. Chiedimi pure un’informazione o un’operazione; se modifica dati ti mostrerò prima un’anteprima da confermare.`
+      : 'Ciao! Al momento non risultano strumenti disponibili per questa sessione. Prova a ricaricare Facile o ad autenticarti nuovamente.',
+    data: {type: 'greeting', areas: labels},
+    meta: {moduleId: 'facile', orchestrator: 'global-v1'},
+  }
+}
+
+export function buildUnsupportedDomainResponse({domain} = {}) {
+  return {
+    ok: true,
+    intent: 'unsupported-domain',
+    source: 'global',
+    reply: `Ho capito che la richiesta riguarda ${domain?.label || 'un’area Webcloud'}. Quest’area non è ancora collegata al nuovo orchestratore: per ora posso aiutarti con rinnovi/CRM, WebcamGo, Send in Italy e orari dei minisiti. L’integrazione ${domain?.label || ''} è censita come prossimo modulo, quindi non proverò a inventare dati o azioni.`,
+    data: {type: 'capability-unavailable', domain: domain?.id || null},
+    meta: {moduleId: 'facile', orchestrator: 'global-v1'},
+  }
+}
+
+export function buildGlobalHelpResponse({credentials = {}} = {}) {
+  const capabilities = buildCapabilitySummary({credentials})
+
+  if (!capabilities.length) {
+    return {
+      ok: true,
+      intent: 'capabilities',
+      source: 'global',
+      reply: 'Non risultano strumenti disponibili per questa sessione. Prova a ricaricare Facile o ad autenticarti nuovamente.',
+      data: {type: 'capabilities', items: []},
+      meta: {moduleId: 'facile', orchestrator: 'global-v1'},
+    }
+  }
+
+  const lines = capabilities.map(item => {
+    return `- ${item.title}: ${[...new Set(item.descriptions)].join(' ')}`
+  })
+
+  return {
+    ok: true,
+    intent: 'capabilities',
+    source: 'global',
+    reply: [
+      'Posso lavorare trasversalmente nelle aree Webcloud disponibili per il tuo account:',
+      ...lines,
+      '',
+      'Le operazioni che modificano dati vengono sempre preparate e confermate prima dell’esecuzione.',
+    ].join('\n'),
+    data: {type: 'capabilities', items: capabilities},
+    meta: {moduleId: 'facile', orchestrator: 'global-v1'},
+  }
+}
+
+export function buildGlobalClarificationResponse({availableModuleIds = []} = {}) {
+  const labels = availableModuleIds.map(id => {
+    if (id === 'facile.webcamgo') return 'WebcamGo'
+    if (id === 'facile.sendinitaly') return 'Send in Italy'
+    if (id === 'facile.businesshours') return 'orari e aperture dei minisiti'
+    return 'rinnovi e CRM'
+  })
+
+  return {
+    ok: true,
+    intent: 'clarification',
+    source: 'global',
+    reply: labels.length
+      ? `La richiesta può riguardare più aree. Vuoi lavorare su ${labels.join(' oppure ')}?`
+      : 'Non ho strumenti disponibili per questa sessione. Prova a ricaricare Facile o ad autenticarti nuovamente.',
+    data: {type: 'clarification', reason: 'domain-required', options: availableModuleIds},
+    meta: {moduleId: 'facile', orchestrator: 'global-v1'},
+  }
+}
+
+export function buildUnavailableModuleResponse({moduleId} = {}) {
+  const label =
+    moduleId === 'facile.webcamgo'
+      ? 'WebcamGo'
+      : moduleId === 'facile.sendinitaly'
+        ? 'Send in Italy'
+        : moduleId === 'facile.businesshours'
+          ? 'orari e aperture dei minisiti'
+        : 'rinnovi e CRM'
+
+  return {
+    ok: true,
+    intent: 'unavailable',
+    source: 'global',
+    reply: `Ho capito che la richiesta riguarda ${label}, ma questa sessione non dispone della credenziale necessaria. Ricarica Facile o verifica i permessi dell’account.`,
+    data: {type: 'capability-unavailable', moduleId},
+    meta: {moduleId: 'facile', orchestrator: 'global-v1'},
+  }
+}

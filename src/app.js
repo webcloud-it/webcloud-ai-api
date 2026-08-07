@@ -6,6 +6,7 @@ import {errorHandler} from './middlewares/errorHandler.js'
 import {notFoundHandler} from './middlewares/notFoundHandler.js'
 import chatRouter from './routes/chat.js'
 import modulesRouter from './routes/modules.js'
+import capabilitiesRouter from './routes/capabilities.js'
 import {authToken} from './middlewares/authToken.js'
 
 const app = express()
@@ -27,6 +28,7 @@ app.get('/health', (req, res) => {
 })
 
 app.use('/api/chat', authToken, chatRouter)
+app.use('/api/capabilities', authToken, capabilitiesRouter)
 app.use('/api/modules', authToken, modulesRouter)
 
 app.use(notFoundHandler)
