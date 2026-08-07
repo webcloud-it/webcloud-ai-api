@@ -60,6 +60,18 @@ const CAPABILITIES = [
       'Riepilogo, ricerca, stato, connettività, monitoraggio, hardware, downtime e dettagli delle webcam.',
   },
   {
+    id: 'facile.webcamgo.control',
+    version: 1,
+    moduleId: 'facile.webcamgo',
+    domain: 'webcamgo',
+    credential: 'webcamgo',
+    mode: 'write',
+    risk: 'high',
+    confirmation: 'required',
+    title: 'Controllo sicuro WebcamGo',
+    description: 'Prepara e conferma operazioni tecniche sulle webcam, inclusi riavvio controllato e movimento verso preset PTZ.',
+  },
+  {
     id: 'facile.sendinitaly.read',
     version: 1,
     moduleId: 'facile.sendinitaly',

@@ -16,8 +16,8 @@ function isConnectionError(error) {
   return ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'].includes(code)
 }
 
-export async function callOllamaChat({messages, timeoutMs = null}) {
-  const model = process.env.OLLAMA_CHAT_MODEL || process.env.OPENAI_CHAT_MODEL || 'mistral'
+export async function callOllamaChat({messages, timeoutMs = null, format = null, options = null}) {
+  const model = process.env.OLLAMA_CHAT_MODEL || 'mistral:latest'
   const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
   const resolvedTimeoutMs = Number(timeoutMs || process.env.OLLAMA_TIMEOUT_MS || 20000)
 
@@ -37,6 +37,8 @@ export async function callOllamaChat({messages, timeoutMs = null}) {
         model,
         stream: false,
         messages,
+        ...(format ? {format} : {}),
+        ...(options ? {options} : {}),
       }),
     })
 
@@ -76,5 +78,26 @@ export async function callOllamaChat({messages, timeoutMs = null}) {
     })
   } finally {
     clearTimeout(timeout)
+  }
+}
+
+export async function callOllamaJson({messages, timeoutMs = null, options = {temperature: 0}} = {}) {
+  const content = await callOllamaChat({
+    messages,
+    timeoutMs,
+    format: 'json',
+    options,
+  })
+
+  const jsonText = String(content || '').trim().match(/\{[\s\S]*\}/)?.[0]
+
+  if (!jsonText) {
+    throw new OllamaProviderError('Ollama non ha restituito un JSON valido')
+  }
+
+  try {
+    return JSON.parse(jsonText)
+  } catch (cause) {
+    throw new OllamaProviderError('Ollama ha restituito JSON non valido', {cause})
   }
 }

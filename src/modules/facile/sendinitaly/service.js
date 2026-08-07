@@ -74,3 +74,42 @@ export async function getUsers({token, page = 1, limit = 20, search = '', plan =
   )
 }
 
+export async function getUserPlans({token} = {}) {
+  requireConfiguration()
+  requireToken(token)
+  return fetchJson(
+    joinUrl(env.sendInItalyApiBaseUrl, '/facile/users/plans'),
+    {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
+    'Errore recupero piani Send in Italy'
+  )
+}
+
+export async function getUser({token, userId} = {}) {
+  requireConfiguration()
+  requireToken(token)
+  if (!userId) {
+    const error = new Error('Utente Send in Italy mancante')
+    error.statusCode = 400
+    throw error
+  }
+  return fetchJson(
+    joinUrl(env.sendInItalyApiBaseUrl, `/facile/users/${encodeURIComponent(String(userId))}`),
+    {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
+    'Errore recupero dettaglio utente Send in Italy'
+  )
+}
+
+export async function getUserDnsStatus({token, userId, domain} = {}) {
+  requireConfiguration()
+  requireToken(token)
+  if (!userId || !domain) {
+    const error = new Error('Utente e dominio obbligatori per la verifica DNS')
+    error.statusCode = 400
+    throw error
+  }
+  return fetchJson(
+    joinUrl(env.sendInItalyApiBaseUrl, withQuery(`/facile/users/${encodeURIComponent(String(userId))}/cloudflare-dns-status`, {domain})),
+    {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
+    'Errore verifica DNS Send in Italy'
+  )
+}

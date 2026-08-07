@@ -404,3 +404,153 @@ export async function getWebcams({token, slug = null} = {}) {
     return normalizeWebcam(webcam, schedulesByWebcamId.get(String(webcam.id)) || [])
   })
 }
+
+async function getWebcamControlTarget({token, webcamId} = {}) {
+  requireWebcamgoConfiguration()
+  requireToken(token)
+
+  const params = new URLSearchParams()
+  params.set('fields', [
+    'id',
+    'name',
+    'slug',
+    'webcam_details_id.webcam_access_id.host',
+    'webcam_details_id.webcam_access_id.http_port',
+    'webcam_details_id.webcam_access_id.user',
+    'webcam_details_id.webcam_access_id.password',
+    'webcam_details_id.webcam_hardware_id.webcam_models_id.webcam_brands_id.name',
+  ].join(','))
+  params.set('filter[id][_eq]', String(webcamId))
+  params.set('limit', '1')
+
+  const targetJson = await fetchJson(
+    joinUrl(env.webcamgoDirectusBaseUrl, `/items/webcams2?${params.toString()}`),
+    {headers: authHeaders(token), timeoutMs: DEFAULT_TIMEOUT_MS},
+    'Errore recupero accesso webcam'
+  )
+
+  const webcam = targetJson?.data?.[0]
+  const access = webcam?.webcam_details_id?.webcam_access_id
+  if (!webcam || !access?.host || !access?.user || !access?.password) {
+    const error = new Error('Webcam non trovata o credenziali tecniche incomplete')
+    error.statusCode = 409
+    throw error
+  }
+
+  return {
+    id: webcam.id,
+    name: webcam.name,
+    slug: webcam.slug,
+    ip: access.host,
+    port: access.http_port || 80,
+    user: access.user,
+    pass: access.password,
+    brand: webcam?.webcam_details_id?.webcam_hardware_id?.webcam_models_id?.webcam_brands_id?.name || '',
+  }
+}
+
+async function callControlApi(path, body, errorMessage) {
+  if (!env.webcamgoControlApiBaseUrl) {
+    const error = new Error('WEBCAMGO_CONTROL_API_BASE_URL non configurato')
+    error.statusCode = 503
+    throw error
+  }
+
+  const headers = {'Content-Type': 'application/json'}
+  if (env.webcamgoControlApiKey) headers['x-api-key'] = env.webcamgoControlApiKey
+
+  return fetchJson(
+    joinUrl(env.webcamgoControlApiBaseUrl, path),
+    {
+      method: 'POST',
+      headers,
+      timeoutMs: 20000,
+      body: JSON.stringify(body),
+    },
+    errorMessage
+  )
+}
+
+export async function inspectWebcamDevice({token, webcamId} = {}) {
+  const target = await getWebcamControlTarget({token, webcamId})
+  const result = await callControlApi(
+    `/v1/webcams/${encodeURIComponent(target.id)}/onvif/device-info`,
+    {ip: target.ip, port: target.port, user: target.user, pass: target.pass},
+    'Errore diagnostica ONVIF webcam'
+  )
+
+  return {
+    ok: result?.ok !== false,
+    webcam: {id: target.id, name: target.name, slug: target.slug},
+    modelNumber: result?.model_number || null,
+    firmwareVersion: result?.firmware_version || null,
+    serialNumber: result?.serial_number || null,
+    onvifVersion: result?.onvif_version || null,
+  }
+}
+
+export async function inspectWebcamConnectivity({token, webcamId} = {}) {
+  const target = await getWebcamControlTarget({token, webcamId})
+  const result = await callControlApi(
+    '/v1/connectivity/check',
+    {target: target.ip, port: target.port, timeoutMs: 5000},
+    'Errore test connettività webcam'
+  )
+
+  return {
+    ok: result?.ok !== false,
+    webcam: {id: target.id, name: target.name, slug: target.slug},
+    reachable: result?.reachable === true,
+    port: target.port,
+  }
+}
+
+export async function getWebcamPresets({token, webcamId} = {}) {
+  const target = await getWebcamControlTarget({token, webcamId})
+  const result = await callControlApi(
+    `/v1/webcams/${encodeURIComponent(target.id)}/onvif/presets`,
+    {ip: target.ip, port: target.port, user: target.user, pass: target.pass},
+    'Errore lettura preset webcam'
+  )
+
+  return {
+    ok: result?.ok !== false,
+    webcam: {id: target.id, name: target.name, slug: target.slug},
+    presets: Array.isArray(result?.data)
+      ? result.data.map(item => ({token: String(item.token), name: item.name || null}))
+      : [],
+  }
+}
+
+export async function gotoWebcamPreset({token, webcamId, presetToken} = {}) {
+  if (presetToken == null || String(presetToken).trim() === '') {
+    const error = new Error('Preset webcam mancante')
+    error.statusCode = 400
+    throw error
+  }
+  const target = await getWebcamControlTarget({token, webcamId})
+  const result = await callControlApi(
+    `/v1/webcams/${encodeURIComponent(target.id)}/onvif/presets/goto`,
+    {ip: target.ip, port: target.port, user: target.user, pass: target.pass, token: String(presetToken), brand: target.brand},
+    'Errore movimento webcam verso preset'
+  )
+
+  return {ok: result?.ok !== false, via: result?.via || null}
+}
+
+export async function rebootWebcam({token, webcamId} = {}) {
+  const target = await getWebcamControlTarget({token, webcamId})
+  const result = await callControlApi(
+    `/v1/webcams/${encodeURIComponent(target.id)}/reboot`,
+    {
+      ip: target.ip,
+      port: target.port,
+      user: target.user,
+      pass: target.pass,
+      brand: target.brand,
+    },
+    'Errore riavvio webcam'
+  )
+
+  return {ok: result?.ok !== false, via: result?.via || null}
+}

@@ -6,6 +6,7 @@ import {
   parseListQuery,
 } from './queries.js'
 import {getWebcams} from './service.js'
+import {handleWebcamgoOperation} from './operations.js'
 
 export async function summary(req, res) {
   const webcams = await getWebcams({token: req.auth.token})
@@ -49,7 +50,14 @@ export async function chat(req, res) {
   const webcams = await getWebcams({token: req.auth.token})
   const dataLoadMs = Date.now() - dataLoadStartedAt
 
-  const result = handleWebcamgoChat({
+  const operationResult = await handleWebcamgoOperation({
+    message: String(message).trim(),
+    history: Array.isArray(history) ? history : [],
+    webcams,
+    token: req.auth.token,
+  })
+
+  const result = operationResult || handleWebcamgoChat({
     message: String(message).trim(),
     history: Array.isArray(history) ? history : [],
     webcams,

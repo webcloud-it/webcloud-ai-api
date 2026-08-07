@@ -18,6 +18,8 @@ export const env = {
 
   webcamgoDirectusBaseUrl: process.env.WEBCAMGO_DIRECTUS_BASE_URL,
   webcamgoFetchTimeoutMs: Number(process.env.WEBCAMGO_FETCH_TIMEOUT_MS || 15000),
+  webcamgoControlApiBaseUrl: process.env.WEBCAMGO_CONTROL_API_BASE_URL,
+  webcamgoControlApiKey: process.env.WEBCAMGO_CONTROL_API_KEY,
 
   sendInItalyApiBaseUrl:
     process.env.SENDINITALY_API_BASE_URL ||

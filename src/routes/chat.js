@@ -10,6 +10,8 @@ import {
   buildUnavailableModuleResponse,
   resolveGlobalChatPlan,
 } from '../core/orchestrator/globalChat.js'
+import {recordChatAudit} from '../core/observability/chatAudit.js'
+import {attachChatPresentation} from '../core/presentation/chatPresentation.js'
 
 const router = express.Router()
 
@@ -17,6 +19,27 @@ router.post(
   '/',
   asyncHandler(async (req, res, next) => {
     const requestedModuleId = req.body?.moduleId || 'facile.renewals'
+    const startedAt = Date.now()
+    const sendJson = res.json.bind(res)
+
+    res.json = rawPayload => {
+      const payload = attachChatPresentation(rawPayload)
+      recordChatAudit({
+        requestId: req.requestId,
+        requestedModuleId,
+        moduleId: payload?.meta?.moduleId || req.body?.moduleId || requestedModuleId,
+        intent: payload?.intent || payload?.meta?.intent || null,
+        ok: payload?.ok === true,
+        source: payload?.source || null,
+        routingSource: payload?.meta?.routingSource || null,
+        durationMs: Date.now() - startedAt,
+        availableCredentials: Object.entries(req.auth?.credentials || {})
+          .filter(([, value]) => Boolean(value))
+          .map(([key]) => key),
+      })
+
+      return sendJson(payload)
+    }
     const isGlobalRequest = ['facile', 'global', 'facile.global'].includes(requestedModuleId)
     const globalPlan = isGlobalRequest
       ? await resolveGlobalChatPlan({

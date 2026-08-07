@@ -1,6 +1,6 @@
 import {buildCapabilitySummary, getAvailableModuleIds} from '../capabilities/catalog.js'
 import {normalizeText} from '../../utils/text.js'
-import {callOllamaChat} from '../providers/ollamaProvider.js'
+import {callOllamaJson} from '../providers/ollamaProvider.js'
 
 const DOMAIN_PATTERNS = {
   'facile.businesshours': [
@@ -173,7 +173,7 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   return {type: 'module', moduleId, source}
 }
 
-export async function resolveGlobalChatPlan(options = {}, callModel = callOllamaChat) {
+export async function resolveGlobalChatPlan(options = {}, callModel = callOllamaJson) {
   const deterministicPlan = planGlobalChat(options)
 
   if (deterministicPlan.type !== 'clarification') {
@@ -192,8 +192,8 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
   }
 
   try {
-    const raw = await callModel({
-      timeoutMs: 8000,
+    const semantic = await callModel({
+      timeoutMs: Number(process.env.OLLAMA_ROUTER_TIMEOUT_MS || 15000),
       messages: [
         {
           role: 'system',
@@ -205,7 +205,7 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
             'facile.sendinitaly riguarda newsletter, campagne email, invii, statistiche, mittenti e utenti Send in Italy.',
             'facile.businesshours riguarda orari, aperture e chiusure dei minisiti.',
             'Se la richiesta non permette una scelta affidabile restituisci moduleId null.',
-            'Rispondi solo con JSON: {"moduleId": string|null, "confidence": number}.',
+            'Restituisci moduleId e confidence come JSON.',
           ].join(' '),
         },
         {
@@ -214,8 +214,6 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
         },
       ],
     })
-
-    const semantic = parseSemanticPlan(raw)
 
     if (
       semantic &&
@@ -235,24 +233,6 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
   }
 
   return deterministicPlan
-}
-
-function parseSemanticPlan(value = '') {
-  const text = String(value || '').trim()
-  const jsonText = text.match(/\{[\s\S]*\}/)?.[0]
-  if (!jsonText) return null
-
-  try {
-    const parsed = JSON.parse(jsonText)
-    const confidence = Number(parsed?.confidence)
-
-    return {
-      moduleId: typeof parsed?.moduleId === 'string' ? parsed.moduleId : null,
-      confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
-    }
-  } catch (_) {
-    return null
-  }
 }
 
 export function buildGlobalGreetingResponse({credentials = {}} = {}) {

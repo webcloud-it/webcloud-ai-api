@@ -8,6 +8,7 @@ import chatRouter from './routes/chat.js'
 import modulesRouter from './routes/modules.js'
 import capabilitiesRouter from './routes/capabilities.js'
 import {authToken} from './middlewares/authToken.js'
+import {attachRequestId} from './core/observability/chatAudit.js'
 
 const app = express()
 
@@ -27,7 +28,7 @@ app.get('/health', (req, res) => {
   })
 })
 
-app.use('/api/chat', authToken, chatRouter)
+app.use('/api/chat', attachRequestId, authToken, chatRouter)
 app.use('/api/capabilities', authToken, capabilitiesRouter)
 app.use('/api/modules', authToken, modulesRouter)
 

@@ -125,7 +125,7 @@ test('an unsupported named domain takes precedence over a generic capability que
 test('semantic router may select only an available catalog module', async () => {
   const plan = await resolveGlobalChatPlan(
     {message: 'Controlla se qualcosa non sta trasmettendo', credentials},
-    async () => '{"moduleId":"facile.webcamgo","confidence":0.91}'
+    async () => ({moduleId: 'facile.webcamgo', confidence: 0.91})
   )
 
   assert.equal(plan.type, 'module')
@@ -136,7 +136,7 @@ test('semantic router may select only an available catalog module', async () => 
 test('semantic router rejects invented or unavailable modules', async () => {
   const plan = await resolveGlobalChatPlan(
     {message: 'Controlla la situazione', credentials},
-    async () => '{"moduleId":"facile.invented","confidence":0.99}'
+    async () => ({moduleId: 'facile.invented', confidence: 0.99})
   )
 
   assert.equal(plan.type, 'clarification')
