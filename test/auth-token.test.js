@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import {createAuthTokenMiddleware} from '../src/middlewares/authToken.js'
+import {createAuthTokenMiddleware, validateCrmCredential} from '../src/middlewares/authToken.js'
 
 function responseRecorder() {
   return {
@@ -50,6 +50,26 @@ test('valida la sessione CRM prima di abilitare i privilegi server-side', async 
   assert.equal(request.auth.principal.id, 'user-1')
   assert.equal(request.auth.credentials.crm, 'crm-user-token')
   assert.equal(continued, true)
+})
+
+test('valida utenti Directus senza richiedere la lettura del nome ruolo', async () => {
+  let requestedUrl = null
+  const principal = await validateCrmCredential('user-token-with-string-role', {
+    fetchImpl: async url => {
+      requestedUrl = url
+      return {
+        ok: true,
+        json: async () => ({
+          data: {id: 'user-2', status: 'active', role: 'role-operator'},
+        }),
+      }
+    },
+  })
+
+  assert.match(requestedUrl, /fields=id,status,role$/)
+  assert.equal(principal.id, 'user-2')
+  assert.equal(principal.roleId, 'role-operator')
+  assert.equal(principal.roleName, null)
 })
 
 test('rifiuta una credenziale CRM non valida', async () => {

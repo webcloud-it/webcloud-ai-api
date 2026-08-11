@@ -35,7 +35,7 @@ export async function validateCrmCredential(token, {fetchImpl = fetch} = {}) {
 
   try {
     const response = await fetchImpl(
-      joinUrl(env.crmDirectusBaseUrl, '/users/me?fields=id,email,status,role.id,role.name'),
+      joinUrl(env.crmDirectusBaseUrl, '/users/me?fields=id,status,role'),
       {
         headers: {Authorization: `Bearer ${token}`, Accept: 'application/json'},
         signal: controller.signal,
@@ -47,13 +47,21 @@ export async function validateCrmCredential(token, {fetchImpl = fetch} = {}) {
     const payload = await response.json()
     const user = payload?.data
     if (!user?.id || (user.status && user.status !== 'active')) return null
-    const roleId = user.role?.id ? String(user.role.id) : null
+    const roleId =
+      typeof user.role === 'string'
+        ? user.role
+        : user.role?.id
+          ? String(user.role.id)
+          : null
     if (env.allowedCrmRoleIds.length && !env.allowedCrmRoleIds.includes(roleId)) return null
 
     const principal = {
       id: String(user.id),
       roleId,
-      roleName: typeof user.role?.name === 'string' ? user.role.name : null,
+      roleName:
+        typeof user.role === 'object' && typeof user.role?.name === 'string'
+          ? user.role.name
+          : null,
       source: 'crm',
     }
 
