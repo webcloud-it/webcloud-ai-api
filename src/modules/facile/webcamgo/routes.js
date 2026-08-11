@@ -40,7 +40,7 @@ export async function chatContext(req, res) {
 
 export async function chat(req, res) {
   const startedAt = Date.now()
-  const {message, history = []} = req.body || {}
+  const {message, context = {}, history = []} = req.body || {}
 
   if (!message || String(message).trim().length < 2) {
     throw httpError(400, 'message obbligatorio, minimo 2 caratteri')
@@ -55,12 +55,14 @@ export async function chat(req, res) {
     history: Array.isArray(history) ? history : [],
     webcams,
     token: req.auth.token,
+    context,
   })
 
   const result = operationResult || handleWebcamgoChat({
     message: String(message).trim(),
     history: Array.isArray(history) ? history : [],
     webcams,
+    context,
   })
 
   res.json({

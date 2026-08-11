@@ -6,6 +6,7 @@ import {
   getCapabilityCatalog,
 } from '../src/core/capabilities/catalog.js'
 import {planGlobalChat, resolveGlobalChatPlan} from '../src/core/orchestrator/globalChat.js'
+import {contextualizeRenewalsMessage, getContextScope} from '../src/core/context/pageContext.js'
 
 const credentials = {crm: 'crm-token', webcamgo: 'webcamgo-token'}
 
@@ -124,6 +125,56 @@ test('global planner uses the active section for ambiguous business entities', (
   })
   assert.equal(renewalsPlan.moduleId, 'facile.renewals')
   assert.equal(renewalsPlan.source, 'context')
+})
+
+test('global planner gives local entity details precedence over ambiguous names', () => {
+  const plan = planGlobalChat({
+    message: 'dettagli di Asiago Piazza Carli',
+    context: {
+      section: 'webcamgo',
+      path: '/webcamgo/webcams/asiago-piazza-carli',
+      activeEntity: {type: 'webcam', slug: 'asiago-piazza-carli'},
+    },
+    credentials: {...credentials, cmsAsiagoIt: 'cms-token'},
+  })
+
+  assert.equal(plan.moduleId, 'facile.webcamgo')
+  assert.equal(plan.source, 'active-entity')
+})
+
+test('global planner still honors an explicit foreign-domain request from an entity page', () => {
+  const plan = planGlobalChat({
+    message: 'mostrami i prossimi eventi di Asiago',
+    context: {activeEntity: {type: 'webcam', slug: 'asiago-piazza-carli'}},
+    credentials: {...credentials, cmsAsiagoIt: 'cms-token'},
+  })
+
+  assert.equal(plan.moduleId, 'facile.asiago')
+  assert.equal(plan.source, 'message')
+})
+
+test('renewals scope accepts the typed active entity and legacy route query', () => {
+  assert.deepEqual(
+    getContextScope({activeEntity: {type: 'service', id: 'service-42'}}),
+    {customerId: null, groupId: null, serviceId: 'service-42', webcamSlug: null}
+  )
+  assert.equal(getContextScope({query: {customerId: 'customer-7'}}).customerId, 'customer-7')
+})
+
+test('renewals contextual follow-ups are grounded to the active service', () => {
+  const scope = {serviceId: 'service-42'}
+  assert.equal(
+    contextualizeRenewalsMessage('mostrami i dettagli', scope),
+    'dettagli del servizio service-42'
+  )
+  assert.equal(
+    contextualizeRenewalsMessage('e la scadenza?', scope),
+    'qual è la scadenza cliente del servizio service-42'
+  )
+  assert.equal(
+    contextualizeRenewalsMessage('rinnova questo servizio', scope),
+    'rinnova questo servizio'
+  )
 })
 
 test('global planner routes Cloudflare to the Webcloud tools module', () => {

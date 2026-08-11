@@ -83,6 +83,19 @@ function cleanTerm(value = '') {
     .trim()
 }
 
+function cleanWebcamTarget(value = '') {
+  let target = cleanTerm(value)
+
+  const prefix = /^(?:(?:di|del|della|su|sulla|per)\s+)?(?:(?:questa|quella|la|il|una)\s+)?(?:webcam|telecamera)\s*/i
+  for (let pass = 0; pass < 3; pass += 1) {
+    const next = target.replace(prefix, '').trim()
+    if (next === target) break
+    target = next
+  }
+
+  return /^(?:questa|quella|la|il|essa|questa\s+qui)$/i.test(target) ? '' : target
+}
+
 function stripKnownFilterTail(value = '') {
   return cleanTerm(value)
     .replace(
@@ -642,16 +655,25 @@ export function buildWebcamDetailPayload({webcams = [], target = null} = {}) {
 export function extractDetailTarget(message = '') {
   const quoted = String(message || '').match(/["“”']([^"“”']{2,})["“”']/)
 
-  if (quoted?.[1]) return cleanTerm(quoted[1])
+  if (quoted?.[1]) return cleanWebcamTarget(quoted[1])
 
   const match = String(message || '').match(
-    /\b(?:dettagli|dettaglio|scheda|informazioni|info|approfondisci|analizza|controlla|verifica)\s+(?:di|su|della|del|per)?\s*(.+)$/i
+    /\b(?:dettagli|dettaglio|scheda|informazioni|info|stat[oi]|situazione|come\s+sta|approfondisci|analizza|controlla|verifica)\s+(?:di|su|della|del|per)?\s*(.+)$/i
   )
 
-  return cleanTerm(match?.[1]) || extractEntityTarget(message) || null
+  const statusSubject = String(message || '').match(
+    /\b(?:stream|snapshot|connettivit[aà]|router|mikrotik)\b[\s\S]*?\b(?:di|della|del|su|sulla)\s+(.+)$/i
+  )
+
+  return (
+    cleanWebcamTarget(match?.[1]) ||
+    cleanWebcamTarget(statusSubject?.[1]) ||
+    cleanWebcamTarget(extractEntityTarget(message)) ||
+    null
+  )
 }
 
-export function detectIntent(message = '', {previousList = null} = {}) {
+export function detectIntent(message = '', {previousList = null, hasActiveEntity = false} = {}) {
   const text = normalizeSearchText(message)
 
   if (/^(ciao|buongiorno|buonasera|salve|hey|ehi)\b/i.test(text)) return 'greeting'
@@ -670,7 +692,15 @@ export function detectIntent(message = '', {previousList = null} = {}) {
   if (isOpenEntityRequest(message)) return 'webcam-open'
 
   if (
-    /\b(dettagli|dettaglio|scheda|informazioni|info|approfondisci|analizza|controlla|verifica)\b/i.test(
+    hasActiveEntity &&
+    /\b(?:stream|snapshot|connettivit[aà]|router|mikrotik|vpn|encoding|hardware|monitoraggio|downtime)\b/i.test(text) &&
+    !/\b(?:quali|elenca|elencami|lista|tutte|tutti|webcam\s+(?:con|che))\b/i.test(text)
+  ) {
+    return 'webcam-detail'
+  }
+
+  if (
+    /\b(dettagli|dettaglio|scheda|informazioni|info|stat[oi]|come\s+sta|funziona|problemi?|approfondisci|analizza|controlla|verifica)\b/i.test(
       text
     )
   ) {

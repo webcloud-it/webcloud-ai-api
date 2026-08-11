@@ -1,6 +1,7 @@
 import {buildCapabilitySummary, getAvailableModuleIds} from '../capabilities/catalog.js'
 import {normalizeSearchText, normalizeText} from '../../utils/text.js'
 import {callOllamaJson} from '../providers/ollamaProvider.js'
+import {getEntityModuleId} from '../context/pageContext.js'
 
 const DOMAIN_PATTERNS = {
   'facile.webcloud': [
@@ -142,6 +143,28 @@ function scoreModules(message = '') {
     .sort((a, b) => b.score - a.score)
 }
 
+const LOCAL_ENTITY_REQUEST = /\b(?:dettagli?|informazioni?|info|scheda|stat[oi]|situazione|come\s+(?:sta|stanno)|funziona|problemi?|controlla|verifica|analizza|apri|mostra(?:mi)?|questa?|questo|corrente|attuale)\b/i
+
+const STRONG_DOMAIN_PATTERNS = {
+  'facile.webcamgo': /\b(?:webcamgo|webcam|telecamer[ae]|snapshot|stream|ptz|mikrotik)\b/i,
+  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|plesk|fattur|non\s+rinnovare)\b/i,
+  'facile.sendinitaly': /\b(?:send\s*in\s*italy|newsletter|campagn[ae]|postal|mittent[ei])\b/i,
+  'facile.businesshours': /\b(?:orari|apertur[aeo]|chiusur[aeo]|apre|chiude)\b/i,
+  'facile.asiago': /\b(?:cms|event[oi]|manifestazion[ei]|minisit[oi]|contenut[oi]|articol[oi]|bollettino|listini?|redirects?)\b/i,
+  'facile.webcloud': /\b(?:assets?|wam|cloudflare|cache|festivit[aà]|ferie|malatti[ae]|automazion[ei]|mattemation|workflow|chatbot)\b/i,
+}
+
+function moduleFromActiveEntityRequest(message = '', context = {}) {
+  const entityModuleId = getEntityModuleId(context)
+  if (!entityModuleId || !LOCAL_ENTITY_REQUEST.test(message)) return null
+
+  const hasForeignDomain = Object.entries(STRONG_DOMAIN_PATTERNS).some(([moduleId, pattern]) => {
+    return moduleId !== entityModuleId && pattern.test(message)
+  })
+
+  return hasForeignDomain ? null : entityModuleId
+}
+
 export function planGlobalChat({message = '', context = {}, history = [], credentials = {}} = {}) {
   const availableModuleIds = getAvailableModuleIds({credentials})
   const text = normalizeText(message)
@@ -160,6 +183,7 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
     return {type: 'greeting'}
   }
 
+  const entityModuleId = moduleFromActiveEntityRequest(text, context)
   const scores = scoreModules(text)
   const best = scores[0]
   const second = scores[1]
@@ -167,7 +191,10 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   let moduleId = null
   let source = null
 
-  if (best?.score > 0 && best.score > (second?.score || 0)) {
+  if (entityModuleId) {
+    moduleId = entityModuleId
+    source = 'active-entity'
+  } else if (best?.score > 0 && best.score > (second?.score || 0)) {
     moduleId = best.moduleId
     source = 'message'
   } else {

@@ -62,6 +62,17 @@ test('ambiguous webcam reboot asks for an exact target', async () => {
   assert.equal(result.data.reason, 'webcam-ambiguous')
 })
 
+test('webcam operations resolve pronouns from the active page entity', async () => {
+  const result = await handleWebcamgoOperation({
+    message: 'Riavvia questa webcam',
+    context: {activeEntity: {type: 'webcam', slug: 'piazza-centrale'}},
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-reboot-preview')
+  assert.equal(result.data.target.id, 'cam-1')
+})
+
 test('webcam device diagnostics return only sanitized information', async () => {
   let inspected = null
   const result = await handleWebcamgoOperation({

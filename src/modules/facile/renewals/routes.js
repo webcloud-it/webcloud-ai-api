@@ -36,6 +36,7 @@ import {
 import {buildChatContextFromSnapshots} from './context.js'
 import {handleRenewalsChat} from './chat.js'
 import {httpError} from '../../../utils/httpError.js'
+import {contextualizeRenewalsMessage, getContextScope} from '../../../core/context/pageContext.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 import {planReadQuery} from './readQueryPlanner.js'
@@ -501,7 +502,7 @@ async function verifyOperationResult(result) {
 export async function chat(req, res) {
   const startedAt = Date.now()
   const {
-    message,
+    message: rawMessage,
     context = {},
     customerId = null,
     groupId = null,
@@ -509,9 +510,15 @@ export async function chat(req, res) {
     action = null,
   } = req.body || {}
 
-  const resolvedCustomerId = context.customerId || customerId || null
-  const resolvedGroupId = context.groupId || groupId || null
-  const resolvedServiceId = context.serviceId || null
+  const contextScope = getContextScope(context)
+  const resolvedCustomerId = contextScope.customerId || customerId || null
+  const resolvedGroupId = contextScope.groupId || groupId || null
+  const resolvedServiceId = contextScope.serviceId || null
+  const message = contextualizeRenewalsMessage(rawMessage, {
+    customerId: resolvedCustomerId,
+    groupId: resolvedGroupId,
+    serviceId: resolvedServiceId,
+  })
 
   if (action) {
     const fullRenewalResult = hasFullRenewalExecutionProposal(action?.actionId)

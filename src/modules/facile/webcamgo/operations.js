@@ -1,5 +1,6 @@
 import {createHash, randomUUID} from 'node:crypto'
 import {getWebcamPresets, gotoWebcamPreset, inspectWebcamConnectivity, inspectWebcamDevice, rebootWebcam} from './service.js'
+import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 
 const proposals = new Map()
 const PROPOSAL_TTL_MS = 10 * 60 * 1000
@@ -67,7 +68,13 @@ function resolveTarget(webcams = [], target = '') {
   return {status: partial.length > 1 ? 'ambiguous' : 'not-found', items: partial.slice(0, 8)}
 }
 
-export async function handleWebcamgoOperation({message, history = [], webcams = [], token, executeReboot = rebootWebcam, executeInspect = inspectWebcamDevice, executeConnectivity = inspectWebcamConnectivity, executePresets = getWebcamPresets, executeGotoPreset = gotoWebcamPreset} = {}) {
+function withContextTarget(target, context = {}) {
+  const normalized = String(target || '').trim()
+  const isPronoun = /^(?:questa|quella|essa|la|questa\s+webcam|quella\s+webcam|webcam\s+corrente)$/i.test(normalized)
+  return !normalized || isPronoun ? getContextEntityTarget(context, 'webcam') : normalized
+}
+
+export async function handleWebcamgoOperation({message, context = {}, history = [], webcams = [], token, executeReboot = rebootWebcam, executeInspect = inspectWebcamDevice, executeConnectivity = inspectWebcamConnectivity, executePresets = getWebcamPresets, executeGotoPreset = gotoWebcamPreset} = {}) {
   const proposalToken = findProposalToken(history)
 
   if (proposalToken && (isConfirmation(message) || isCancellation(message))) {
@@ -115,7 +122,7 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
 
   const presetMove = extractPresetMoveRequest(message)
   if (presetMove) {
-    const resolved = resolveTarget(webcams, presetMove.target)
+    const resolved = resolveTarget(webcams, withContextTarget(presetMove.target, context))
     if (resolved.status !== 'resolved') return response('clarification', `Non riesco a identificare una sola webcam per “${presetMove.target}”. Indica nome o slug esatto.`, {type: 'clarification', reason: `webcam-${resolved.status}`})
     let presetResult
     try {
@@ -146,10 +153,11 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
   }
 
   if (/\b(test|verifica|controlla)\s+(?:la\s+)?(?:connettivit[aà]|raggiungibilit[aà])/i.test(String(message || ''))) {
-    const target = String(message)
+    const extractedTarget = String(message)
       .replace(/connettivit[aà]|raggiungibilit[aà]/gi, ' ')
       .replace(/\b(?:test|verifica|controlla|la|della|del|di|su|per|webcam)\b/gi, ' ')
       .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+    const target = withContextTarget(extractedTarget, context)
     if (!target) return response('clarification', 'Di quale webcam vuoi verificare la connettività live?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)
     if (resolved.status !== 'resolved') return response('clarification', `Non riesco a identificare una sola webcam per “${target}”. Indica nome o slug esatto.`, {type: 'clarification', reason: `webcam-${resolved.status}`})
@@ -158,9 +166,10 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
   }
 
   if (/\b(mostra|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(String(message || ''))) {
-    const target = String(message)
+    const extractedTarget = String(message)
       .replace(/\b(?:mostra|apri|visualizza|fammi|vedere|lo|la|il|uno|una|snapshot|fotogramma|immagine|corrente|della|del|di|su|per|webcam)\b/gi, ' ')
       .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+    const target = withContextTarget(extractedTarget, context)
     if (!target) return response('clarification', 'Di quale webcam vuoi aprire lo snapshot?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)
     if (resolved.status !== 'resolved') return response('clarification', `Non riesco a identificare una sola webcam per “${target}”. Indica nome o slug esatto.`, {type: 'clarification', reason: `webcam-${resolved.status}`})
@@ -174,9 +183,10 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
   }
 
   if (/\b(elenca|mostra|quali|leggi)\b[\s\S]*\bpreset\b/i.test(String(message || ''))) {
-    const target = String(message)
+    const extractedTarget = String(message)
       .replace(/\b(?:elenca|mostra|quali|leggi|sono|i|gli|le|preset|disponibili|della|del|di|su|per|webcam)\b/gi, ' ')
       .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+    const target = withContextTarget(extractedTarget, context)
     if (!target) return response('clarification', 'Di quale webcam vuoi leggere i preset?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)
     if (resolved.status !== 'resolved') return response('clarification', `Non riesco a identificare una sola webcam per “${target}”. Indica nome o slug esatto.`, {type: 'clarification', reason: `webcam-${resolved.status}`})
@@ -200,7 +210,7 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
   }
 
   if (/\b(diagnostic[ao]|onvif|firmware|seriale|info(?:rmazioni)?\s+dispositivo|device\s+info)\b/i.test(String(message || ''))) {
-    const target = extractDiagnosticTarget(message)
+    const target = withContextTarget(extractDiagnosticTarget(message), context)
     if (!target) return response('clarification', 'Di quale webcam vuoi leggere la diagnostica ONVIF?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)
     if (resolved.status !== 'resolved') {
@@ -219,7 +229,7 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
   }
 
   if (!/\b(riavvia|reboot)\b/i.test(String(message || ''))) return null
-  const target = extractRebootTarget(message)
+  const target = withContextTarget(extractRebootTarget(message), context)
   if (!target) return response('clarification', 'Quale webcam vuoi riavviare? Indica nome o slug.', {type: 'clarification', reason: 'missing-webcam-target'})
   const resolved = resolveTarget(webcams, target)
   if (resolved.status !== 'resolved') {

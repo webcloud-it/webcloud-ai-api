@@ -77,3 +77,36 @@ test('non apre una webcam se non esiste una corrispondenza affidabile', () => {
   assert.equal(result.intent, 'webcam-open-not-found')
   assert.equal(result.data.type, 'webcam-detail-not-found')
 })
+
+test('interpreta gli stati di una webcam come dettaglio e ripulisce il nome entità', () => {
+  const result = handleWebcamgoChat({
+    message: 'stati della webcam Asiago Piazza Carli',
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-detail')
+  assert.equal(result.data.item.id, 'cam-2')
+  assert.match(result.reply, /Stream: online/)
+  assert.match(result.reply, /Snapshot: online/)
+})
+
+test('usa la webcam della pagina per richieste implicite e follow-up tecnici', () => {
+  const context = {activeEntity: {type: 'webcam', slug: 'asiago-piazza-carli'}}
+
+  for (const message of ['mostrami gli stati', 'e lo snapshot?', 'il router funziona?']) {
+    const result = handleWebcamgoChat({message, context, webcams})
+    assert.equal(result.intent, 'webcam-detail', message)
+    assert.equal(result.data.item.id, 'cam-2', message)
+  }
+})
+
+test('apre la webcam corrente con un pronome', () => {
+  const result = handleWebcamgoChat({
+    message: 'aprila',
+    context: {activeEntity: {type: 'webcam', slug: 'le-melette'}},
+    webcams,
+  })
+
+  assert.equal(result.intent, 'app-action')
+  assert.equal(result.data.appAction.path, '/webcamgo/webcams/le-melette')
+})

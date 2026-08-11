@@ -11,10 +11,12 @@ import {
   resolveReference,
 } from './queries.js'
 import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
+import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 
-export function handleWebcamgoChat({message, history = [], webcams = []} = {}) {
+export function handleWebcamgoChat({message, context = {}, history = [], webcams = []} = {}) {
   const previousList = pickPreviousWebcamList(history)
-  const intent = detectIntent(message, {previousList})
+  const contextTarget = getContextEntityTarget(context, 'webcam')
+  const intent = detectIntent(message, {previousList, hasActiveEntity: Boolean(contextTarget)})
   const meta = {
     moduleId: 'facile.webcamgo',
     intent,
@@ -137,7 +139,7 @@ export function handleWebcamgoChat({message, history = [], webcams = []} = {}) {
   }
 
   if (intent === 'webcam-open') {
-    const target = extractDetailTarget(message)
+    const target = extractDetailTarget(message) || contextTarget
 
     if (!target) {
       return clarification(
@@ -151,7 +153,7 @@ export function handleWebcamgoChat({message, history = [], webcams = []} = {}) {
   }
 
   if (intent === 'webcam-detail') {
-    const target = extractDetailTarget(message)
+    const target = extractDetailTarget(message) || contextTarget
 
     if (!target) {
       return clarification(

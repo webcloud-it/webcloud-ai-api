@@ -1,6 +1,6 @@
 import {normalizeComparableText} from '../../utils/text.js'
 
-const OPEN_COMMAND = /\b(?:apri|aprimi|vai\s+(?:a|al|alla|alle|su|sul|sulla)|portami\s+(?:a|al|alla|alle|su|sul|sulla)|entra\s+(?:in|nel|nella)|visualizza)\b/i
+const OPEN_COMMAND = /\b(?:apri(?:mi|la|lo)?|vai\s+(?:a|al|alla|alle|su|sul|sulla)|portami\s+(?:a|al|alla|alle|su|sul|sulla)|entra\s+(?:in|nel|nella)|visualizza)\b/i
 
 export function isOpenEntityRequest(message = '') {
   return OPEN_COMMAND.test(String(message || ''))
@@ -13,7 +13,7 @@ export function extractEntityTarget(message = '') {
   if (quoted?.[1]) return cleanTarget(quoted[1])
 
   const match = original.match(
-    /\b(?:apri|aprimi|vai\s+(?:a|al|alla|alle|su|sul|sulla)|portami\s+(?:a|al|alla|alle|su|sul|sulla)|entra\s+(?:in|nel|nella)|visualizza)\s+(.+)$/i
+    /\b(?:apri(?:mi|la|lo)?|vai\s+(?:a|al|alla|alle|su|sul|sulla)|portami\s+(?:a|al|alla|alle|su|sul|sulla)|entra\s+(?:in|nel|nella)|visualizza)\s*(.*)$/i
   )
 
   return cleanTarget(match?.[1]) || null
