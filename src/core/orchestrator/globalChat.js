@@ -1,13 +1,51 @@
 import {buildCapabilitySummary, getAvailableModuleIds} from '../capabilities/catalog.js'
-import {normalizeText} from '../../utils/text.js'
+import {normalizeSearchText, normalizeText} from '../../utils/text.js'
 import {callOllamaJson} from '../providers/ollamaProvider.js'
 
 const DOMAIN_PATTERNS = {
+  'facile.webcloud': [
+    /\bassets?\b/,
+    /\bwam\b/,
+    /\bimmagin[ei]\b/,
+    /\bcloudflare\b/,
+    /\bcache\b/,
+    /\bbuckets?\b/,
+    /\bfestivita\b/,
+    /\bferie\b/,
+    /\bmalatti[ae]\b/,
+    /\bautomazion[ei]\b/,
+    /\bmattemation\b/,
+    /\bworkflow\b/,
+    /\bchatbot\b/,
+    /\bassistente\s+ai\b/,
+    /\baudit\s+(?:della\s+)?chat\b/,
+    /\berror[ei]\s+(?:della\s+)?chat\b/,
+    /\bpanoramica\s+operativa\b/,
+    /\bstato\s+generale\b/,
+    /\bci\s+sono\s+problemi\b/,
+    /\balerts?\b/,
+  ],
   'facile.businesshours': [
     /\borari\b/,
     /\bapertur[aeo]\b/,
     /\bchiusur[aeo]\b/,
-    /\bminisito\b/,
+    /\bminisit[oi]\b.{0,40}\b(?:orari|apert|chius|apre|chiude)\b/,
+    /\b(?:orari|apert|chius|apre|chiude)\b.{0,40}\bminisit[oi]\b/,
+    /\b(?:quando|a\s+che\s+ora)\b.{0,24}\b(?:apre|chiude)\b/,
+  ],
+  'facile.asiago': [
+    /\basiago(?:\.it)?\b/,
+    /\bcms\b/,
+    /\bevent[oi]\b/,
+    /\bmanifestazion[ei]\b/,
+    /\bminisit[oi]\b/,
+    /\bcontenut[oi]\b/,
+    /\barticol[oi]\b/,
+    /\bbollettino\b/,
+    /\bneve\b/,
+    /\blistini?\b/,
+    /\bredirects?\b/,
+    /\breindirizzament[oi]\b/,
   ],
   'facile.sendinitaly': [
     /\bsend\s*in\s*italy\b/,
@@ -29,7 +67,6 @@ const DOMAIN_PATTERNS = {
     /\brinnov/,
     /\bscadenz/,
     /\bservizi?\b/,
-    /\bclient[ei]\b/,
     /\bgrupp[oi]\b/,
     /\bfornitor/,
     /\bpiani?\b/,
@@ -43,9 +80,6 @@ const HELP_PATTERN = /\b(cosa puoi fare|come puoi aiut|funzioni|capacit[aà]|str
 const GREETING_PATTERN = /^(ciao|salve|buongiorno|buonasera|hey|ehi)(\b|[!,.])/i
 
 const UNSUPPORTED_DOMAINS = [
-  {id: 'asiago', label: 'Asiago.it e CMS', pattern: /\b(asiago(?:\.it)?|cms|eventi|minisiti|bollettino neve)\b/},
-  {id: 'assets', label: 'Assets Manager', pattern: /\b(asset|wam|immagin[ei])\b/},
-  {id: 'cloudflare', label: 'Cloudflare', pattern: /\bcloudflare\b/},
 ]
 
 function moduleFromContext(context = {}) {
@@ -53,7 +87,7 @@ function moduleFromContext(context = {}) {
 
   if (
     explicit &&
-    ['facile.renewals', 'facile.webcamgo', 'facile.sendinitaly', 'facile.businesshours'].includes(explicit)
+    ['facile.renewals', 'facile.webcamgo', 'facile.sendinitaly', 'facile.businesshours', 'facile.asiago', 'facile.webcloud'].includes(explicit)
   ) {
     return explicit
   }
@@ -65,6 +99,8 @@ function moduleFromContext(context = {}) {
   if (section.includes('minisite') && (section.includes('hour') || section.includes('orari'))) {
     return 'facile.businesshours'
   }
+  if (section.includes('asiagoit') || section.includes('cms')) return 'facile.asiago'
+  if (section.includes('/webcloud') || section.includes('assets-manager') || section.includes('cloudflare')) return 'facile.webcloud'
   if (section.includes('renewal') || section.includes('/crm')) return 'facile.renewals'
 
   return null
@@ -73,10 +109,6 @@ function moduleFromContext(context = {}) {
 function unsupportedDomainFromContext(context = {}) {
   const value = normalizeText(`${context.section || ''} ${context.path || ''}`)
 
-  if (/asiagoit|cms/.test(value)) return {id: 'asiago', label: 'Asiago.it e CMS'}
-  if (/assets-manager|wam/.test(value)) return {id: 'assets', label: 'Assets Manager'}
-  if (/cloudflare/.test(value)) return {id: 'cloudflare', label: 'Cloudflare'}
-
   return null
 }
 
@@ -84,7 +116,7 @@ function moduleFromHistory(history = []) {
   for (const item of [...history].reverse()) {
     const moduleId = item?.meta?.moduleId || item?.data?.meta?.moduleId
 
-    if (['facile.renewals', 'facile.webcamgo', 'facile.sendinitaly', 'facile.businesshours'].includes(moduleId)) {
+    if (['facile.renewals', 'facile.webcamgo', 'facile.sendinitaly', 'facile.businesshours', 'facile.asiago', 'facile.webcloud'].includes(moduleId)) {
       return moduleId
     }
 
@@ -92,13 +124,15 @@ function moduleFromHistory(history = []) {
     if (dataType.startsWith('webcam')) return 'facile.webcamgo'
     if (dataType.startsWith('sendinitaly')) return 'facile.sendinitaly'
     if (dataType.startsWith('business-hours')) return 'facile.businesshours'
+    if (dataType.startsWith('asiago-')) return 'facile.asiago'
+    if (dataType.startsWith('webcloud-')) return 'facile.webcloud'
   }
 
   return null
 }
 
 function scoreModules(message = '') {
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   return Object.entries(DOMAIN_PATTERNS)
     .map(([moduleId, patterns]) => ({
@@ -204,6 +238,8 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
             'facile.webcamgo riguarda webcam, stream, snapshot, connettività, monitoraggio, hardware e downtime.',
             'facile.sendinitaly riguarda newsletter, campagne email, invii, statistiche, mittenti e utenti Send in Italy.',
             'facile.businesshours riguarda orari, aperture e chiusure dei minisiti.',
+            'facile.asiago riguarda eventi, articoli, contenuti, CMS e minisiti di Asiago.it.',
+            'facile.webcloud riguarda Assets Manager/WAM, cache Cloudflare, festività e automazioni.',
             'Se la richiesta non permette una scelta affidabile restituisci moduleId null.',
             'Restituisci moduleId e confidence come JSON.',
           ].join(' '),
@@ -256,7 +292,7 @@ export function buildUnsupportedDomainResponse({domain} = {}) {
     ok: true,
     intent: 'unsupported-domain',
     source: 'global',
-    reply: `Ho capito che la richiesta riguarda ${domain?.label || 'un’area Webcloud'}. Quest’area non è ancora collegata al nuovo orchestratore: per ora posso aiutarti con rinnovi/CRM, WebcamGo, Send in Italy e orari dei minisiti. L’integrazione ${domain?.label || ''} è censita come prossimo modulo, quindi non proverò a inventare dati o azioni.`,
+    reply: `Ho capito che la richiesta riguarda ${domain?.label || 'un’area Webcloud'}. Quest’area non è ancora collegata al nuovo orchestratore e non proverò a inventare dati o azioni.`,
     data: {type: 'capability-unavailable', domain: domain?.id || null},
     meta: {moduleId: 'facile', orchestrator: 'global-v1'},
   }
@@ -300,6 +336,8 @@ export function buildGlobalClarificationResponse({availableModuleIds = []} = {})
     if (id === 'facile.webcamgo') return 'WebcamGo'
     if (id === 'facile.sendinitaly') return 'Send in Italy'
     if (id === 'facile.businesshours') return 'orari e aperture dei minisiti'
+    if (id === 'facile.asiago') return 'Asiago.it e CMS'
+    if (id === 'facile.webcloud') return 'strumenti Webcloud'
     return 'rinnovi e CRM'
   })
 
@@ -321,6 +359,10 @@ export function buildUnavailableModuleResponse({moduleId} = {}) {
       ? 'WebcamGo'
       : moduleId === 'facile.sendinitaly'
         ? 'Send in Italy'
+        : moduleId === 'facile.asiago'
+          ? 'Asiago.it e CMS'
+        : moduleId === 'facile.webcloud'
+          ? 'strumenti Webcloud'
         : moduleId === 'facile.businesshours'
           ? 'orari e aperture dei minisiti'
         : 'rinnovi e CRM'

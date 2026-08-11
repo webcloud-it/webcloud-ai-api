@@ -1,4 +1,9 @@
 import {normalizeText} from '../../../utils/text.js'
+import {
+  extractEntityTarget,
+  isOpenEntityRequest,
+  resolveNamedEntity,
+} from '../../../core/entities/entityResolver.js'
 import {getCampaigns, getCampaignStats, getUser, getUserDnsStatus, getUserPlans, getUsers} from './service.js'
 
 function extractQuotedValue(message = '') {
@@ -29,12 +34,22 @@ async function resolveUser({target, token, services}) {
   if (!target) return {status: 'missing'}
   const payload = await services.getUsers({token, search: target, limit: 20})
   const items = Array.isArray(payload?.data) ? payload.data : []
-  const wanted = normalizeText(target)
-  const exact = items.filter(item => [item.id, item.company_name, item.name].some(value => normalizeText(value) === wanted))
-  if (exact.length === 1) return {status: 'resolved', item: exact[0]}
-  const partial = items.filter(item => normalizeText(item.company_name || item.name).includes(wanted))
-  if (partial.length === 1) return {status: 'resolved', item: partial[0]}
-  return {status: (exact.length || partial.length) > 1 ? 'ambiguous' : 'not-found', items: (exact.length ? exact : partial).slice(0, 8)}
+  const resolution = resolveNamedEntity({
+    items,
+    query: target,
+    fields: [
+      {value: 'id', weight: 20},
+      {value: 'company_name', weight: 18},
+      {value: 'name', weight: 16},
+      {value: 'email', weight: 8},
+    ],
+  })
+
+  if (resolution.status === 'resolved') return {status: 'resolved', item: resolution.item}
+  if (resolution.status === 'ambiguous') {
+    return {status: 'ambiguous', items: resolution.candidates.map(candidate => candidate.item)}
+  }
+  return {status: resolution.status === 'missing-target' ? 'missing' : 'not-found', items: []}
 }
 
 function userClarification(resolution, target) {
@@ -149,6 +164,40 @@ function formatStats(payload = {}, mode) {
 export async function handleSendInItalyChat({message, token, services = {getCampaigns, getCampaignStats, getUsers, getUserPlans, getUser, getUserDnsStatus}} = {}) {
   const text = normalizeText(message)
   const search = extractQuotedValue(message)
+
+  if (isOpenEntityRequest(message) && /\b(utent[ei]?|account|azienda|cliente)\b/.test(text)) {
+    const target = extractEntityTarget(message) || extractUserTarget(message)
+    const resolution = await resolveUser({target, token, services})
+
+    if (resolution.status === 'resolved') {
+      const id = resolution.item.id
+      return {
+        ok: true,
+        intent: 'app-action',
+        source: 'tool-fast',
+        reply: `Apro ${resolution.item.company_name || resolution.item.name || 'l’utente selezionato'}.`,
+        data: {
+          type: 'app-action',
+          appAction: {id: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(String(id))}`},
+          entity: {id, name: resolution.item.company_name || resolution.item.name, type: 'sendinitaly-user'},
+        },
+        meta: {moduleId: 'facile.sendinitaly'},
+      }
+    }
+
+    if (resolution.status === 'ambiguous') {
+      return {
+        ok: true,
+        intent: 'sendinitaly-user-open-ambiguous',
+        source: 'tool-fast',
+        reply: userClarification(resolution, target),
+        data: {type: 'sendinitaly-users', data: resolution.items, meta: {total: resolution.items.length}, query: {search: target, intent: 'open'}},
+        meta: {moduleId: 'facile.sendinitaly'},
+      }
+    }
+
+    return {ok: true, intent: 'clarification', source: 'tool-fast', reply: userClarification(resolution, target), data: {type: 'clarification', reason: `sendinitaly-user-${resolution.status}`}, meta: {moduleId: 'facile.sendinitaly'}}
+  }
 
   if (/\b(piani?|listino)\b/.test(text) && /send\s*in\s*italy|utent|account/.test(text) && !/campagn/.test(text)) {
     const payload = await services.getUserPlans({token})

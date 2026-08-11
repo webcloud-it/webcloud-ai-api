@@ -9,6 +9,7 @@ import modulesRouter from './routes/modules.js'
 import capabilitiesRouter from './routes/capabilities.js'
 import {authToken} from './middlewares/authToken.js'
 import {attachRequestId} from './core/observability/chatAudit.js'
+import {checkOllamaReadiness} from './core/providers/ollamaProvider.js'
 
 const app = express()
 
@@ -25,6 +26,19 @@ app.get('/health', (req, res) => {
     ok: true,
     service: 'webcloud-ai-api',
     env: env.nodeEnv,
+  })
+})
+
+app.get('/ready', async (req, res) => {
+  const ollama = await checkOllamaReadiness()
+  const ready = !env.ollamaRequired || ollama.ok
+
+  res.status(ready ? 200 : 503).json({
+    ok: ready,
+    service: 'webcloud-ai-api',
+    dependencies: {
+      ollama: {...ollama, required: env.ollamaRequired},
+    },
   })
 })
 

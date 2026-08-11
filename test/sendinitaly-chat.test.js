@@ -39,6 +39,36 @@ test('returns a sanitized Send in Italy user detail', async () => {
   assert.equal(JSON.stringify(result).includes('secret'), false)
 })
 
+test('apre un utente Send in Italy quando il nome è univoco', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'apri il cliente Acme',
+    token: 'token',
+    services: mockServices({
+      getUsers: async () => ({data: [{id: 'u1', company_name: 'Acme'}]}),
+    }),
+  })
+
+  assert.equal(result.intent, 'app-action')
+  assert.equal(result.data.appAction.path, '/sendinitaly/users/u1')
+})
+
+test('propone solo gli utenti Send in Italy ambigui', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'apri il cliente Acme',
+    token: 'token',
+    services: mockServices({
+      getUsers: async () => ({data: [
+        {id: 'u1', company_name: 'Acme Italia'},
+        {id: 'u2', company_name: 'Acme Europa'},
+      ]}),
+    }),
+  })
+
+  assert.equal(result.intent, 'sendinitaly-user-open-ambiguous')
+  assert.equal(result.data.type, 'sendinitaly-users')
+  assert.equal(result.data.data.length, 2)
+})
+
 test('checks sender DNS domains and isolates per-domain failures', async () => {
   const result = await handleSendInItalyChat({
     message: 'Verifica DNS dell’utente "Acme"',

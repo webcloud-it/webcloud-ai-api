@@ -1,8 +1,24 @@
-import {randomUUID} from 'node:crypto'
+import {createHash, randomUUID} from 'node:crypto'
 import {getWebcamPresets, gotoWebcamPreset, inspectWebcamConnectivity, inspectWebcamDevice, rebootWebcam} from './service.js'
 
 const proposals = new Map()
 const PROPOSAL_TTL_MS = 10 * 60 * 1000
+
+function fingerprintToken(token = '') {
+  return createHash('sha256').update(String(token)).digest('hex').slice(0, 16)
+}
+
+function auditAction(event, proposal, extra = {}) {
+  console.info('[webcam-action-audit]', JSON.stringify({
+    at: new Date().toISOString(),
+    event,
+    actor: proposal?.actorFingerprint || null,
+    operation: proposal?.operation || null,
+    target: proposal ? {id: proposal.webcamId, name: proposal.name} : null,
+    preset: proposal?.presetName || null,
+    ...extra,
+  }))
+}
 
 function isConfirmation(message) {
   return /^\s*(confermo|conferma|procedi|esegui|s[iì])\s*[.!]?\s*$/i.test(String(message || ''))
@@ -57,21 +73,36 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
   if (proposalToken && (isConfirmation(message) || isCancellation(message))) {
     const proposal = proposals.get(proposalToken)
     if (!proposal || proposal.expiresAt < Date.now()) {
+      if (proposal) auditAction('expired', proposal)
       proposals.delete(proposalToken)
       return response('expired', 'La proposta di riavvio è scaduta. Chiedimi nuovamente di prepararla.', {type: 'action-expired'})
     }
+    if (proposal.actorFingerprint !== fingerprintToken(token)) {
+      auditAction('rejected-actor', proposal)
+      return response('action-error', 'Questa proposta appartiene a un’altra sessione e non può essere eseguita.', {type: 'action-error', operation: proposal.operation, error: {code: 'action-owner-mismatch'}})
+    }
     if (isCancellation(message)) {
       proposals.delete(proposalToken)
+      auditAction('cancelled', proposal)
       const label = proposal.operation === 'webcam-goto-preset'
         ? `il movimento di ${proposal.name} verso il preset ${proposal.presetName}`
         : `il riavvio di ${proposal.name}`
       return response('cancelled', `Ho annullato ${label}.`, {type: 'action-cancelled', operation: proposal.operation})
     }
 
-    const result = proposal.operation === 'webcam-goto-preset'
-      ? await executeGotoPreset({token, webcamId: proposal.webcamId, presetToken: proposal.presetToken})
-      : await executeReboot({token, webcamId: proposal.webcamId})
-    proposals.delete(proposalToken)
+    let result
+    try {
+      auditAction('confirmed', proposal)
+      result = proposal.operation === 'webcam-goto-preset'
+        ? await executeGotoPreset({token, webcamId: proposal.webcamId, presetToken: proposal.presetToken})
+        : await executeReboot({token, webcamId: proposal.webcamId})
+      auditAction('completed', proposal)
+    } catch (error) {
+      auditAction('failed', proposal, {errorName: error?.name || 'Error', status: Number(error?.statusCode || error?.status) || null})
+      throw error
+    } finally {
+      proposals.delete(proposalToken)
+    }
     if (proposal.operation === 'webcam-goto-preset') {
       return response('webcam-goto-preset-executed', `${proposal.name} è stata spostata verso il preset ${proposal.presetName}.`, {
         type: 'action-result', operation: proposal.operation, target: {id: proposal.webcamId, name: proposal.name}, preset: {name: proposal.presetName}, result,
@@ -106,8 +137,9 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
     }
     const preset = partial[0]
     const opaqueToken = randomUUID()
-    const proposal = {operation: 'webcam-goto-preset', webcamId: resolved.item.id, name: resolved.item.name, presetToken: String(preset.token), presetName: preset.name || `Preset ${preset.token}`, expiresAt: Date.now() + PROPOSAL_TTL_MS}
+    const proposal = {operation: 'webcam-goto-preset', webcamId: resolved.item.id, name: resolved.item.name, presetToken: String(preset.token), presetName: preset.name || `Preset ${preset.token}`, actorFingerprint: fingerprintToken(token), expiresAt: Date.now() + PROPOSAL_TTL_MS}
     proposals.set(opaqueToken, proposal)
+    auditAction('proposed', proposal)
     return response('webcam-goto-preset-preview', `Sto per spostare ${proposal.name} verso il preset ${proposal.presetName}. Scrivi “confermo” per procedere oppure “annulla”.`, {
       type: 'action-proposal', operation: proposal.operation, proposalToken: opaqueToken, expiresAt: new Date(proposal.expiresAt).toISOString(), target: {id: proposal.webcamId, name: proposal.name}, preset: {name: proposal.presetName}, confirmationRequired: true,
     })
@@ -195,9 +227,10 @@ export async function handleWebcamgoOperation({message, history = [], webcams = 
     return response('clarification', resolved.status === 'ambiguous' ? `Ho trovato più webcam:\n${options.join('\n')}\nIndica nome o slug esatto.` : `Non ho trovato una webcam corrispondente a “${target}”.`, {type: 'clarification', reason: `webcam-${resolved.status}`})
   }
 
-  const proposal = {operation: 'webcam-reboot', webcamId: resolved.item.id, name: resolved.item.name, expiresAt: Date.now() + PROPOSAL_TTL_MS}
+  const proposal = {operation: 'webcam-reboot', webcamId: resolved.item.id, name: resolved.item.name, actorFingerprint: fingerprintToken(token), expiresAt: Date.now() + PROPOSAL_TTL_MS}
   const opaqueToken = randomUUID()
   proposals.set(opaqueToken, proposal)
+  auditAction('proposed', proposal)
   return response('webcam-reboot-preview', `Sto per riavviare ${proposal.name} (${resolved.item.slug || proposal.webcamId}). Lo stream potrebbe interrompersi per alcuni minuti. Scrivi “confermo” per procedere oppure “annulla”.`, {
     type: 'action-proposal', operation: 'webcam-reboot', proposalToken: opaqueToken, expiresAt: new Date(proposal.expiresAt).toISOString(), target: {id: proposal.webcamId, name: proposal.name, slug: resolved.item.slug || null}, confirmationRequired: true,
   })

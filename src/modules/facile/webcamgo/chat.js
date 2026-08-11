@@ -10,6 +10,7 @@ import {
   pickPreviousWebcamList,
   resolveReference,
 } from './queries.js'
+import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
 
 export function handleWebcamgoChat({message, history = [], webcams = []} = {}) {
   const previousList = pickPreviousWebcamList(history)
@@ -121,6 +122,10 @@ export function handleWebcamgoChat({message, history = [], webcams = []} = {}) {
     const target = resolution.item.slug || resolution.item.name
     const payload = buildWebcamDetailPayload({webcams, target})
 
+    if (isOpenEntityRequest(message)) {
+      return buildOpenResponse(payload, meta)
+    }
+
     return {
       ok: true,
       intent: 'webcam-detail',
@@ -129,6 +134,20 @@ export function handleWebcamgoChat({message, history = [], webcams = []} = {}) {
       data: payload,
       meta: {...meta, intent: 'webcam-detail'},
     }
+  }
+
+  if (intent === 'webcam-open') {
+    const target = extractDetailTarget(message)
+
+    if (!target) {
+      return clarification(
+        'Quale webcam vuoi aprire? Indica il nome, la località o lo slug.',
+        'missing-open-target',
+        meta
+      )
+    }
+
+    return buildOpenResponse(buildWebcamDetailPayload({webcams, target}), meta)
   }
 
   if (intent === 'webcam-detail') {
@@ -175,6 +194,82 @@ export function handleWebcamgoChat({message, history = [], webcams = []} = {}) {
     'unrecognized-webcamgo-request',
     meta
   )
+}
+
+function buildOpenResponse(payload = {}, meta = {}) {
+  if (payload.type === 'webcam-detail-not-found') {
+    return {
+      ok: true,
+      intent: 'webcam-open-not-found',
+      source: 'tool-fast',
+      reply: formatDetailReply(payload),
+      data: payload,
+      meta: {...meta, intent: 'webcam-open-not-found'},
+    }
+  }
+
+  if (payload.type === 'webcam-detail-ambiguous') {
+    const items = payload.items || []
+    const list = {
+      type: 'webcam-list',
+      query: {
+        term: payload.target,
+        label: `webcam corrispondenti a “${payload.target}”`,
+        intent: 'open',
+        offset: 0,
+        limit: items.length,
+        shown: items.length,
+      },
+      totale: items.length,
+      shown: items.length,
+      hasMore: false,
+      nextOffset: items.length,
+      previousOffset: null,
+      items,
+    }
+
+    return {
+      ok: true,
+      intent: 'webcam-open-ambiguous',
+      source: 'tool-fast',
+      reply: formatDetailReply(payload),
+      data: list,
+      meta: {...meta, intent: 'webcam-open-ambiguous'},
+    }
+  }
+
+  const item = payload.item || {}
+  const path = item.slug ? `/webcamgo/webcams/${encodeURIComponent(item.slug)}` : null
+
+  if (!path) {
+    return clarification(
+      'Ho identificato la webcam, ma non dispone di uno slug utilizzabile per aprirla.',
+      'missing-webcam-slug',
+      meta
+    )
+  }
+
+  return {
+    ok: true,
+    intent: 'app-action',
+    source: 'tool-fast',
+    reply: `Apro ${item.name || item.slug}.`,
+    data: {
+      type: 'app-action',
+      appAction: {
+        id: 'navigate',
+        label: `Apri ${item.name || item.slug}`,
+        path,
+      },
+      entity: {
+        id: item.id,
+        name: item.name,
+        slug: item.slug,
+        type: 'webcam',
+      },
+    },
+    meta: {...meta, intent: 'app-action'},
+  }
 }
 
 function clarification(reply, reason, meta) {

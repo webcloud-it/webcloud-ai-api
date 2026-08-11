@@ -69,7 +69,7 @@ test('global planner answers capability questions without loading a domain', () 
   })
 
   assert.equal(plan.type, 'help')
-  assert.equal(plan.capabilities.length, 2)
+  assert.equal(plan.capabilities.length, 3)
 })
 
 test('global planner does not route a domain without its credential', () => {
@@ -108,18 +108,35 @@ test('global planner routes Send in Italy when its credential is available', () 
   assert.equal(plan.moduleId, 'facile.sendinitaly')
 })
 
-test('global planner explicitly reports a known domain that is not onboarded yet', () => {
-  const plan = planGlobalChat({message: 'Pulisci la cache Cloudflare', credentials})
+test('global planner uses the active section for ambiguous business entities', () => {
+  const sendPlan = planGlobalChat({
+    message: 'Apri il cliente Acme',
+    context: {section: 'sendinitaly.users', path: '/sendinitaly/users'},
+    credentials: {...credentials, specialk: 'specialk-token'},
+  })
+  assert.equal(sendPlan.moduleId, 'facile.sendinitaly')
+  assert.equal(sendPlan.source, 'context')
 
-  assert.equal(plan.type, 'unsupported-domain')
-  assert.equal(plan.domain.id, 'cloudflare')
+  const renewalsPlan = planGlobalChat({
+    message: 'Apri il cliente Acme',
+    context: {section: 'crm.renewals', path: '/crm/renewals/panel'},
+    credentials,
+  })
+  assert.equal(renewalsPlan.moduleId, 'facile.renewals')
+  assert.equal(renewalsPlan.source, 'context')
 })
 
-test('an unsupported named domain takes precedence over a generic capability question', () => {
+test('global planner routes Cloudflare to the Webcloud tools module', () => {
+  const plan = planGlobalChat({message: 'Pulisci la cache Cloudflare', credentials})
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.webcloud')
+})
+
+test('a capability question stays at global help even when it names Cloudflare', () => {
   const plan = planGlobalChat({message: 'Cosa puoi fare su Cloudflare?', credentials})
 
-  assert.equal(plan.type, 'unsupported-domain')
-  assert.equal(plan.domain.id, 'cloudflare')
+  assert.equal(plan.type, 'help')
 })
 
 test('semantic router may select only an available catalog module', async () => {
@@ -150,4 +167,67 @@ test('global planner routes minisite opening hours', () => {
 
   assert.equal(plan.type, 'module')
   assert.equal(plan.moduleId, 'facile.businesshours')
+})
+
+test('global planner routes a natural minisite closing question to opening hours', () => {
+  const plan = planGlobalChat({message: 'Quando chiude il minisito?', credentials: {...credentials, cmsAsiagoIt: 'cms-token'}})
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.businesshours')
+})
+
+test('global planner routes Asiago events when the CMS credential is available', () => {
+  const plan = planGlobalChat({
+    message: 'Mostrami i prossimi eventi di Asiago',
+    credentials: {...credentials, cmsAsiagoIt: 'cms-token'},
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.asiago')
+})
+
+test('global planner routes a generic minisite query to Asiago, not opening hours', () => {
+  const plan = planGlobalChat({
+    message: 'Cerca il minisito Hotel Europa',
+    credentials: {...credentials, cmsAsiagoIt: 'cms-token'},
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.asiago')
+})
+
+test('global planner reports Asiago unavailable without the CMS credential', () => {
+  const plan = planGlobalChat({message: 'Elenca gli eventi di Asiago', credentials})
+
+  assert.equal(plan.type, 'unavailable')
+  assert.equal(plan.moduleId, 'facile.asiago')
+})
+
+test('global planner routes snow bulletin, pricelists and redirects to Asiago', () => {
+  const fullCredentials = {...credentials, cmsAsiagoIt: 'cms-token', snowbulletin: 'snow', spine01: 'spine', nozomi: 'nozomi'}
+  for (const message of ['Controlla il bollettino neve', 'Elenca i listini', 'Cerca i redirect']) {
+    const plan = planGlobalChat({message, credentials: fullCredentials})
+    assert.equal(plan.type, 'module')
+    assert.equal(plan.moduleId, 'facile.asiago')
+  }
+})
+
+test('global planner routes assets, holidays and automations to Webcloud tools', () => {
+  const fullCredentials = {...credentials, wam: 'wam', nozomi: 'nozomi'}
+  for (const message of ['Cerca asset WAM', 'Mostra le prossime festività', 'Elenca le automazioni']) {
+    const plan = planGlobalChat({message, credentials: fullCredentials})
+    assert.equal(plan.type, 'module')
+    assert.equal(plan.moduleId, 'facile.webcloud')
+  }
+})
+
+test('global planner routes chatbot operational status to Webcloud tools', () => {
+  const plan = planGlobalChat({message: 'Mostrami lo stato del chatbot', credentials})
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.webcloud')
+})
+
+test('global planner routes an operational overview to Webcloud tools', () => {
+  const plan = planGlobalChat({message: 'Ci sono problemi?', credentials})
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.webcloud')
 })

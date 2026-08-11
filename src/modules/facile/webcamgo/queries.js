@@ -1,4 +1,9 @@
 import {normalizeSearchText} from '../../../utils/text.js'
+import {
+  extractEntityTarget,
+  isOpenEntityRequest,
+  resolveNamedEntity,
+} from '../../../core/entities/entityResolver.js'
 
 const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 50
@@ -486,7 +491,7 @@ export function parseReferenceRequest(message = '', {hasPreviousList = false} = 
 
   if (!selector) return null
 
-  const explicitDetail = /\b(dettagli|dettaglio|scheda|informazioni|info|approfondisci|mostrami|dammi|dimmi)\b/i.test(
+  const explicitDetail = /\b(dettagli|dettaglio|scheda|informazioni|info|approfondisci|mostrami|dammi|dimmi|apri|aprimi|visualizza)\b/i.test(
     text
   )
   const conciseReference = /^(?:e\s+)?(?:(?:la|il|l')\s*)?(?:prima|primo|seconda|secondo|terza|terzo|ultima|ultimo|penultima|penultimo|numero\s+\d+|\d+|quella|quello|questa|questo)/i.test(
@@ -585,24 +590,22 @@ export function pickPreviousWebcamList(history = []) {
   return null
 }
 
-function getDetailCandidates(webcams = [], term = '') {
-  const needle = normalizeSearchText(term)
-
-  if (!needle) return []
-
-  const exact = webcams.filter(webcam => {
-    return normalizeSearchText(webcam.slug) === needle || normalizeSearchText(webcam.name) === needle
+export function buildWebcamDetailPayload({webcams = [], target = null} = {}) {
+  const resolution = resolveNamedEntity({
+    items: webcams,
+    query: target,
+    fields: [
+      {value: 'slug', weight: 18},
+      {value: 'name', weight: 16},
+      {value: 'location', weight: 8},
+      {value: 'reseller', weight: 4},
+      {value: 'networkProvider', weight: 2},
+      {value: webcam => webcam.hardware?.brand, weight: 1},
+      {value: webcam => webcam.hardware?.model, weight: 1},
+    ],
   })
 
-  if (exact.length) return exact
-
-  return webcams.filter(webcam => matchesTerm(webcam, term))
-}
-
-export function buildWebcamDetailPayload({webcams = [], target = null} = {}) {
-  const candidates = getDetailCandidates(webcams, target)
-
-  if (!candidates.length) {
+  if (resolution.status === 'missing-target' || resolution.status === 'not-found') {
     return {
       type: 'webcam-detail-not-found',
       target,
@@ -610,15 +613,19 @@ export function buildWebcamDetailPayload({webcams = [], target = null} = {}) {
     }
   }
 
-  if (candidates.length > 1) {
+  if (resolution.status === 'ambiguous') {
     return {
       type: 'webcam-detail-ambiguous',
       target,
-      items: candidates.slice(0, 10).map(toListItem),
+      items: resolution.candidates.map((candidate, index) => ({
+        ...toListItem(candidate.item),
+        position: index + 1,
+        matchScore: candidate.score,
+      })),
     }
   }
 
-  const webcam = candidates[0]
+  const webcam = resolution.item
 
   return {
     type: 'webcam-detail',
@@ -641,7 +648,7 @@ export function extractDetailTarget(message = '') {
     /\b(?:dettagli|dettaglio|scheda|informazioni|info|approfondisci|analizza|controlla|verifica)\s+(?:di|su|della|del|per)?\s*(.+)$/i
   )
 
-  return cleanTerm(match?.[1]) || null
+  return cleanTerm(match?.[1]) || extractEntityTarget(message) || null
 }
 
 export function detectIntent(message = '', {previousList = null} = {}) {
@@ -659,6 +666,8 @@ export function detectIntent(message = '', {previousList = null} = {}) {
 
   if (parsePaginationRequest(message)) return 'webcam-list-pagination'
   if (parseReferenceRequest(message, {hasPreviousList: Boolean(previousList)})) return 'webcam-reference'
+
+  if (isOpenEntityRequest(message)) return 'webcam-open'
 
   if (
     /\b(dettagli|dettaglio|scheda|informazioni|info|approfondisci|analizza|controlla|verifica)\b/i.test(

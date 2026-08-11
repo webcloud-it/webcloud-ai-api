@@ -19,7 +19,7 @@ test('webcam reboot creates a secret-free confirmation proposal', async () => {
 })
 
 test('webcam reboot executes only after confirmation with the opaque token', async () => {
-  const preview = await handleWebcamgoOperation({message: 'Reboot "piazza-centrale"', webcams})
+  const preview = await handleWebcamgoOperation({message: 'Reboot "piazza-centrale"', webcams, token: 'directus-token'})
   let executed = null
   const result = await handleWebcamgoOperation({
     message: 'confermo',
@@ -35,6 +35,24 @@ test('webcam reboot executes only after confirmation with the opaque token', asy
   assert.deepEqual(executed, {token: 'directus-token', webcamId: 'cam-1'})
   assert.equal(result.intent, 'webcam-reboot-executed')
   assert.equal(result.data.result.via, 'onvif')
+})
+
+test('webcam proposals cannot be confirmed from another session', async () => {
+  const preview = await handleWebcamgoOperation({message: 'Reboot "piazza-centrale"', webcams, token: 'owner-token'})
+  let executed = false
+  const result = await handleWebcamgoOperation({
+    message: 'confermo',
+    webcams,
+    token: 'other-token',
+    history: [{role: 'assistant', content: preview.reply, data: preview.data}],
+    executeReboot: async () => {
+      executed = true
+    },
+  })
+
+  assert.equal(result.intent, 'action-error')
+  assert.equal(result.data.error.code, 'action-owner-mismatch')
+  assert.equal(executed, false)
 })
 
 test('ambiguous webcam reboot asks for an exact target', async () => {
@@ -136,6 +154,7 @@ test('moving to a webcam preset requires confirmation and keeps the token server
   const preview = await handleWebcamgoOperation({
     message: 'Porta la webcam piazza-centrale al preset Home',
     webcams,
+    token: 'directus-token',
     executePresets: async () => ({presets: [{token: 'secret-device-token', name: 'Home'}]}),
   })
 

@@ -1,4 +1,5 @@
 import fetch from 'node-fetch'
+import {env} from '../../config/env.js'
 
 export class OllamaProviderError extends Error {
   constructor(message, {status = null, details = null, cause = null} = {}) {
@@ -16,10 +17,16 @@ function isConnectionError(error) {
   return ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'].includes(code)
 }
 
-export async function callOllamaChat({messages, timeoutMs = null, format = null, options = null}) {
-  const model = process.env.OLLAMA_CHAT_MODEL || 'mistral:latest'
-  const baseUrl = process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434'
-  const resolvedTimeoutMs = Number(timeoutMs || process.env.OLLAMA_TIMEOUT_MS || 20000)
+export async function callOllamaChat({
+  messages,
+  timeoutMs = null,
+  format = null,
+  options = null,
+  fetchImpl = fetch,
+}) {
+  const model = env.ollamaChatModel
+  const baseUrl = env.ollamaBaseUrl.replace(/\/$/, '')
+  const resolvedTimeoutMs = Number(timeoutMs || env.ollamaTimeoutMs)
 
   const controller = new AbortController()
   const timeout = setTimeout(() => {
@@ -27,15 +34,18 @@ export async function callOllamaChat({messages, timeoutMs = null, format = null,
   }, resolvedTimeoutMs)
 
   try {
-    const res = await fetch(`${baseUrl}/api/chat`, {
+    const res = await fetchImpl(`${baseUrl}/api/chat`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(env.ollamaApiKey ? {Authorization: `Bearer ${env.ollamaApiKey}`} : {}),
       },
       signal: controller.signal,
       body: JSON.stringify({
         model,
         stream: false,
+        think: env.ollamaThink,
+        keep_alive: env.ollamaKeepAlive,
         messages,
         ...(format ? {format} : {}),
         ...(options ? {options} : {}),
@@ -76,6 +86,49 @@ export async function callOllamaChat({messages, timeoutMs = null, format = null,
     throw new OllamaProviderError('Errore durante la chiamata a Ollama', {
       cause: error,
     })
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+export async function checkOllamaReadiness({
+  fetchImpl = fetch,
+  timeoutMs = 3000,
+  model = env.ollamaChatModel,
+} = {}) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
+  try {
+    const response = await fetchImpl(`${env.ollamaBaseUrl.replace(/\/$/, '')}/api/tags`, {
+      headers: {
+        Accept: 'application/json',
+        ...(env.ollamaApiKey ? {Authorization: `Bearer ${env.ollamaApiKey}`} : {}),
+      },
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      return {ok: false, model, reason: `http-${response.status}`}
+    }
+
+    const payload = await response.json()
+    const availableModels = Array.isArray(payload?.models)
+      ? payload.models.map(item => item?.name || item?.model).filter(Boolean)
+      : []
+    const modelAvailable = availableModels.includes(model)
+
+    return {
+      ok: modelAvailable,
+      model,
+      reason: modelAvailable ? null : 'model-not-installed',
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      model,
+      reason: error?.name === 'AbortError' ? 'timeout' : 'unreachable',
+    }
   } finally {
     clearTimeout(timeout)
   }
