@@ -143,6 +143,22 @@ describe('Intenti espliciti e precedenze', () => {
     assert.equal(pickExplicitChatIntent('info su webcloud.it'), 'service-detail')
   })
 
+  test('preserva tutti i vincoli di una lista composta', () => {
+    const message =
+      'Mostrami quali servizi di Zilio Group con scadenza entro il 2027 sono marchiati come non rinnovare e da trasferire contemporaneamente.'
+    const plan = planServiceListRequest({message, settings: SETTINGS, now: NOW})
+
+    assert.equal(pickExplicitChatIntent(message), 'service-list')
+    assert.equal(plan?.intent, 'service-list')
+
+    const filters = parseServiceListQuery({message, settings: SETTINGS, now: NOW}).filters
+    assert.deepEqual(
+      filters.map(filter => filter.kind),
+      ['dont-renew', 'to-transfer', 'expires-in-range', 'customer-or-group']
+    )
+    assert.equal(findFilter({filters}, 'customer-or-group')?.term, 'Zilio Group')
+  })
+
   test('un dominio isolato resta una possibile entità rinnovi', () => {
     assert.equal(isLikelyBareRenewalsEntity('eco-pv.it'), true)
   })
@@ -546,4 +562,3 @@ describe('Comunicazioni deterministiche', () => {
     assert.match(reply, /Inviato richiesta rinnovo/i)
   })
 })
-

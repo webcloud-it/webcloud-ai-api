@@ -177,6 +177,17 @@ export function pickExplicitChatIntent(message = '', scope = {}) {
     return 'service-list'
   }
 
+  // Una richiesta che nomina esplicitamente una lista di servizi deve essere
+  // pianificata come lista anche quando contiene flag (per esempio
+  // "non rinnovare" e "da trasferire"). Le regole dei singoli flag sono
+  // intenzionalmente più in alto nell'elenco per le richieste sintetiche, ma
+  // non devono troncare i filtri composti di una frase interrogativa.
+  const serviceListRule = intentRules.find(rule => rule.intent === 'service-list')
+
+  if (matchAny(text, serviceListRule?.patterns || [])) {
+    return 'service-list'
+  }
+
   for (const rule of intentRules) {
     if (matchAny(text, rule.patterns)) {
       return rule.scoped ? resolveScopedIntent(rule.intent, scope) : rule.intent
