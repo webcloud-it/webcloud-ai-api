@@ -11,6 +11,7 @@ import {
 import {getWebcams, getWebcamStatusLogs} from './service.js'
 import {handleWebcamgoOperation} from './operations.js'
 import {getContextEntityTarget} from '../../../core/context/pageContext.js'
+import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
 
 export async function summary(req, res) {
   const webcams = await getWebcams({token: req.auth.token})
@@ -51,7 +52,17 @@ export async function chat(req, res) {
   }
 
   const dataLoadStartedAt = Date.now()
-  const webcams = await getWebcams({token: req.auth.token})
+  const normalizedMessage = String(message).trim()
+  const identityOnly =
+    isOpenEntityRequest(normalizedMessage) &&
+    /\b(?:webcam|telecamera)\b/i.test(normalizedMessage) &&
+    !/\b(?:snapshot|fotogramma|immagine|preset|ptz|riavvia|reboot|diagnostica|connettivit[aà]|stato|stream|router|mikrotik)\b/i.test(normalizedMessage)
+  const includeDowntime = /\b(?:downtime|spegniment[oi]|pianificazion[ei]|riepilogo|riassunto|panoramica|stato generale)\b/i.test(normalizedMessage)
+  const webcams = await getWebcams({
+    token: req.auth.token,
+    profile: identityOnly ? 'identity' : 'full',
+    includeDowntime,
+  })
   const historyRequest = parseWebcamHistoryRequest(message)
   let statusLogs = []
 
