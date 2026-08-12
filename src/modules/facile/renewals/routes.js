@@ -1723,6 +1723,11 @@ export async function chat(req, res) {
   let resolvedServiceDetailMessage = null
   let skipReadQueryForServiceTarget = false
   let targetResolutionMs = 0
+  const explicitRenewalsIntent = pickExplicitChatIntent(message, {
+    customerId: resolvedCustomerId,
+    groupId: resolvedGroupId,
+  })
+  const isDeterministicServiceList = explicitRenewalsIntent === 'service-list'
 
   const deterministicReadUtterance = parseReadQueryUtterance(message)
   const pendingReadTargetSelection = resolvePendingReadQueryTargetClarification({
@@ -1772,10 +1777,12 @@ export async function chat(req, res) {
 
   const readUtterance =
     deterministicReadUtterance ||
-    (await interpretReadQueryUtterance({
-      message,
-      history: Array.isArray(history) ? history : [],
-    }))
+    (isDeterministicServiceList
+      ? null
+      : await interpretReadQueryUtterance({
+          message,
+          history: Array.isArray(history) ? history : [],
+        }))
 
   if (
     !resolvedDetailTarget &&
@@ -1852,6 +1859,7 @@ export async function chat(req, res) {
         actorToken: req.auth.token,
         resolvedDetailTarget,
         readUtterance,
+        allowSemantic: !isDeterministicServiceList,
       })
 
   if (readQueryPlan) {
