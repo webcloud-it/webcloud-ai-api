@@ -2,6 +2,7 @@ import {buildCapabilitySummary, getAvailableModuleIds} from '../capabilities/cat
 import {normalizeSearchText, normalizeText} from '../../utils/text.js'
 import {callOllamaJson} from '../providers/ollamaProvider.js'
 import {getEntityModuleId} from '../context/pageContext.js'
+import {isSemanticFastPath, planSemanticRequest} from '../planner/semanticRequestPlanner.js'
 
 const DOMAIN_PATTERNS = {
   'facile.webcloud': [
@@ -77,8 +78,8 @@ const DOMAIN_PATTERNS = {
   ],
 }
 
-const HELP_PATTERN = /\b(cosa puoi fare|come puoi aiut|funzioni|capacit[aà]|strumenti disponibili)\b/
-const GREETING_PATTERN = /^(ciao|salve|buongiorno|buonasera|hey|ehi)(\b|[!,.])/i
+const HELP_PATTERN = /^\s*(?:cosa puoi fare|come puoi aiutarmi|quali (?:funzioni|capacit[aà]|strumenti) (?:hai|sono disponibili))(?:\s+su\s+[\w .-]+)?\s*[?!.]?\s*$/i
+const GREETING_PATTERN = /^\s*(?:ciao|salve|buongiorno|buonasera|hey|ehi)\s*[!,.]?\s*$/i
 
 const UNSUPPORTED_DOMAINS = [
 ]
@@ -237,65 +238,72 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
 export async function resolveGlobalChatPlan(options = {}, callModel = callOllamaJson) {
   const deterministicPlan = planGlobalChat(options)
 
-  if (deterministicPlan.type !== 'clarification') {
+  if (['greeting', 'help', 'unsupported-domain'].includes(deterministicPlan.type) || isSemanticFastPath(options.message)) {
     return deterministicPlan
   }
 
-  const availableModuleIds = deterministicPlan.availableModuleIds || []
+  const availableModuleIds = getAvailableModuleIds({credentials: options.credentials || {}})
   if (!availableModuleIds.length || typeof callModel !== 'function') return deterministicPlan
 
-  const context = options.context || {}
-  const safeContext = {
-    app: context.app || null,
-    section: context.section || null,
-    path: context.path || null,
-    activeModuleId: context.activeModuleId || null,
-  }
-
   try {
-    const semantic = await callModel({
-      timeoutMs: Number(process.env.OLLAMA_ROUTER_TIMEOUT_MS || 15000),
-      messages: [
-        {
-          role: 'system',
-          content: [
-            'Sei il router dell’assistente Webcloud.',
-            `Puoi scegliere esclusivamente uno di questi moduli: ${availableModuleIds.join(', ')}.`,
-            'facile.renewals riguarda CRM, servizi, domini, clienti, fornitori, piani, Plesk, scadenze e rinnovi.',
-            'facile.webcamgo riguarda webcam, stream, snapshot, connettività, monitoraggio, hardware e downtime.',
-            'facile.sendinitaly riguarda newsletter, campagne email, invii, statistiche, mittenti e utenti Send in Italy.',
-            'facile.businesshours riguarda orari, aperture e chiusure dei minisiti.',
-            'facile.asiago riguarda eventi, articoli, contenuti, CMS e minisiti di Asiago.it.',
-            'facile.webcloud riguarda Assets Manager/WAM, cache Cloudflare, festività e automazioni.',
-            'Se la richiesta non permette una scelta affidabile restituisci moduleId null.',
-            'Restituisci moduleId e confidence come JSON.',
-          ].join(' '),
-        },
-        {
-          role: 'user',
-          content: JSON.stringify({message: String(options.message || '').slice(0, 1000), context: safeContext}),
-        },
-      ],
-    })
+    const semantic = await planSemanticRequest({
+      message: options.message,
+      context: options.context,
+      history: options.history,
+      availableModuleIds,
+    }, callModel)
 
-    if (
-      semantic &&
-      semantic.confidence >= 0.65 &&
-      availableModuleIds.includes(semantic.moduleId)
-    ) {
+    if (semantic?.mode === 'conversation' && semantic.confidence >= 0.72 && deterministicPlan.type === 'clarification') {
+      return {type: 'conversation', source: 'semantic', semantic}
+    }
+
+    if (semantic?.mode === 'clarification' && semantic.confidence >= 0.72 && deterministicPlan.type === 'clarification') {
+      return {...deterministicPlan, type: 'clarification', availableModuleIds, source: 'semantic', semantic}
+    }
+
+    if (semantic?.mode === 'tool' && semantic.confidence >= 0.72) {
+      if (!semantic.available) {
+        return {type: 'unavailable', moduleId: semantic.moduleId, availableModuleIds, source: 'semantic', semantic}
+      }
+
       return {
-        type: 'module',
+        type: semantic.secondaryModuleIds.length ? 'multi-module' : 'module',
         moduleId: semantic.moduleId,
+        secondaryModuleIds: semantic.secondaryModuleIds,
+        canonicalMessage: semantic.canonicalMessage,
         source: 'semantic',
         confidence: semantic.confidence,
+        semantic,
       }
     }
   } catch (_) {
-    // The deterministic clarification remains available when Ollama is down,
-    // slow, or returns an invalid plan.
+    // Il percorso deterministico resta un fallback completo se Ollama non è disponibile.
   }
 
   return deterministicPlan
+}
+
+export function buildGlobalConversationResponse() {
+  return {
+    ok: true,
+    intent: 'conversation',
+    source: 'semantic',
+    reply: 'Prego! Sono qui: dimmi pure cosa vuoi controllare o fare in Facile.',
+    data: {type: 'conversation'},
+    meta: {moduleId: 'facile', orchestrator: 'global-v2', routingSource: 'semantic'},
+  }
+}
+
+export function buildMultiModuleResponse({moduleId, secondaryModuleIds = []} = {}) {
+  const all = [moduleId, ...secondaryModuleIds].filter(Boolean)
+  return {
+    ok: true,
+    intent: 'clarification',
+    source: 'semantic',
+    reply: `Ho riconosciuto ${all.length} obiettivi in aree diverse. Per evitare di ignorarne uno, indicami quale vuoi eseguire per primo: ${all.join(' oppure ')}.`,
+    data: {type: 'clarification', reason: 'multi-module-request', options: all},
+    meta: {moduleId: 'facile', orchestrator: 'global-v2', routingSource: 'semantic'},
+  }
 }
 
 export function buildGlobalGreetingResponse({credentials = {}} = {}) {

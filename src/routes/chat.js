@@ -4,8 +4,10 @@ import {asyncHandler} from '../utils/asyncHandler.js'
 import {getCredentialForModule} from '../core/capabilities/catalog.js'
 import {
   buildGlobalClarificationResponse,
+  buildGlobalConversationResponse,
   buildGlobalGreetingResponse,
   buildGlobalHelpResponse,
+  buildMultiModuleResponse,
   buildUnsupportedDomainResponse,
   buildUnavailableModuleResponse,
   resolveGlobalChatPlan,
@@ -18,7 +20,7 @@ const router = express.Router()
 router.post(
   '/',
   asyncHandler(async (req, res, next) => {
-    const requestedModuleId = req.body?.moduleId || 'facile.renewals'
+    const requestedModuleId = req.body?.moduleId || 'facile'
     const startedAt = Date.now()
     const sendJson = res.json.bind(res)
 
@@ -58,6 +60,14 @@ router.post(
       return res.json(buildGlobalGreetingResponse({credentials: req.auth.credentials}))
     }
 
+    if (globalPlan?.type === 'conversation') {
+      return res.json(buildGlobalConversationResponse())
+    }
+
+    if (globalPlan?.type === 'multi-module') {
+      return res.json(buildMultiModuleResponse(globalPlan))
+    }
+
     if (globalPlan?.type === 'unsupported-domain') {
       return res.json(buildUnsupportedDomainResponse(globalPlan))
     }
@@ -90,6 +100,10 @@ router.post(
         selectedCredential: credentialKey,
       }
       req.body.moduleId = moduleId
+      if (globalPlan.canonicalMessage) {
+        req.body.originalMessage = req.body.message
+        req.body.message = globalPlan.canonicalMessage
+      }
 
       const originalJson = res.json.bind(res)
       res.json = payload => {
@@ -99,6 +113,9 @@ router.post(
             moduleId,
             orchestrator: 'global-v1',
             routingSource: globalPlan.source,
+            semanticIntent: globalPlan.semantic?.intent || null,
+            semanticConfidence: globalPlan.semantic?.confidence || null,
+            semanticRelation: globalPlan.semantic?.relationToPrevious || null,
           }
         }
 

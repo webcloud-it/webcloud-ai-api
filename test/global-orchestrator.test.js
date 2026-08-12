@@ -99,6 +99,13 @@ test('global planner keeps greetings at the global level', () => {
   assert.equal(plan.type, 'greeting')
 })
 
+test('a greeting followed by a request is not swallowed', () => {
+  const plan = planGlobalChat({message: 'Ciao, mostrami le webcam offline', credentials})
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.webcamgo')
+})
+
 test('global planner routes Send in Italy when its credential is available', () => {
   const plan = planGlobalChat({
     message: 'Mostrami le campagne di Send in Italy',
@@ -193,18 +200,67 @@ test('a capability question stays at global help even when it names Cloudflare',
 test('semantic router may select only an available catalog module', async () => {
   const plan = await resolveGlobalChatPlan(
     {message: 'Controlla se qualcosa non sta trasmettendo', credentials},
-    async () => ({moduleId: 'facile.webcamgo', confidence: 0.91})
+    async () => ({
+      mode: 'tool',
+      moduleId: 'facile.webcamgo',
+      intent: 'webcam-list',
+      canonicalMessage: 'elenca webcam con stream offline',
+      confidence: 0.91,
+      relationToPrevious: 'new',
+      secondaryModuleIds: [],
+    })
   )
 
   assert.equal(plan.type, 'module')
   assert.equal(plan.moduleId, 'facile.webcamgo')
   assert.equal(plan.source, 'semantic')
+  assert.equal(plan.canonicalMessage, 'elenca webcam con stream offline')
+})
+
+test('semantic planner can correct a deterministic misclassification', async () => {
+  const plan = await resolveGlobalChatPlan(
+    {
+      message: 'Per questa telecamera mi interessa sapere quando scade il servizio Plesk',
+      context: {activeEntity: {type: 'webcam', name: 'Le Melette'}},
+      credentials,
+    },
+    async () => ({
+      mode: 'tool',
+      moduleId: 'facile.renewals',
+      intent: 'service-expiry',
+      canonicalMessage: 'mostra la scadenza del servizio Plesk',
+      confidence: 0.94,
+      relationToPrevious: 'new',
+      secondaryModuleIds: [],
+    })
+  )
+
+  assert.equal(plan.moduleId, 'facile.renewals')
+  assert.equal(plan.source, 'semantic')
+})
+
+test('semantic planner recognizes requests spanning multiple modules', async () => {
+  const plan = await resolveGlobalChatPlan(
+    {message: 'Mostra le webcam offline e le scadenze di dicembre', credentials},
+    async () => ({
+      mode: 'tool',
+      moduleId: 'facile.webcamgo',
+      intent: 'multi-goal',
+      canonicalMessage: 'elenca webcam offline',
+      confidence: 0.95,
+      relationToPrevious: 'new',
+      secondaryModuleIds: ['facile.renewals'],
+    })
+  )
+
+  assert.equal(plan.type, 'multi-module')
+  assert.deepEqual(plan.secondaryModuleIds, ['facile.renewals'])
 })
 
 test('semantic router rejects invented or unavailable modules', async () => {
   const plan = await resolveGlobalChatPlan(
     {message: 'Controlla la situazione', credentials},
-    async () => ({moduleId: 'facile.invented', confidence: 0.99})
+    async () => ({mode: 'tool', moduleId: 'facile.invented', confidence: 0.99})
   )
 
   assert.equal(plan.type, 'clarification')
