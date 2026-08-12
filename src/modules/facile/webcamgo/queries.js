@@ -676,7 +676,7 @@ export function extractDetailTarget(message = '') {
 export function detectIntent(message = '', {previousList = null, hasActiveEntity = false} = {}) {
   const text = normalizeSearchText(message)
 
-  if (/^(ciao|buongiorno|buonasera|salve|hey|ehi)\b/i.test(text)) return 'greeting'
+  if (/^(?:ciao|buongiorno|buonasera|salve|hey|ehi)[!,.]?$/i.test(text)) return 'greeting'
 
   if (
     /\b(riavvia|reboot|spegni|accendi|attiva|disattiva|modifica|imposta|configura|elimina|cancella|crea|duplica)\b/i.test(

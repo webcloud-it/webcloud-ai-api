@@ -17,10 +17,10 @@ export function isSemanticFastPath(message = '') {
 
 function safeHistory(history = []) {
   return (Array.isArray(history) ? history : [])
-    .slice(-8)
+    .slice(-6)
     .map(item => ({
       role: item?.role === 'assistant' ? 'assistant' : 'user',
-      content: String(item?.content || item?.message || item?.reply || '').slice(0, 500),
+      content: String(item?.content || item?.message || item?.reply || '').slice(0, 300),
       moduleId: item?.meta?.moduleId || item?.data?.meta?.moduleId || null,
       resultType: item?.data?.type || null,
     }))
@@ -92,29 +92,26 @@ export async function planSemanticRequest({message, context = {}, history = [], 
 
   const raw = await callModel({
     timeoutMs: Number(process.env.OLLAMA_ROUTER_TIMEOUT_MS || 15000),
-    options: {temperature: 0, num_predict: 320},
+    options: {temperature: 0, num_predict: 180},
     messages: [
       {
         role: 'system',
         content: [
-          'Sei il planner semantico di Facile. Interpreta la lingua italiana, non rispondere all’utente e non inventare dati, ID o entità.',
-          'Devi restituire solo JSON con: mode, moduleId, intent, canonicalMessage, confidence, relationToPrevious, entity, secondaryModuleIds.',
-          'mode è tool, conversation o clarification. Per una richiesta operativa/informativa usa tool.',
-          'canonicalMessage deve conservare TUTTE le condizioni e l’azione richiesta, ma riscriverle in italiano semplice e inequivocabile per il modulo scelto.',
-          'Risolvi pronomi, ordinali e follow-up usando cronologia e activeEntity; non sostituire mai un nome con un ID non fornito.',
-          'Se il testo contiene un saluto più una richiesta, interpreta la richiesta. Se corregge quanto detto prima usa relationToPrevious=correct.',
-          'Se contiene obiettivi di più aree, scegli il primo come moduleId e inserisci le altre aree in secondaryModuleIds.',
-          'Usa conversation solo per saluti, ringraziamenti o dialogo senza richiesta di dati. Usa clarification solo quando manca davvero l’area o il soggetto indispensabile.',
+          'Planner JSON di Facile. Interpreta l’italiano; non rispondere e non inventare dati o ID.',
+          'Output: {"mode":"tool|conversation|clarification","moduleId":string|null,"intent":string,"canonicalMessage":string,"confidence":number,"relationToPrevious":"new|refine|correct|reference|continue","entity":{"type":string|null,"mention":string|null},"secondaryModuleIds":[]}.',
+          'Per richieste informative o operative usa tool. canonicalMessage: italiano breve e inequivocabile, stessa azione e TUTTI i vincoli originali.',
+          'Risolvi pronomi e follow-up con history e activeEntity, senza creare ID. Un saluto seguito da una richiesta non è conversation.',
+          'Per più aree: prima in moduleId, altre in secondaryModuleIds. clarification solo se manca un dato indispensabile.',
           `Moduli disponibili per questa sessione: ${availableModuleIds.join(', ') || 'nessuno'}.`,
           'Catalogo completo:',
           catalog,
-          'Esempi di canonicalMessage: “elenca webcam con stream offline escluse quelle con downtime attivo”; “dettagli della webcam Le Melette”; “apri la seconda webcam della lista precedente”; “elenca servizi del cliente Zilio con piano DomProf in scadenza entro dicembre 2027”.',
+          'Esempi: “elenca webcam con stream offline escluse quelle con downtime attivo”; “dettagli della webcam Le Melette”; “elenca servizi del cliente Zilio con piano DomProf in scadenza entro dicembre 2027”.',
         ].join('\n'),
       },
       {
         role: 'user',
         content: JSON.stringify({
-          message: String(message).slice(0, 2000),
+          message: String(message).slice(0, 1200),
           context: safeContext(context),
           history: safeHistory(history),
         }),

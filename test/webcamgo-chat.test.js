@@ -110,3 +110,14 @@ test('apre la webcam corrente con un pronome', () => {
   assert.equal(result.intent, 'app-action')
   assert.equal(result.data.appAction.path, '/webcamgo/webcams/le-melette')
 })
+
+test('non perde la richiesta quando è preceduta da un saluto', () => {
+  const result = handleWebcamgoChat({
+    message: 'Ciao, dimmi come sta questa webcam e se funzionano stream, snapshot e router',
+    context: {activeEntity: {type: 'webcam', slug: 'le-melette'}},
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-detail')
+  assert.equal(result.data.item.id, 'cam-1')
+})

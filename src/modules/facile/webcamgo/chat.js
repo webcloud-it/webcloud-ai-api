@@ -13,6 +13,17 @@ import {
 import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
 import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 
+function resolveRequestedTarget(message, contextTarget) {
+  if (
+    contextTarget &&
+    /\b(?:questa\s+(?:webcam|telecamera|qui)|quella\s+(?:webcam|telecamera)|webcam\s+corrente|telecamera\s+corrente|essa)\b/i.test(String(message || ''))
+  ) {
+    return contextTarget
+  }
+
+  return extractDetailTarget(message) || contextTarget
+}
+
 export function handleWebcamgoChat({message, context = {}, history = [], webcams = []} = {}) {
   const previousList = pickPreviousWebcamList(history)
   const contextTarget = getContextEntityTarget(context, 'webcam')
@@ -139,7 +150,7 @@ export function handleWebcamgoChat({message, context = {}, history = [], webcams
   }
 
   if (intent === 'webcam-open') {
-    const target = extractDetailTarget(message) || contextTarget
+    const target = resolveRequestedTarget(message, contextTarget)
 
     if (!target) {
       return clarification(
@@ -153,7 +164,7 @@ export function handleWebcamgoChat({message, context = {}, history = [], webcams
   }
 
   if (intent === 'webcam-detail') {
-    const target = extractDetailTarget(message) || contextTarget
+    const target = resolveRequestedTarget(message, contextTarget)
 
     if (!target) {
       return clarification(

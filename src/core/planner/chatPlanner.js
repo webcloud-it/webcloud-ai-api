@@ -71,7 +71,7 @@ export function planChatRequest({message, context = {}}) {
     }
   }
 
-  if (wantsSummary(text) || hasGreeting(text)) {
+  if (wantsSummary(text)) {
     return {
       type: 'tool',
       intent: context.customerId ? 'customer-report' : context.groupId ? 'group-report' : 'summary',
