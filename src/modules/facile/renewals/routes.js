@@ -19,7 +19,7 @@ import {
   parseServiceSubscriptionExpiryRequest,
 } from './diagnostics.js'
 import {getClientSubscriptions, isLowOnSpace, buildServiceSnapshot} from './snapshots.js'
-import {matchesText} from './intents.js'
+import {matchesText, pickExplicitChatIntent} from './intents.js'
 import {buildCommunicationsIndex} from './communications.js'
 import {
   buildCommunicationDraftPreview,
@@ -1949,12 +1949,19 @@ export async function chat(req, res) {
   const [services, settings] = await Promise.all([getAllServices(), getSettings()])
 
   const analysisPeriod = Number(settings.analysis_period ?? 30)
-
-  const panelCounts = await getPanelCounts({
-    analysisPeriod,
+  const downstreamIntent = pickExplicitChatIntent(downstreamMessage, {
     customerId: resolvedCustomerId,
     groupId: resolvedGroupId,
   })
+  const needsPanelCounts =
+    !downstreamIntent || ['summary', 'customer-report', 'group-report'].includes(downstreamIntent)
+  const panelCounts = needsPanelCounts
+    ? await getPanelCounts({
+        analysisPeriod,
+        customerId: resolvedCustomerId,
+        groupId: resolvedGroupId,
+      })
+    : null
 
   const dataLoadMs = Date.now() - dataLoadStartedAt
 
