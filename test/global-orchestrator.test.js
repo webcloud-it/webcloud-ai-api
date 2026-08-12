@@ -160,6 +160,25 @@ test('global planner still honors an explicit foreign-domain request from an ent
   assert.equal(plan.source, 'message')
 })
 
+test('an explicit active page entity remains a zero-latency semantic fast path', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan(
+    {
+      message: 'Ciao, dimmi come sta questa webcam e se funzionano stream, snapshot e router',
+      context: {activeEntity: {type: 'webcam', slug: 'melette1'}},
+      credentials,
+    },
+    async () => {
+      modelCalled = true
+      return null
+    }
+  )
+
+  assert.equal(plan.moduleId, 'facile.webcamgo')
+  assert.equal(plan.source, 'active-entity')
+  assert.equal(modelCalled, false)
+})
+
 test('renewals scope accepts the typed active entity and legacy route query', () => {
   assert.deepEqual(
     getContextScope({activeEntity: {type: 'service', id: 'service-42'}}),

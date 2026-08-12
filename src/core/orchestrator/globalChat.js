@@ -238,7 +238,11 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
 export async function resolveGlobalChatPlan(options = {}, callModel = callOllamaJson) {
   const deterministicPlan = planGlobalChat(options)
 
-  if (['greeting', 'help', 'unsupported-domain'].includes(deterministicPlan.type) || isSemanticFastPath(options.message)) {
+  if (
+    ['greeting', 'help', 'unsupported-domain'].includes(deterministicPlan.type) ||
+    isSemanticFastPath(options.message) ||
+    (deterministicPlan.type === 'module' && deterministicPlan.source === 'active-entity')
+  ) {
     return deterministicPlan
   }
 
