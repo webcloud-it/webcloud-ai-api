@@ -179,6 +179,32 @@ test('an explicit active page entity remains a zero-latency semantic fast path',
   assert.equal(modelCalled, false)
 })
 
+test('an unrelated named subject on an entity page still reaches semantic planning', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan(
+    {
+      message: 'Per Zilio mostrami quelli che finiscono entro dicembre 2027 e hanno DomProf',
+      context: {activeEntity: {type: 'webcam', slug: 'melette1'}},
+      credentials,
+    },
+    async () => {
+      modelCalled = true
+      return {
+        mode: 'tool',
+        moduleId: 'facile.renewals',
+        intent: 'service-list',
+        canonicalMessage: 'elenca servizi di Zilio con piano DomProf in scadenza entro dicembre 2027',
+        confidence: 0.94,
+        relationToPrevious: 'new',
+        secondaryModuleIds: [],
+      }
+    }
+  )
+
+  assert.equal(modelCalled, true)
+  assert.equal(plan.moduleId, 'facile.renewals')
+})
+
 test('renewals scope accepts the typed active entity and legacy route query', () => {
   assert.deepEqual(
     getContextScope({activeEntity: {type: 'service', id: 'service-42'}}),

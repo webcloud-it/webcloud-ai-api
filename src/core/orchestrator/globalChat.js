@@ -166,6 +166,10 @@ function moduleFromActiveEntityRequest(message = '', context = {}) {
   return hasForeignDomain ? null : entityModuleId
 }
 
+function hasExplicitActiveEntityReference(message = '') {
+  return /\b(?:quest[oa](?:\s+(?:qui|webcam|telecamera|servizio|cliente|gruppo))?|quell[oa](?:\s+(?:webcam|telecamera|servizio|cliente|gruppo))?|entit[aà]\s+corrente|pagina\s+corrente|esso|essa|lui|lei)\b/i.test(String(message || ''))
+}
+
 export function planGlobalChat({message = '', context = {}, history = [], credentials = {}} = {}) {
   const availableModuleIds = getAvailableModuleIds({credentials})
   const text = normalizeText(message)
@@ -241,7 +245,9 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
   if (
     ['greeting', 'help', 'unsupported-domain'].includes(deterministicPlan.type) ||
     isSemanticFastPath(options.message) ||
-    (deterministicPlan.type === 'module' && deterministicPlan.source === 'active-entity')
+    (deterministicPlan.type === 'module' &&
+      deterministicPlan.source === 'active-entity' &&
+      hasExplicitActiveEntityReference(options.message))
   ) {
     return deterministicPlan
   }
