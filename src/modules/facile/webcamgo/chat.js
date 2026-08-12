@@ -1,13 +1,17 @@
 import {
   buildWebcamDetailPayload,
+  buildLatestOfflinePayload,
   buildWebcamListPayload,
+  buildWebcamOutagePayload,
   buildWebcamSummaryPayload,
   detectIntent,
   extractDetailTarget,
   parseListQuery,
   parsePaginationRequest,
   parseReferenceRequest,
+  parseWebcamHistoryRequest,
   pickPreviousWebcamList,
+  pickPreviousWebcamTarget,
   resolveReference,
 } from './queries.js'
 import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
@@ -24,10 +28,24 @@ function resolveRequestedTarget(message, contextTarget) {
   return extractDetailTarget(message) || contextTarget
 }
 
-export function handleWebcamgoChat({message, context = {}, history = [], webcams = []} = {}) {
+export function handleWebcamgoChat({
+  message,
+  context = {},
+  history = [],
+  webcams = [],
+  statusLogs = [],
+  historyRequest = null,
+  now = new Date(),
+} = {}) {
   const previousList = pickPreviousWebcamList(history)
+  const previousTarget = pickPreviousWebcamTarget(history)
   const contextTarget = getContextEntityTarget(context, 'webcam')
-  const intent = detectIntent(message, {previousList, hasActiveEntity: Boolean(contextTarget)})
+  const resolvedHistoryRequest = historyRequest || parseWebcamHistoryRequest(message, now)
+  const intent = detectIntent(message, {
+    previousList,
+    hasActiveEntity: Boolean(contextTarget),
+    historyRequest: resolvedHistoryRequest,
+  })
   const meta = {
     moduleId: 'facile.webcamgo',
     intent,
@@ -69,6 +87,47 @@ export function handleWebcamgoChat({message, context = {}, history = [], webcams
       intent,
       source: 'tool-fast',
       reply: formatSummaryReply(payload),
+      data: payload,
+      meta,
+    }
+  }
+
+  if (intent === 'webcam-outage-history') {
+    const payload = buildWebcamOutagePayload({
+      webcams,
+      logs: statusLogs,
+      request: resolvedHistoryRequest,
+      now,
+    })
+
+    return {
+      ok: true,
+      intent,
+      source: 'tool-fast',
+      reply: formatOutageHistoryReply(payload),
+      data: payload,
+      meta,
+    }
+  }
+
+  if (intent === 'webcam-latest-offline') {
+    const target = resolvedHistoryRequest?.target || contextTarget || previousTarget
+
+    if (!target) {
+      return clarification(
+        'Di quale webcam vuoi conoscere l’ultimo stato offline? Indica il nome o apri prima la sua scheda.',
+        'missing-latest-offline-target',
+        meta
+      )
+    }
+
+    const payload = buildLatestOfflinePayload({webcams, logs: statusLogs, target})
+
+    return {
+      ok: true,
+      intent,
+      source: 'tool-fast',
+      reply: formatLatestOfflineReply(payload),
       data: payload,
       meta,
     }
@@ -422,6 +481,47 @@ function formatSchedule(schedule = {}) {
   const name = schedule.name || 'pianificazione'
 
   return [name, time, schedule.mode].filter(Boolean).join(' | ')
+}
+
+function formatDuration(durationMs = 0) {
+  const totalMinutes = Math.max(1, Math.round(Number(durationMs || 0) / 60000))
+  const days = Math.floor(totalMinutes / 1440)
+  const hours = Math.floor((totalMinutes % 1440) / 60)
+  const minutes = totalMinutes % 60
+
+  return [
+    days ? `${days} ${days === 1 ? 'giorno' : 'giorni'}` : null,
+    hours ? `${hours} ${hours === 1 ? 'ora' : 'ore'}` : null,
+    minutes ? `${minutes} min` : null,
+  ].filter(Boolean).join(', ')
+}
+
+function formatOutageHistoryReply(payload = {}) {
+  if (!payload.items?.length) {
+    return `Non risultano webcam con interruzioni superiori a ${formatDuration(payload.minimumDurationMs)} nel periodo richiesto.`
+  }
+
+  const rows = payload.items.map((item, index) => {
+    const occurrences = item.outages?.length || 0
+    return `${index + 1}. ${item.name} (${item.slug || 'slug assente'}) | interruzione massima ${formatDuration(item.longestDurationMs)} | ${occurrences} ${occurrences === 1 ? 'evento' : 'eventi'}`
+  })
+
+  return [
+    `Ho trovato ${payload.totale} webcam con interruzioni superiori a ${formatDuration(payload.minimumDurationMs)} nel periodo richiesto.`,
+    ...rows,
+  ].join('\n')
+}
+
+function formatLatestOfflineReply(payload = {}) {
+  if (payload.type === 'webcam-detail-not-found' || payload.type === 'webcam-detail-ambiguous') {
+    return formatDetailReply(payload)
+  }
+
+  const item = payload.item || {}
+  const event = payload.event
+  if (!event) return `Non trovo eventi offline registrati per ${item.name || 'questa webcam'}.`
+
+  return `L’ultimo evento offline di ${item.name} riguarda ${event.type || 'lo stato'} ed è iniziato il ${formatDateTime(event.changedOn)}.`
 }
 
 function formatDateTime(value) {

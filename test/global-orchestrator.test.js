@@ -32,6 +32,37 @@ test('global planner routes an explicit webcam request from a CRM page', () => {
   assert.equal(plan.source, 'message')
 })
 
+test('clear WebcamGo commands bypass the language model', async () => {
+  for (const message of [
+    'Apri la webcam Barricata',
+    'Quali webcam a Gallio sono offline o hanno lo snapshot bloccato?',
+  ]) {
+    let modelCalled = false
+    const plan = await resolveGlobalChatPlan({message, credentials}, async () => {
+      modelCalled = true
+      return null
+    })
+
+    assert.equal(plan.moduleId, 'facile.webcamgo', message)
+    assert.equal(plan.source, 'message', message)
+    assert.equal(plan.canonicalMessage, undefined, message)
+    assert.equal(modelCalled, false, message)
+  }
+})
+
+test('clear compound renewals filters preserve the original request without the model', async () => {
+  let modelCalled = false
+  const message = 'Nel pannello rinnovi, mostrami i servizi di Zilio Group in scadenza entro il 2027, non rinnovare e da trasferire.'
+  const plan = await resolveGlobalChatPlan({message, credentials}, async () => {
+    modelCalled = true
+    return null
+  })
+
+  assert.equal(plan.moduleId, 'facile.renewals')
+  assert.equal(plan.canonicalMessage, undefined)
+  assert.equal(modelCalled, false)
+})
+
 test('global planner routes an explicit renewals request from WebcamGo', () => {
   const plan = planGlobalChat({
     message: 'Mostrami i rinnovi in scadenza',
@@ -176,6 +207,24 @@ test('an explicit active page entity remains a zero-latency semantic fast path',
 
   assert.equal(plan.moduleId, 'facile.webcamgo')
   assert.equal(plan.source, 'active-entity')
+  assert.equal(modelCalled, false)
+})
+
+test('the open webcam wording is an active-entity fast path', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan(
+    {
+      message: 'Qual è lo stato di stream, snapshot e router della webcam aperta?',
+      context: {activeEntity: {type: 'webcam', slug: 'melette1'}},
+      credentials,
+    },
+    async () => {
+      modelCalled = true
+      return null
+    }
+  )
+
+  assert.equal(plan.moduleId, 'facile.webcamgo')
   assert.equal(modelCalled, false)
 })
 

@@ -57,6 +57,8 @@ const DOWNTIME_FIELDS = [
   'valid_to',
 ]
 
+const STATUS_LOG_FIELDS = ['id', 'webcam_id', 'type', 'status', 'changed_on']
+
 function requireWebcamgoConfiguration() {
   if (!env.webcamgoDirectusBaseUrl) {
     throw new Error('WEBCAMGO_DIRECTUS_BASE_URL non configurato')
@@ -403,6 +405,45 @@ export async function getWebcams({token, slug = null} = {}) {
   return rawWebcams.map(webcam => {
     return normalizeWebcam(webcam, schedulesByWebcamId.get(String(webcam.id)) || [])
   })
+}
+
+export async function getWebcamStatusLogs({
+  token,
+  webcamId = null,
+  type = null,
+  since = null,
+  statusNot = null,
+  limit = -1,
+} = {}) {
+  requireWebcamgoConfiguration()
+  requireToken(token)
+
+  const params = new URLSearchParams()
+  params.set('fields', STATUS_LOG_FIELDS.join(','))
+  params.set('sort', 'changed_on')
+  params.set('limit', String(limit))
+
+  if (webcamId) params.set('filter[webcam_id][_eq]', String(webcamId))
+  if (type) params.set('filter[type][_eq]', String(type))
+  if (since) params.set('filter[changed_on][_gte]', new Date(since).toISOString())
+  if (statusNot) params.set('filter[status][_neq]', String(statusNot))
+
+  const json = await fetchJson(
+    joinUrl(env.webcamgoDirectusBaseUrl, `/items/webcam_status_logs?${params.toString()}`),
+    {
+      headers: authHeaders(token),
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    },
+    'Errore recupero storico stati WebcamGo'
+  )
+
+  return (Array.isArray(json?.data) ? json.data : []).map(log => ({
+    id: log?.id || null,
+    webcamId: getRelationId(log?.webcam_id),
+    type: log?.type || null,
+    status: log?.status || null,
+    changedOn: log?.changed_on || null,
+  }))
 }
 
 async function getWebcamControlTarget({token, webcamId} = {}) {

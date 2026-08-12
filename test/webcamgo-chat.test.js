@@ -121,3 +121,62 @@ test('non perde la richiesta quando è preceduta da un saluto', () => {
   assert.equal(result.intent, 'webcam-detail')
   assert.equal(result.data.item.id, 'cam-1')
 })
+
+test('combina località e stati alternativi senza includere parole della frase nel luogo', () => {
+  const gallioOffline = webcam('cam-4', 'Gallio Centro', 'gallio-centro', 'Gallio')
+  gallioOffline.status.overall = 'offline'
+  gallioOffline.status.stream.status = 'offline'
+  const gallioSnapshot = webcam('cam-5', 'Gallio Panorama', 'gallio-panorama', 'Gallio')
+  gallioSnapshot.status.overall = 'offline'
+  gallioSnapshot.status.snapshot.status = 'offline'
+  const asiagoOffline = webcam('cam-6', 'Asiago Offline', 'asiago-offline', 'Asiago')
+  asiagoOffline.status.overall = 'offline'
+
+  const result = handleWebcamgoChat({
+    message: 'Quali webcam a Gallio sono offline o hanno lo snapshot bloccato?',
+    webcams: [...webcams, gallioOffline, gallioSnapshot, asiagoOffline],
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.equal(result.data.query.term, 'Gallio')
+  assert.equal(result.data.query.filterMode, 'any')
+  assert.deepEqual(result.data.query.filters, ['snapshot-offline', 'offline'])
+  assert.deepEqual(result.data.items.map(item => item.id).sort(), ['cam-4', 'cam-5'])
+})
+
+test('filtra lo storico per interruzioni superiori alla durata richiesta', () => {
+  const now = new Date('2026-08-12T12:00:00.000Z')
+  const statusLogs = [
+    {webcamId: 'cam-1', type: 'stream', status: 'offline', changedOn: '2026-08-01T00:00:00.000Z'},
+    {webcamId: 'cam-1', type: 'stream', status: 'online', changedOn: '2026-08-01T03:30:00.000Z'},
+    {webcamId: 'cam-2', type: 'stream', status: 'offline', changedOn: '2026-08-02T00:00:00.000Z'},
+    {webcamId: 'cam-2', type: 'stream', status: 'online', changedOn: '2026-08-02T01:00:00.000Z'},
+  ]
+
+  const result = handleWebcamgoChat({
+    message: 'Elencami le webcam offline per più di due ore nell’ultimo mese.',
+    webcams,
+    statusLogs,
+    now,
+  })
+
+  assert.equal(result.intent, 'webcam-outage-history')
+  assert.equal(result.data.totale, 1)
+  assert.equal(result.data.items[0].id, 'cam-1')
+  assert.equal(result.data.items[0].longestDurationMs, 3.5 * 60 * 60 * 1000)
+})
+
+test('recupera l’ultimo offline della webcam ricordata dalla conversazione', () => {
+  const result = handleWebcamgoChat({
+    message: 'ultimo stato offline',
+    webcams,
+    history: [{role: 'assistant', data: {type: 'webcam-detail', item: {slug: 'le-melette'}}}],
+    statusLogs: [
+      {webcamId: 'cam-1', type: 'stream', status: 'offline', changedOn: '2026-08-10T10:00:00.000Z'},
+    ],
+  })
+
+  assert.equal(result.intent, 'webcam-latest-offline')
+  assert.equal(result.data.item.id, 'cam-1')
+  assert.equal(result.data.event.type, 'stream')
+})

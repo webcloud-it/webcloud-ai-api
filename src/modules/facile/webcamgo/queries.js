@@ -7,6 +7,8 @@ import {
 
 const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 50
+const HOUR_MS = 60 * 60 * 1000
+const DAY_MS = 24 * HOUR_MS
 
 const ORDINALS = new Map([
   ['primo', 1],
@@ -99,9 +101,10 @@ function cleanWebcamTarget(value = '') {
 function stripKnownFilterTail(value = '') {
   return cleanTerm(value)
     .replace(
-      /\b(?:online|offline|in uso|non in uso|vpn|mikrotik|reseller|con encoding|monitorat[ei]|non monitorat[ei]|con snapshot|downtime|spegnimento programmato)\b.*$/i,
+      /\b(?:online|offline|in uso|non in uso|vpn|mikrotik|reseller|con encoding|monitorat[ei]|non monitorat[ei]|con snapshot|snapshot (?:blocc|ferm|congel)|downtime|spegnimento programmato)\b.*$/i,
       ''
     )
+    .replace(/\b(?:sono|risultano|hanno|ha|che)\s*$/i, '')
     .trim()
 }
 
@@ -166,7 +169,10 @@ function parseFilters(message = '') {
     filters.push('stream-offline')
   }
 
-  if (/\bsnapshot\b.{0,30}\b(offline|non online|non funziona|non attivo|ko)\b/i.test(text)) {
+  if (
+    /\bsnapshot\b.{0,40}\b(offline|non online|non funziona|non attiv[oa]|ko|bloccat[oaie]*|ferm[oaie]*|congelat[oaie]*|non si aggiorna|non aggiornato)\b/i.test(text) ||
+    /\b(offline|non online|bloccat[oaie]*|ferm[oaie]*|congelat[oaie]*)\b.{0,20}\bsnapshot\b/i.test(text)
+  ) {
     filters.push('snapshot-offline')
   }
 
@@ -213,20 +219,25 @@ function parseFilters(message = '') {
     filters.push('snapshot')
   }
 
-  if (
-    /\boffline\b/i.test(text) &&
-    !filters.some(filter =>
-      ['stream-offline', 'snapshot-offline', 'connectivity-offline', 'mikrotik-offline'].includes(
-        filter
-      )
-    )
-  ) {
+  if (hasGenericOfflineMention(text)) {
     filters.push('offline')
   } else if (/\bonline\b/i.test(text) && !/\bnon online\b/i.test(text)) {
     filters.push('online')
   }
 
   return [...new Set(filters)]
+}
+
+function hasGenericOfflineMention(text = '') {
+  for (const match of String(text).matchAll(/\boffline\b/gi)) {
+    const prefix = String(text).slice(Math.max(0, match.index - 35), match.index)
+
+    if (!/\b(?:stream|snapshot|connettivita|router|mikrotik)\b[^,.!?;]{0,30}$/i.test(prefix)) {
+      return true
+    }
+  }
+
+  return false
 }
 
 function extractSearchTerm(message = '') {
@@ -237,6 +248,7 @@ function extractSearchTerm(message = '') {
 
   const patterns = [
     /\b(?:cerca|trova|cercami|trovami)\s+(?:la\s+|le\s+)?(?:webcam\s+)?(.+)$/i,
+    /\b(?:webcam)\s+(?:di|del|della|a|in)\s+(.+?)(?=\s+(?:sono|risultano|hanno|ha|che|con|senza|offline|online)\b|[?.!,;:]|$)/i,
     /\b(?:webcam)\s+(?:di|del|della|a|in|chiamata|chiamate)\s+(.+)$/i,
     /\b(?:dettagli|dettaglio|scheda|informazioni|info)\s+(?:di|su|della|del)?\s*(.+)$/i,
   ]
@@ -267,9 +279,9 @@ function extractSearchTerm(message = '') {
   return null
 }
 
-function describeQuery(filters = [], term = null) {
+function describeQuery(filters = [], term = null, filterMode = 'all') {
   const parts = filters.map(filter => FILTER_LABELS[filter]).filter(Boolean)
-  const base = parts.length ? parts.join(', ') : FILTER_LABELS.all
+  const base = parts.length ? parts.join(filterMode === 'any' ? ' oppure ' : ', ') : FILTER_LABELS.all
 
   return term ? `${base} corrispondenti a "${term}"` : base
 }
@@ -297,20 +309,24 @@ export function parseListQuery(message = '', previousQuery = null, pagination = 
   const filters = parseFilters(message)
   const term = extractSearchTerm(message)
   const limit = extractLimit(message)
+  const filterMode = filters.length > 1 && /\b(?:o|oppure)\b/i.test(normalizeSearchText(message))
+    ? 'any'
+    : 'all'
 
   return {
     type: 'webcam-list-query',
     filters,
+    filterMode,
     term,
-    label: describeQuery(filters, term),
+    label: describeQuery(filters, term, filterMode),
     limit,
     offset: 0,
     sourceMessage: String(message || '').trim(),
   }
 }
 
-function matchesFilters(webcam, filters = []) {
-  return filters.every(filter => {
+function matchesFilters(webcam, filters = [], filterMode = 'all') {
+  const matches = filter => {
     switch (filter) {
       case 'online':
         return webcam.status.overall === 'online'
@@ -352,7 +368,9 @@ function matchesFilters(webcam, filters = []) {
       default:
         return true
     }
-  })
+  }
+
+  return filterMode === 'any' ? filters.some(matches) : filters.every(matches)
 }
 
 function matchesTerm(webcam, term = null) {
@@ -405,7 +423,9 @@ function toListItem(webcam = {}) {
 }
 
 export function buildWebcamListPayload({webcams = [], query = {}} = {}) {
-  const filtered = sortWebcams(webcams.filter(webcam => matchesFilters(webcam, query.filters)))
+  const filtered = sortWebcams(
+    webcams.filter(webcam => matchesFilters(webcam, query.filters, query.filterMode))
+  )
     .filter(webcam => matchesTerm(webcam, query.term))
 
   const offset = Math.max(Number(query.offset || 0), 0)
@@ -603,6 +623,178 @@ export function pickPreviousWebcamList(history = []) {
   return null
 }
 
+export function pickPreviousWebcamTarget(history = []) {
+  const items = Array.isArray(history) ? [...history].reverse() : []
+
+  for (const historyItem of items) {
+    if (historyItem?.role !== 'assistant') continue
+
+    const data = getHistoryItemData(historyItem)
+    const item = data?.item || data?.entity
+
+    if (data?.type === 'webcam-detail' && item) return item.slug || item.id || item.name || null
+    if (data?.type === 'app-action' && data?.entity?.type === 'webcam') {
+      return data.entity.slug || data.entity.id || data.entity.name || null
+    }
+  }
+
+  return null
+}
+
+const ITALIAN_NUMBERS = new Map([
+  ['un', 1], ['uno', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4],
+  ['cinque', 5], ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10],
+  ['dodici', 12], ['ventiquattro', 24], ['trenta', 30],
+])
+
+function parseNumber(value = '') {
+  const normalized = normalizeSearchText(value)
+  if (/^\d+$/.test(normalized)) return Number(normalized)
+  return ITALIAN_NUMBERS.get(normalized) || null
+}
+
+function subtractCalendarMonth(date) {
+  const copy = new Date(date)
+  copy.setMonth(copy.getMonth() - 1)
+  return copy
+}
+
+export function parseWebcamHistoryRequest(message = '', now = new Date()) {
+  const text = normalizeSearchText(message)
+
+  if (/\bultim[oa]\b.{0,30}\b(?:stato|evento|volta)?\s*(?:offline|non online|fuori linea)\b/i.test(text)) {
+    const explicitTarget = String(message).match(
+      /\b(?:offline|non online|fuori linea)\b[\s\S]*?\b(?:di|della|del)\s+(?:webcam\s+)?(.+)$/i
+    )?.[1]
+
+    return {
+      type: 'latest-offline',
+      target: cleanWebcamTarget(explicitTarget) || null,
+    }
+  }
+
+  const duration = text.match(
+    /\b(?:piu di|oltre|almeno)\s+(\d+|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|dodici|ventiquattro|trenta)\s*(minut[oi]|or[ae]|giorn[oi])\b/i
+  )
+  if (!duration || !/\b(?:offline|non online|fuori linea)\b/i.test(text)) return null
+
+  const amount = parseNumber(duration[1])
+  const unit = duration[2]
+  if (!amount) return null
+
+  const minimumDurationMs = amount * (
+    unit.startsWith('minut') ? 60 * 1000 : unit.startsWith('giorn') ? DAY_MS : HOUR_MS
+  )
+  let since = subtractCalendarMonth(now)
+
+  const days = text.match(/\bultim[oi]\s+(\d+|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|trenta)\s+giorni\b/i)
+  if (days?.[1]) since = new Date(now.getTime() - parseNumber(days[1]) * DAY_MS)
+  else if (/\bultim[oa]\s+settiman[ae]\b/i.test(text)) since = new Date(now.getTime() - 7 * DAY_MS)
+  else if (/\bultim[aei]\s+24\s+or[ae]\b/i.test(text)) since = new Date(now.getTime() - DAY_MS)
+
+  const spanMs = Math.max(now.getTime() - since.getTime(), DAY_MS)
+
+  return {
+    type: 'outage-duration',
+    statusType: 'stream',
+    minimumDurationMs,
+    since,
+    fetchSince: new Date(since.getTime() - spanMs),
+    limit: extractLimit(message),
+  }
+}
+
+export function buildWebcamOutagePayload({webcams = [], logs = [], request = {}, now = new Date()} = {}) {
+  const sinceMs = new Date(request.since).getTime()
+  const nowMs = new Date(now).getTime()
+  const minimumDurationMs = Number(request.minimumDurationMs || 0)
+  const logsByWebcam = new Map()
+
+  for (const log of logs) {
+    if (!log?.webcamId || log.type !== request.statusType) continue
+    const bucket = logsByWebcam.get(String(log.webcamId)) || []
+    bucket.push(log)
+    logsByWebcam.set(String(log.webcamId), bucket)
+  }
+
+  const matches = []
+  for (const webcam of webcams) {
+    const webcamLogs = (logsByWebcam.get(String(webcam.id)) || [])
+      .filter(log => Number.isFinite(new Date(log.changedOn).getTime()))
+      .sort((left, right) => new Date(left.changedOn) - new Date(right.changedOn))
+
+    if (
+      webcam.status?.stream?.status &&
+      webcam.status.stream.status !== 'online' &&
+      webcam.status.stream.changedOn &&
+      !webcamLogs.some(log => log.changedOn === webcam.status.stream.changedOn)
+    ) {
+      webcamLogs.push({
+        webcamId: webcam.id,
+        type: request.statusType,
+        status: webcam.status.stream.status,
+        changedOn: webcam.status.stream.changedOn,
+      })
+      webcamLogs.sort((left, right) => new Date(left.changedOn) - new Date(right.changedOn))
+    }
+
+    const outages = []
+    for (let index = 0; index < webcamLogs.length; index += 1) {
+      const log = webcamLogs[index]
+      if (!log.status || log.status === 'online') continue
+
+      const startMs = Math.max(new Date(log.changedOn).getTime(), sinceMs)
+      const nextMs = webcamLogs[index + 1]
+        ? new Date(webcamLogs[index + 1].changedOn).getTime()
+        : nowMs
+      const endMs = Math.min(nextMs, nowMs)
+      const durationMs = Math.max(0, endMs - startMs)
+
+      if (endMs > sinceMs && durationMs >= minimumDurationMs) {
+        outages.push({
+          status: log.status,
+          startedAt: new Date(startMs).toISOString(),
+          endedAt: endMs >= nowMs ? null : new Date(endMs).toISOString(),
+          durationMs,
+        })
+      }
+    }
+
+    if (!outages.length) continue
+
+    const longestDurationMs = Math.max(...outages.map(item => item.durationMs))
+    matches.push({...toListItem(webcam), outages, longestDurationMs})
+  }
+
+  matches.sort((left, right) => right.longestDurationMs - left.longestDurationMs)
+  const limit = clampLimit(request.limit, DEFAULT_LIMIT)
+
+  return {
+    type: 'webcam-outage-history',
+    since: new Date(sinceMs).toISOString(),
+    minimumDurationMs,
+    totale: matches.length,
+    shown: Math.min(matches.length, limit),
+    items: matches.slice(0, limit),
+  }
+}
+
+export function buildLatestOfflinePayload({webcams = [], logs = [], target = null} = {}) {
+  const detail = buildWebcamDetailPayload({webcams, target})
+  if (detail.type !== 'webcam-detail') return {...detail, requestedType: 'latest-offline'}
+
+  const item = detail.item
+  const latest = logs
+    .filter(log => String(log.webcamId) === String(item.id) && log.status && log.status !== 'online')
+    .sort((left, right) => new Date(right.changedOn) - new Date(left.changedOn))[0] || null
+
+  return {
+    type: 'webcam-latest-offline',
+    item,
+    event: latest,
+  }
+}
+
 export function buildWebcamDetailPayload({webcams = [], target = null} = {}) {
   const resolution = resolveNamedEntity({
     items: webcams,
@@ -673,7 +865,7 @@ export function extractDetailTarget(message = '') {
   )
 }
 
-export function detectIntent(message = '', {previousList = null, hasActiveEntity = false} = {}) {
+export function detectIntent(message = '', {previousList = null, hasActiveEntity = false, historyRequest = null} = {}) {
   const text = normalizeSearchText(message)
 
   if (/^(?:ciao|buongiorno|buonasera|salve|hey|ehi)[!,.]?$/i.test(text)) return 'greeting'
@@ -688,6 +880,8 @@ export function detectIntent(message = '', {previousList = null, hasActiveEntity
 
   if (parsePaginationRequest(message)) return 'webcam-list-pagination'
   if (parseReferenceRequest(message, {hasPreviousList: Boolean(previousList)})) return 'webcam-reference'
+  if (historyRequest?.type === 'latest-offline') return 'webcam-latest-offline'
+  if (historyRequest?.type === 'outage-duration') return 'webcam-outage-history'
 
   if (isOpenEntityRequest(message)) return 'webcam-open'
 

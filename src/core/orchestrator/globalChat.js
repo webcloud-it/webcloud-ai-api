@@ -144,6 +144,14 @@ function scoreModules(message = '') {
     .sort((a, b) => b.score - a.score)
 }
 
+function isConfidentDeterministicModulePlan(message = '', plan = {}) {
+  if (plan.type !== 'module' || plan.source !== 'message' || !plan.moduleId) return false
+
+  const matchedModules = scoreModules(message).filter(candidate => candidate.score > 0)
+
+  return matchedModules.length === 1 && matchedModules[0].moduleId === plan.moduleId
+}
+
 const LOCAL_ENTITY_REQUEST = /\b(?:dettagli?|informazioni?|info|scheda|stat[oi]|situazione|come\s+(?:sta|stanno)|funziona|problemi?|controlla|verifica|analizza|apri|mostra(?:mi)?|questa?|questo|corrente|attuale)\b/i
 
 const STRONG_DOMAIN_PATTERNS = {
@@ -167,7 +175,20 @@ function moduleFromActiveEntityRequest(message = '', context = {}) {
 }
 
 function hasExplicitActiveEntityReference(message = '') {
-  return /\b(?:quest[oa](?:\s+(?:qui|webcam|telecamera|servizio|cliente|gruppo))?|quell[oa](?:\s+(?:webcam|telecamera|servizio|cliente|gruppo))?|entit[aà]\s+corrente|pagina\s+corrente|esso|essa|lui|lei)\b/i.test(String(message || ''))
+  return /\b(?:quest[oa](?:\s+(?:qui|webcam|telecamera|servizio|cliente|gruppo))?|quell[oa](?:\s+(?:webcam|telecamera|servizio|cliente|gruppo))?|(?:webcam|telecamera|servizio|cliente|gruppo)\s+(?:apert[oa]|corrente|attuale)|entit[aà]\s+corrente|pagina\s+corrente|esso|essa|lui|lei)\b/i.test(String(message || ''))
+}
+
+function isContextualModuleFastPath(message = '', plan = {}) {
+  if (plan.type !== 'module' || !['history', 'context', 'active-entity'].includes(plan.source)) {
+    return false
+  }
+
+  const patterns = {
+    'facile.webcamgo': /\b(?:webcam|telecamer[ae]|stream|snapshot|router|mikrotik|connettivit[aà]|offline|fuori\s+linea|ptz|preset)\b/i,
+    'facile.renewals': /\b(?:servizi?|domini?|rinnov|scadenz|piani?|fornitor|plesk|fattur|non\s+rinnovare|trasferire)\b/i,
+  }
+
+  return patterns[plan.moduleId]?.test(String(message || '')) === true
 }
 
 export function planGlobalChat({message = '', context = {}, history = [], credentials = {}} = {}) {
@@ -245,6 +266,8 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
   if (
     ['greeting', 'help', 'unsupported-domain'].includes(deterministicPlan.type) ||
     isSemanticFastPath(options.message) ||
+    isConfidentDeterministicModulePlan(options.message, deterministicPlan) ||
+    isContextualModuleFastPath(options.message, deterministicPlan) ||
     (deterministicPlan.type === 'module' &&
       deterministicPlan.source === 'active-entity' &&
       hasExplicitActiveEntityReference(options.message))

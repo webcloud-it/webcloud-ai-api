@@ -1,12 +1,16 @@
 import {httpError} from '../../../utils/httpError.js'
 import {handleWebcamgoChat} from './chat.js'
 import {
+  buildWebcamDetailPayload,
   buildWebcamListPayload,
   buildWebcamSummaryPayload,
   parseListQuery,
+  parseWebcamHistoryRequest,
+  pickPreviousWebcamTarget,
 } from './queries.js'
-import {getWebcams} from './service.js'
+import {getWebcams, getWebcamStatusLogs} from './service.js'
 import {handleWebcamgoOperation} from './operations.js'
+import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 
 export async function summary(req, res) {
   const webcams = await getWebcams({token: req.auth.token})
@@ -48,6 +52,31 @@ export async function chat(req, res) {
 
   const dataLoadStartedAt = Date.now()
   const webcams = await getWebcams({token: req.auth.token})
+  const historyRequest = parseWebcamHistoryRequest(message)
+  let statusLogs = []
+
+  if (historyRequest?.type === 'outage-duration') {
+    statusLogs = await getWebcamStatusLogs({
+      token: req.auth.token,
+      type: historyRequest.statusType,
+      since: historyRequest.fetchSince,
+    })
+  } else if (historyRequest?.type === 'latest-offline') {
+    const target =
+      historyRequest.target ||
+      getContextEntityTarget(context, 'webcam') ||
+      pickPreviousWebcamTarget(history)
+    const detail = target ? buildWebcamDetailPayload({webcams, target}) : null
+
+    if (detail?.type === 'webcam-detail') {
+      statusLogs = await getWebcamStatusLogs({
+        token: req.auth.token,
+        webcamId: detail.item.id,
+        statusNot: 'online',
+        limit: 100,
+      })
+    }
+  }
   const dataLoadMs = Date.now() - dataLoadStartedAt
 
   const operationResult = await handleWebcamgoOperation({
@@ -63,6 +92,8 @@ export async function chat(req, res) {
     history: Array.isArray(history) ? history : [],
     webcams,
     context,
+    statusLogs,
+    historyRequest,
   })
 
   res.json({
