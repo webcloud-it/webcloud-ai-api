@@ -90,7 +90,7 @@ function appendLastStatusAlias(params, alias, type) {
   params.set(`deep[${alias}][_limit]`, '1')
 }
 
-function buildWebcamsUrl({slug = null, profile = 'full'} = {}) {
+function buildWebcamsUrl({slug = null, profile = 'full', searchTerm = null} = {}) {
   const params = new URLSearchParams()
 
   params.set('fields', (profile === 'identity' ? WEBCAM_IDENTITY_FIELDS : WEBCAM_FIELDS).join(','))
@@ -105,6 +105,13 @@ function buildWebcamsUrl({slug = null, profile = 'full'} = {}) {
 
   if (slug) {
     params.set('filter[slug][_eq]', String(slug))
+  } else if (searchTerm) {
+    const value = String(searchTerm)
+    params.set('filter[_or][0][name][_icontains]', value)
+    params.set('filter[_or][1][slug][_icontains]', value)
+    params.set('filter[_or][2][webcam_details_id][locations_id][name][_icontains]', value)
+    params.set('filter[_or][3][webcam_details_id][resellers_id][name][_icontains]', value)
+    params.set('filter[_or][4][webcam_details_id][network_providers_id][name][_icontains]', value)
   }
 
   return joinUrl(env.webcamgoDirectusBaseUrl, `/items/webcams2?${params.toString()}`)
@@ -401,9 +408,15 @@ function credentialCacheKey(token) {
   return createHash('sha256').update(String(token || '')).digest('hex').slice(0, 16)
 }
 
-async function loadWebcams({token, slug = null, profile = 'full', includeDowntime = true} = {}) {
+async function loadWebcams({
+  token,
+  slug = null,
+  profile = 'full',
+  includeDowntime = true,
+  searchTerm = null,
+} = {}) {
   const json = await fetchJson(
-    buildWebcamsUrl({slug, profile}),
+    buildWebcamsUrl({slug, profile, searchTerm}),
     {
       headers: authHeaders(token),
       timeoutMs: DEFAULT_TIMEOUT_MS,
@@ -427,19 +440,29 @@ export async function getWebcams({
   slug = null,
   profile = 'full',
   includeDowntime = true,
+  searchTerm = null,
 } = {}) {
   requireWebcamgoConfiguration()
   requireToken(token)
 
-  const cacheKey = [credentialCacheKey(token), slug || '*', profile, includeDowntime ? 'downtime' : 'basic'].join(':')
+  const cacheKey = [
+    credentialCacheKey(token),
+    slug || '*',
+    profile,
+    includeDowntime ? 'downtime' : 'basic',
+    String(searchTerm || '').toLocaleLowerCase('it'),
+  ].join(':')
   const cached = webcamsCache.get(cacheKey)
   if (cached && Date.now() - cached.at <= env.webcamgoCacheTtlMs) return cached.items
   if (webcamsInFlight.has(cacheKey)) return webcamsInFlight.get(cacheKey)
 
-  const request = loadWebcams({token, slug, profile, includeDowntime})
-    .then(items => {
-      webcamsCache.set(cacheKey, {at: Date.now(), items})
-      return items
+  const request = loadWebcams({token, slug, profile, includeDowntime, searchTerm})
+    .then(async items => {
+      const resolvedItems = searchTerm && !items.length
+        ? await loadWebcams({token, slug, profile, includeDowntime, searchTerm: null})
+        : items
+      webcamsCache.set(cacheKey, {at: Date.now(), items: resolvedItems})
+      return resolvedItems
     })
     .finally(() => webcamsInFlight.delete(cacheKey))
 

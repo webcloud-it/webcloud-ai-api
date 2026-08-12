@@ -58,10 +58,14 @@ export async function chat(req, res) {
     /\b(?:webcam|telecamera)\b/i.test(normalizedMessage) &&
     !/\b(?:snapshot|fotogramma|immagine|preset|ptz|riavvia|reboot|diagnostica|connettivit[aà]|stato|stream|router|mikrotik)\b/i.test(normalizedMessage)
   const includeDowntime = /\b(?:downtime|spegniment[oi]|pianificazion[ei]|riepilogo|riassunto|panoramica|stato generale)\b/i.test(normalizedMessage)
+  const preliminaryListQuery = /\b(?:quali|elenca|elencami|lista|mostra|mostrami)\b/i.test(normalizedMessage)
+    ? parseListQuery(normalizedMessage)
+    : null
   const webcams = await getWebcams({
     token: req.auth.token,
     profile: identityOnly ? 'identity' : 'full',
     includeDowntime,
+    searchTerm: preliminaryListQuery?.term || null,
   })
   const historyRequest = parseWebcamHistoryRequest(message)
   let statusLogs = []
