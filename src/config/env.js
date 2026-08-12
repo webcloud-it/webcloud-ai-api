@@ -19,7 +19,7 @@ export const env = {
 
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
   ollamaApiKey: process.env.OLLAMA_API_KEY || null,
-  ollamaChatModel: process.env.OLLAMA_CHAT_MODEL || 'qwen3:8b',
+  ollamaChatModel: process.env.OLLAMA_CHAT_MODEL || 'qwen3.5:0.8b',
   ollamaTimeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 45000),
   ollamaRouterTimeoutMs: Number(process.env.OLLAMA_ROUTER_TIMEOUT_MS || 15000),
   ollamaRequired: String(process.env.OLLAMA_REQUIRED || '').toLowerCase() === 'true',
@@ -32,6 +32,8 @@ export const env = {
     .split(',')
     .map(value => value.trim())
     .filter(Boolean),
+  feedbackStoragePath: process.env.AI_FEEDBACK_STORAGE_PATH || './data/chat-feedback.jsonl',
+  feedbackMaxEntries: Math.max(100, Number(process.env.AI_FEEDBACK_MAX_ENTRIES || 10000)),
 
   crmDirectusBaseUrl: process.env.CRM_DIRECTUS_BASE_URL,
   crmToken: process.env.CRM_TOKEN,

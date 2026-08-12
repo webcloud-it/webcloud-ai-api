@@ -14,6 +14,7 @@ import {
 } from '../core/orchestrator/globalChat.js'
 import {recordChatAudit} from '../core/observability/chatAudit.js'
 import {attachChatPresentation} from '../core/presentation/chatPresentation.js'
+import {env} from '../config/env.js'
 
 const router = express.Router()
 
@@ -26,6 +27,11 @@ router.post(
 
     res.json = rawPayload => {
       const payload = attachChatPresentation(rawPayload)
+      payload.meta = {
+        ...(payload.meta || {}),
+        requestId: req.requestId,
+        model: env.ollamaChatModel,
+      }
       recordChatAudit({
         requestId: req.requestId,
         requestedModuleId,

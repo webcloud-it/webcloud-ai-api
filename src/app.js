@@ -5,6 +5,7 @@ import {env} from './config/env.js'
 import {errorHandler} from './middlewares/errorHandler.js'
 import {notFoundHandler} from './middlewares/notFoundHandler.js'
 import chatRouter from './routes/chat.js'
+import feedbackRouter from './routes/feedback.js'
 import modulesRouter from './routes/modules.js'
 import capabilitiesRouter from './routes/capabilities.js'
 import {authToken} from './middlewares/authToken.js'
@@ -43,6 +44,7 @@ app.get('/ready', async (req, res) => {
 })
 
 app.use('/api/chat', attachRequestId, authToken, chatRouter)
+app.use('/api/feedback', authToken, feedbackRouter)
 app.use('/api/capabilities', authToken, capabilitiesRouter)
 app.use('/api/modules', authToken, modulesRouter)
 
