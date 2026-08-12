@@ -22,8 +22,11 @@ function compactCache(now = Date.now()) {
   }
 }
 
-export async function validateCrmCredential(token, {fetchImpl = fetch} = {}) {
-  if (!token || !env.crmDirectusBaseUrl) return null
+export async function validateCrmCredential(
+  token,
+  {fetchImpl = fetch, baseUrl = env.crmDirectusBaseUrl} = {}
+) {
+  if (!token || !baseUrl) return null
 
   const now = Date.now()
   const fingerprint = tokenFingerprint(token)
@@ -35,7 +38,7 @@ export async function validateCrmCredential(token, {fetchImpl = fetch} = {}) {
 
   try {
     const response = await fetchImpl(
-      joinUrl(env.crmDirectusBaseUrl, '/users/me?fields=id,status,role'),
+      joinUrl(baseUrl, '/users/me?fields=id,status,role'),
       {
         headers: {Authorization: `Bearer ${token}`, Accept: 'application/json'},
         signal: controller.signal,

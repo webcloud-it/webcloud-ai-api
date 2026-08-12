@@ -55,6 +55,7 @@ test('valida la sessione CRM prima di abilitare i privilegi server-side', async 
 test('valida utenti Directus senza richiedere la lettura del nome ruolo', async () => {
   let requestedUrl = null
   const principal = await validateCrmCredential('user-token-with-string-role', {
+    baseUrl: 'https://crm.example.test',
     fetchImpl: async url => {
       requestedUrl = url
       return {

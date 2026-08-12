@@ -19,7 +19,7 @@ test('chat usa il modello operativo senza thinking e lo mantiene caricato', asyn
   })
 
   assert.equal(content, 'risposta')
-  assert.equal(requestBody.model, 'qwen3:8b')
+  assert.equal(requestBody.model, 'qwen3.5:0.8b')
   assert.equal(requestBody.think, false)
   assert.equal(requestBody.keep_alive, '10m')
 })
