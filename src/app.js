@@ -11,6 +11,11 @@ import capabilitiesRouter from './routes/capabilities.js'
 import {authToken} from './middlewares/authToken.js'
 import {attachRequestId} from './core/observability/chatAudit.js'
 import {checkOllamaReadiness} from './core/providers/ollamaProvider.js'
+import {
+  getAllServices,
+  getServiceOptions,
+  getSettings,
+} from './modules/facile/renewals/service.js'
 
 const app = express()
 
@@ -53,4 +58,24 @@ app.use(errorHandler)
 
 app.listen(env.port, () => {
   console.log(`webcloud-ai-api listening on port ${env.port}`)
+
+  // Il catalogo rinnovi è la sorgente più pesante dell'applicazione. Lo
+  // carichiamo appena il processo è disponibile, senza ritardare health e
+  // readiness, così la prima domanda dell'utente non paga il cold start CRM.
+  if (env.renewalsApiBaseUrl && env.crmToken) {
+    const startedAt = Date.now()
+
+    Promise.allSettled([getAllServices(), getSettings(), getServiceOptions()]).then(results => {
+      const failed = results.filter(result => result.status === 'rejected')
+
+      console.log(
+        '[renewals-prewarm]',
+        JSON.stringify({
+          ok: failed.length === 0,
+          durationMs: Date.now() - startedAt,
+          failed: failed.length,
+        })
+      )
+    })
+  }
 })
