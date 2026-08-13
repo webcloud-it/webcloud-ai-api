@@ -29,6 +29,7 @@ const intentRules = [
     intent: 'space-full',
     patterns: [
       /(spazio|quota|disco).{0,40}(esaurito|pieno|finito|satur[oa])/i,
+      /(esaurit[oa]|pien[oa]|finit[oa]|satur[oa]).{0,40}(spazio|quota|disco)/i,
       /(servizi|domini).{0,40}(spazio esaurito|disco pieno|quota esaurita)/i,
     ],
   },

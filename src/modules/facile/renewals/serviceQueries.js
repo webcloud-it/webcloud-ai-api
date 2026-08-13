@@ -922,7 +922,7 @@ function detectBooleanFilters(message = '') {
   const filters = []
 
   if (
-    /\bspazio\b.{0,40}\b(esaurito|pieno|finito|satur[oa])\b|\bquota\b.{0,40}\b(esaurita|piena)\b/.test(
+    /\bspazio\b.{0,40}\b(esaurito|pieno|finito|satur[oa])\b|\bquota\b.{0,40}\b(esaurita|piena)\b|\b(esaurit[oa]|pien[oa]|finit[oa]|satur[oa])\b.{0,40}\b(spazio|quota|disco)\b/.test(
       text
     )
   ) {

@@ -45,6 +45,20 @@ function assertDateParts(date, year, monthIndex, day) {
   assert.equal(date.getDate(), day)
 }
 
+test('riconosce lo spazio esaurito anche con verbo prima del nome', () => {
+  assert.equal(
+    pickExplicitChatIntent("mostrami l'ultimo servizio che ha esaurito lo spazio"),
+    'space-full'
+  )
+
+  const query = parseServiceListQuery({
+    message: "mostrami l'ultimo servizio che ha esaurito lo spazio",
+    settings: SETTINGS,
+    now: NOW,
+  })
+  assert.equal(findFilter(query, 'space-full')?.kind, 'space-full')
+})
+
 function makeService({
   id,
   customerEnd,
