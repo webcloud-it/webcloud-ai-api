@@ -7,7 +7,7 @@
     "start": "node src/app.js",
     "eval": "node scripts/eval-router.js",
     "verify": "npm test && npm run eval",
-    "test": "node --test test/auth-token.test.js test/ollama-provider.test.js test/global-orchestrator.test.js test/chat-presentation.test.js test/chat-feedback.test.js test/error-handler.test.js test/asiago-chat.test.js test/webcloud-chat.test.js test/sendinitaly-chat.test.js test/webcamgo-chat.test.js test/webcamgo-operations.test.js test/renewals-routing.test.js test/renewals-actions.test.js test/renewals-preview.test.js test/renewals-execution.test.js test/renewals-supplier-preview.test.js test/renewals-supplier-execution.test.js test/renewals-full-execution.test.js test/renewals-read-entities.test.js",
+    "test": "node --test test/auth-token.test.js test/ollama-provider.test.js test/grounded-reply-composer.test.js test/global-orchestrator.test.js test/chat-presentation.test.js test/chat-feedback.test.js test/error-handler.test.js test/asiago-chat.test.js test/webcloud-chat.test.js test/sendinitaly-chat.test.js test/webcamgo-chat.test.js test/webcamgo-operations.test.js test/renewals-routing.test.js test/renewals-actions.test.js test/renewals-preview.test.js test/renewals-execution.test.js test/renewals-supplier-preview.test.js test/renewals-supplier-execution.test.js test/renewals-full-execution.test.js test/renewals-read-entities.test.js",
     "test:renewals": "node --test test/renewals-routing.test.js test/renewals-actions.test.js test/renewals-preview.test.js test/renewals-execution.test.js test/renewals-supplier-preview.test.js test/renewals-supplier-execution.test.js test/renewals-full-execution.test.js test/renewals-read-entities.test.js"
   },
   "dependencies": {

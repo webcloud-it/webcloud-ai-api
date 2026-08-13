@@ -75,6 +75,25 @@ test('global planner routes an explicit renewals request from WebcamGo', () => {
   assert.equal(plan.source, 'message')
 })
 
+test('global planner routes storage-full services to renewals despite WebcamGo history', () => {
+  const plan = planGlobalChat({
+    message: "mostrami l'ultimo servizio che ha esaurito lo spazio",
+    context: {path: '/'},
+    history: [
+      {
+        role: 'assistant',
+        data: {type: 'webcam-detail'},
+        meta: {moduleId: 'facile.webcamgo'},
+      },
+    ],
+    credentials,
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.renewals')
+  assert.equal(plan.source, 'message')
+})
+
 test('global planner uses structured history for a confirmation follow-up', () => {
   const plan = planGlobalChat({
     message: 'Confermo',

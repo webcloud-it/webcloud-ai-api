@@ -232,6 +232,55 @@ test('planner: clienti del gruppo Zilio', async () => {
   ])
 })
 
+test('planner ed executor: clienti con servizi in scadenza in un mese preciso', async () => {
+  const monthlyServices = [
+    {
+      id: 'svc-september',
+      name: 'settembre.it',
+      customer: {id: 'cust-september', name: 'Cliente Settembre'},
+      subscriptions: [
+        {
+          id: 'sub-september',
+          isSupplier: false,
+          endsOn: '2026-09-14T12:00:00.000Z',
+          plan: {id: 'plan-september', name: 'Piano settembre'},
+        },
+      ],
+    },
+    {
+      id: 'svc-october',
+      name: 'ottobre.it',
+      customer: {id: 'cust-october', name: 'Cliente Ottobre'},
+      subscriptions: [
+        {
+          id: 'sub-october',
+          isSupplier: false,
+          endsOn: '2026-10-02T12:00:00.000Z',
+          plan: {id: 'plan-october', name: 'Piano ottobre'},
+        },
+      ],
+    },
+  ]
+  const message = 'quali sono i clienti con servizi in scadenza a settembre 2026'
+  const plan = await planReadQuery({message, allowSemantic: false})
+
+  assert.equal(plan.entity, 'customers')
+  assert.deepEqual(plan.filters, [
+    {
+      field: 'expiryDates',
+      operator: 'between',
+      value: {
+        start: '2026-09-01T00:00:00.000Z',
+        end: '2026-09-30T23:59:59.999Z',
+      },
+    },
+  ])
+
+  const result = executeReadQuery({plan, services: monthlyServices, options: {}})
+  assert.equal(result.total, 1)
+  assert.equal(result.items[0].name, 'Cliente Settembre')
+})
+
 test('planner: sottoscrizioni del fornitore MisterDomain nel 2027', async () => {
   const plan = await planReadQuery({
     message: 'sottoscrizioni del fornitore MisterDomain che scadono nel 2027',

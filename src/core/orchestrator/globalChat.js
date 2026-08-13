@@ -75,6 +75,8 @@ const DOMAIN_PATTERNS = {
     /\bplesk\b/,
     /\bfattur/,
     /\bnon rinnovare\b/,
+    /\b(?:spazio|quota|disco)\b.{0,48}\b(?:esaurit|pien|finit|satur)/,
+    /\b(?:esaurit|pien|finit|satur)\w*\b.{0,48}\b(?:spazio|quota|disco)\b/,
   ],
 }
 
@@ -156,7 +158,7 @@ const LOCAL_ENTITY_REQUEST = /\b(?:dettagli?|informazioni?|info|scheda|stat[oi]|
 
 const STRONG_DOMAIN_PATTERNS = {
   'facile.webcamgo': /\b(?:webcamgo|webcam|telecamer[ae]|snapshot|stream|ptz|mikrotik)\b/i,
-  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|plesk|fattur|non\s+rinnovare)\b/i,
+  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|plesk|fattur|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b/i,
   'facile.sendinitaly': /\b(?:send\s*in\s*italy|newsletter|campagn[ae]|postal|mittent[ei])\b/i,
   'facile.businesshours': /\b(?:orari|apertur[aeo]|chiusur[aeo]|apre|chiude)\b/i,
   'facile.asiago': /\b(?:cms|event[oi]|manifestazion[ei]|minisit[oi]|contenut[oi]|articol[oi]|bollettino|listini?|redirects?)\b/i,
@@ -185,7 +187,7 @@ function isContextualModuleFastPath(message = '', plan = {}) {
 
   const patterns = {
     'facile.webcamgo': /\b(?:webcam|telecamer[ae]|stream|snapshot|router|mikrotik|connettivit[aà]|offline|fuori\s+linea|ptz|preset)\b/i,
-    'facile.renewals': /\b(?:servizi?|domini?|rinnov|scadenz|piani?|fornitor|plesk|fattur|non\s+rinnovare|trasferire)\b/i,
+    'facile.renewals': /\b(?:servizi?|domini?|rinnov|scadenz|piani?|fornitor|plesk|fattur|non\s+rinnovare|trasferire|spazio|quota|disco|esaurit\w*|satur\w*)\b/i,
   }
 
   return patterns[plan.moduleId]?.test(String(message || '')) === true

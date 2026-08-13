@@ -329,6 +329,36 @@ function extractYear(text = '') {
   return Number.isFinite(year) ? year : null
 }
 
+const ITALIAN_MONTHS = new Map([
+  ['gennaio', 0], ['gen', 0],
+  ['febbraio', 1], ['feb', 1],
+  ['marzo', 2], ['mar', 2],
+  ['aprile', 3], ['apr', 3],
+  ['maggio', 4], ['mag', 4],
+  ['giugno', 5], ['giu', 5],
+  ['luglio', 6], ['lug', 6],
+  ['agosto', 7], ['ago', 7],
+  ['settembre', 8], ['set', 8],
+  ['ottobre', 9], ['ott', 9],
+  ['novembre', 10], ['nov', 10],
+  ['dicembre', 11], ['dic', 11],
+])
+
+function extractMonthRange(text = '', year = null) {
+  if (!year) return null
+
+  const monthToken = String(text).match(
+    /\b(gen(?:naio)?|feb(?:braio)?|mar(?:zo)?|apr(?:ile)?|mag(?:gio)?|giu(?:gno)?|lug(?:lio)?|ago(?:sto)?|set(?:tembre)?|ott(?:obre)?|nov(?:embre)?|dic(?:embre)?)\b/i
+  )?.[1]
+  const month = ITALIAN_MONTHS.get(String(monthToken || '').toLowerCase())
+  if (month === undefined) return null
+
+  return {
+    start: new Date(Date.UTC(year, month, 1, 0, 0, 0, 0)).toISOString(),
+    end: new Date(Date.UTC(year, month + 1, 0, 23, 59, 59, 999)).toISOString(),
+  }
+}
+
 function extractNamedAfter(text = '', patterns = []) {
   for (const pattern of patterns) {
     const match = text.match(pattern)
@@ -342,6 +372,7 @@ function buildDeterministicFilters(entityId, message = '') {
   const text = normalizeText(message)
   const filters = []
   const year = extractYear(text)
+  const monthRange = extractMonthRange(text, year)
 
   if (entityId === 'providers') {
     if (/\b(presenti|utilizzati|usati|con servizi|con sottoscrizioni)\b/i.test(text)) {
@@ -454,7 +485,11 @@ function buildDeterministicFilters(entityId, message = '') {
 
     const provider = extractNamedAfter(text, [/\b(?:con|del)\s+fornitore\s+(.+)$/i])
     if (provider) filters.push({field: 'providerNames', operator: 'contains', value: provider})
-    if (year) filters.push({field: 'expiryYears', operator: 'contains', value: year})
+    if (monthRange) {
+      filters.push({field: 'expiryDates', operator: 'between', value: monthRange})
+    } else if (year) {
+      filters.push({field: 'expiryYears', operator: 'contains', value: year})
+    }
   }
 
   if (entityId === 'groups') {

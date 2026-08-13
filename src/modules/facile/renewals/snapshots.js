@@ -77,5 +77,6 @@ export function buildServiceSnapshot(service, thresholds, analysisPeriod) {
     percent: space.percent,
     quota: space.quota,
     used: space.used,
+    spaceStatsDate: service?.pleskDomain?.statsDiskUsage?.date || null,
   }
 }

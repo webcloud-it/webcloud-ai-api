@@ -42,6 +42,7 @@ import {planChatRequest} from '../../../core/planner/chatPlanner.js'
 import {planReadQuery} from './readQueryPlanner.js'
 import {executeReadQuery} from './readQueryExecutor.js'
 import {buildReadQueryReply} from './readQueryFormatters.js'
+import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
 import {
   clearRememberedReadQueryContext,
   rememberReadQueryContext,
@@ -1894,31 +1895,36 @@ export async function chat(req, res) {
       result: readResult,
     })
 
-    return res.json({
-      ok: true,
-      intent: 'read-query',
-      source: readQueryPlan.source === 'semantic' ? 'tool-semantic' : 'tool-fast',
-      reply: buildReadQueryReply(readResult),
-      data: readResult,
-      meta: {
-        moduleId: 'facile.renewals',
+    const response = await composeGroundedReply({
+      message,
+      result: {
+        ok: true,
         intent: 'read-query',
-        entity: readQueryPlan.entity,
-        operation: readQueryPlan.operation,
-        plannerSource: readQueryPlan.source,
-        readUtteranceSource: readUtterance?.source || null,
-        dataSource: readResult.dataSource || null,
-        catalogRequested: useCatalog,
-        catalogFallback: Boolean(useCatalog && !catalogResult),
-        catalogError: catalogError?.message || null,
-        timings: {
-          targetResolutionMs,
-          dataLoadMs,
-          totalMs: Date.now() - startedAt,
+        source: readQueryPlan.source === 'semantic' ? 'tool-semantic' : 'tool-fast',
+        reply: buildReadQueryReply(readResult),
+        data: readResult,
+        meta: {
+          moduleId: 'facile.renewals',
+          intent: 'read-query',
+          entity: readQueryPlan.entity,
+          operation: readQueryPlan.operation,
+          plannerSource: readQueryPlan.source,
+          readUtteranceSource: readUtterance?.source || null,
+          dataSource: readResult.dataSource || null,
+          catalogRequested: useCatalog,
+          catalogFallback: Boolean(useCatalog && !catalogResult),
+          catalogError: catalogError?.message || null,
+          timings: {
+            targetResolutionMs,
+            dataLoadMs,
+            totalMs: Date.now() - startedAt,
+          },
+          servicesCount: Array.isArray(services) ? services.length : null,
         },
-        servicesCount: Array.isArray(services) ? services.length : null,
       },
     })
+
+    return res.json(response)
   }
 
   const downstreamMessage = resolvedServiceDetailMessage || message
@@ -1989,16 +1995,21 @@ export async function chat(req, res) {
     },
   })
 
-  res.json({
-    ...result,
-    meta: {
-      ...(result.meta || {}),
-      timings: {
-        ...(result.meta?.timings || {}),
-        dataLoadMs,
-        totalMs: Date.now() - startedAt,
+  const response = await composeGroundedReply({
+    message: downstreamMessage,
+    result: {
+      ...result,
+      meta: {
+        ...(result.meta || {}),
+        timings: {
+          ...(result.meta?.timings || {}),
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
+        servicesCount: Array.isArray(services) ? services.length : null,
       },
-      servicesCount: Array.isArray(services) ? services.length : null,
     },
   })
+
+  res.json(response)
 }

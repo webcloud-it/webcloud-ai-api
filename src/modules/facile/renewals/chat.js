@@ -410,8 +410,17 @@ export async function handleRenewalsChat({
       const snapshots = filtered.map(s => buildServiceSnapshot(s, thresholds, analysisPeriod))
 
       if (intent === 'space-full') {
-        const items = snapshots
+        const wantsLatest = /\b(?:ultim[oa]|piu recente|più recente)\b/i.test(String(message || ''))
+        const fullSnapshots = snapshots
           .filter(s => s.isFull)
+          .sort((a, b) => {
+            if (!wantsLatest) return 0
+            const first = new Date(a.spaceStatsDate || 0).getTime()
+            const second = new Date(b.spaceStatsDate || 0).getTime()
+            return second - first
+          })
+        const items = fullSnapshots
+          .slice(0, wantsLatest ? 1 : undefined)
           .map(s => ({
             tipo: 'upgrade',
             priorita: 'alta',
@@ -419,10 +428,11 @@ export async function handleRenewalsChat({
             cliente: s.customerName,
             gruppo: s.groupName,
             msg: `Spazio esaurito (${s.percent.toFixed(1)}%)`,
+            rilevatoIl: s.spaceStatsDate,
           }))
 
         payload = {
-          type: 'space-full',
+          type: wantsLatest ? 'latest-space-full' : 'space-full',
           totale: items.length,
           items,
         }

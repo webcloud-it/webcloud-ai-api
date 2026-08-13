@@ -195,6 +195,7 @@ const OPERATIONAL_ENRICHMENT_FIELDS = [
   'amounts',
   'planUsages',
   'expiryYears',
+  'expiryDates',
   'nextExpiry',
   'present',
 ]

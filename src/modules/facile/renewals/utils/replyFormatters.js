@@ -587,6 +587,12 @@ function buildFastOperationalListReply(intent, payload, {message = ''} = {}) {
     return label.empty
   }
 
+  if (payload?.type === 'latest-space-full' && items.length === 1) {
+    const item = items[0]
+    const detectedAt = item.rilevatoIl ? ` Rilevazione disponibile: ${formatDateTime(item.rilevatoIl)}.` : ''
+    return `L’ultimo servizio rilevato con spazio esaurito è ${item.servizio} (${item.cliente || 'cliente non disponibile'}): ${item.msg}.${detectedAt}`
+  }
+
   return [
     buildCountLabel(rawItems.length, items.length, label.found, {
       groupedWord: 'raggruppati',

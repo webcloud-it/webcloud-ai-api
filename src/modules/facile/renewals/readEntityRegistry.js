@@ -195,6 +195,7 @@ function buildCustomers({services = [], options = {}} = {}) {
         planIds: new Set(),
         providerNames: new Set(),
         expiryYears: new Set(),
+        expiryDates: new Set(),
       })
     }
 
@@ -222,8 +223,15 @@ function buildCustomers({services = [], options = {}} = {}) {
       if (ref.plan?.id) target.planIds.add(String(ref.plan.id))
       const providerName = relationName(ref.plan?.supplier)
       if (providerName) target.providerNames.add(providerName)
-      const year = toDateYear(ref.subscription?.endsOn)
-      if (year) target.expiryYears.add(year)
+      if (ref.kind !== 'supplier') {
+        const year = toDateYear(ref.subscription?.endsOn)
+        if (year) target.expiryYears.add(year)
+
+        const expiry = ref.subscription?.endsOn ? new Date(ref.subscription.endsOn) : null
+        if (expiry && !Number.isNaN(expiry.getTime())) {
+          target.expiryDates.add(expiry.toISOString())
+        }
+      }
     }
   }
 
@@ -235,6 +243,7 @@ function buildCustomers({services = [], options = {}} = {}) {
     planCount: item.planIds.size,
     providerNames: [...item.providerNames].sort((a, b) => a.localeCompare(b, 'it')),
     expiryYears: [...item.expiryYears].sort(),
+    expiryDates: [...item.expiryDates].sort(),
   }))
 }
 
@@ -867,6 +876,7 @@ const definitions = [
       planCount: {type: 'number'},
       providerNames: {type: 'string-array'},
       expiryYears: {type: 'number-array'},
+      expiryDates: {type: 'date'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
     catalog: {
@@ -1290,4 +1300,3 @@ export function canExecuteReadQueryFromCatalog(plan = {}) {
     sort.every(entry => sortableFields.has(String(entry?.field || '').trim()))
   )
 }
-

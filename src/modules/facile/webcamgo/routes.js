@@ -12,6 +12,7 @@ import {getWebcams, getWebcamStatusLogs} from './service.js'
 import {handleWebcamgoOperation} from './operations.js'
 import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
+import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
 
 export async function summary(req, res) {
   const webcams = await getWebcams({token: req.auth.token})
@@ -111,15 +112,20 @@ export async function chat(req, res) {
     historyRequest,
   })
 
-  res.json({
-    ...result,
-    meta: {
-      ...(result.meta || {}),
-      webcamsCount: webcams.length,
-      timings: {
-        dataLoadMs,
-        totalMs: Date.now() - startedAt,
+  const response = await composeGroundedReply({
+    message: normalizedMessage,
+    result: {
+      ...result,
+      meta: {
+        ...(result.meta || {}),
+        webcamsCount: webcams.length,
+        timings: {
+          dataLoadMs,
+          totalMs: Date.now() - startedAt,
+        },
       },
     },
   })
+
+  res.json(response)
 }
