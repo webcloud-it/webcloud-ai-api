@@ -27,7 +27,7 @@ export const env = {
   ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE || '10m',
   groundedRepliesEnabled:
     String(process.env.AI_GROUNDED_REPLIES_ENABLED || 'true').toLowerCase() !== 'false',
-  groundedReplyTimeoutMs: Number(process.env.AI_GROUNDED_REPLY_TIMEOUT_MS || 22000),
+  groundedReplyTimeoutMs: Number(process.env.AI_GROUNDED_REPLY_TIMEOUT_MS || 12000),
 
   authValidationTimeoutMs: Number(process.env.AUTH_VALIDATION_TIMEOUT_MS || 5000),
   authCacheTtlMs: Number(process.env.AUTH_CACHE_TTL_MS || 60000),
