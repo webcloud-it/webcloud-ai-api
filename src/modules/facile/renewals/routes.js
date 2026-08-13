@@ -1728,7 +1728,7 @@ export async function chat(req, res) {
     customerId: resolvedCustomerId,
     groupId: resolvedGroupId,
   })
-  const isDeterministicServiceList = explicitRenewalsIntent === 'service-list'
+  const hasExplicitRenewalsIntent = Boolean(explicitRenewalsIntent)
 
   const deterministicReadUtterance = parseReadQueryUtterance(message)
   const pendingReadTargetSelection = resolvePendingReadQueryTargetClarification({
@@ -1778,7 +1778,7 @@ export async function chat(req, res) {
 
   const readUtterance =
     deterministicReadUtterance ||
-    (isDeterministicServiceList
+    (hasExplicitRenewalsIntent
       ? null
       : await interpretReadQueryUtterance({
           message,
@@ -1786,6 +1786,7 @@ export async function chat(req, res) {
         }))
 
   if (
+    !hasExplicitRenewalsIntent &&
     !resolvedDetailTarget &&
     shouldResolveReadQueryDetailTarget(message, readUtterance)
   ) {
@@ -1852,7 +1853,7 @@ export async function chat(req, res) {
     }
   }
 
-  const readQueryPlan = skipReadQueryForServiceTarget
+  const readQueryPlan = skipReadQueryForServiceTarget || hasExplicitRenewalsIntent
     ? null
     : await planReadQuery({
         message,
@@ -1860,7 +1861,7 @@ export async function chat(req, res) {
         actorToken: req.auth.token,
         resolvedDetailTarget,
         readUtterance,
-        allowSemantic: !isDeterministicServiceList,
+        allowSemantic: true,
       })
 
   if (readQueryPlan) {
