@@ -50,7 +50,14 @@ function compactGroundedData(data = {}) {
         reseller: item.reseller,
         networkProvider: item.networkProvider,
         hardware: item.hardware,
-        downtime: item.downtime,
+        downtime: item.downtime
+          ? {
+              configured: item.downtime.configured,
+              enabledCount: item.downtime.enabledCount,
+              active: item.downtime.active,
+              activeSchedule: item.downtime.activeSchedule || null,
+            }
+          : null,
       },
     }
   }
@@ -90,7 +97,7 @@ export async function composeGroundedReply({
   try {
     const reply = await callLlm({
       timeoutMs: env.groundedReplyTimeoutMs,
-      options: {temperature: 0.1, num_predict: 180},
+      options: {temperature: 0.1, num_predict: 100},
       messages: [
         {
           role: 'system',
@@ -109,7 +116,7 @@ export async function composeGroundedReply({
           content: [
             `RICHIESTA: ${String(message).slice(0, 1000)}`,
             `RISPOSTA DI CONTROLLO: ${fallback}`,
-            `DATI VERIFICATI: ${groundedData.slice(0, 6500)}`,
+            `DATI VERIFICATI: ${groundedData.slice(0, 3500)}`,
           ].join('\n\n'),
         },
       ],
