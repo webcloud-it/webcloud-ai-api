@@ -31,6 +31,42 @@ function sanitize(value, depth = 0) {
   )
 }
 
+function compactGroundedData(data = {}) {
+  if (data?.type === 'webcam-detail' && data.item) {
+    const item = data.item
+    return {
+      type: data.type,
+      item: {
+        name: item.name,
+        slug: item.slug,
+        location: item.location,
+        status: item.status,
+        monitoring: item.monitoring,
+        inUse: item.inUse,
+        snapshotEnabled: item.snapshotEnabled,
+        hasEncoding: item.hasEncoding,
+        vpn: item.vpn,
+        hasMikrotik: item.hasMikrotik,
+        reseller: item.reseller,
+        networkProvider: item.networkProvider,
+        hardware: item.hardware,
+        downtime: item.downtime,
+      },
+    }
+  }
+
+  if (data?.type === 'service-detail') {
+    return {
+      type: data.type,
+      query: data.query,
+      totale: data.totale,
+      items: Array.isArray(data.items) ? data.items.slice(0, 3) : [],
+    }
+  }
+
+  return data
+}
+
 export function shouldComposeGroundedReply({message = '', result = {}} = {}) {
   if (!env.groundedRepliesEnabled || result?.ok !== true || !result?.data) return false
   if (!SAFE_SOURCES.has(result.source)) return false
@@ -48,13 +84,13 @@ export async function composeGroundedReply({
 } = {}) {
   if (!shouldComposeGroundedReply({message, result})) return result
 
-  const groundedData = JSON.stringify(sanitize(result.data))
-  const fallback = String(result.reply || '').slice(0, 5000)
+  const groundedData = JSON.stringify(sanitize(compactGroundedData(result.data)))
+  const fallback = String(result.reply || '').slice(0, 1800)
 
   try {
     const reply = await callLlm({
       timeoutMs: env.groundedReplyTimeoutMs,
-      options: {temperature: 0.15, num_predict: 260},
+      options: {temperature: 0.1, num_predict: 180},
       messages: [
         {
           role: 'system',
@@ -73,7 +109,7 @@ export async function composeGroundedReply({
           content: [
             `RICHIESTA: ${String(message).slice(0, 1000)}`,
             `RISPOSTA DI CONTROLLO: ${fallback}`,
-            `DATI VERIFICATI: ${groundedData.slice(0, 14000)}`,
+            `DATI VERIFICATI: ${groundedData.slice(0, 6500)}`,
           ].join('\n\n'),
         },
       ],

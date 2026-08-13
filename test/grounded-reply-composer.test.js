@@ -15,7 +15,14 @@ test('composes a natural reply only from verified read data', async () => {
       intent: 'webcam-detail',
       source: 'tool-fast',
       reply: 'Stream online.',
-      data: {type: 'webcam-detail', item: {name: 'Barricata', stream: {status: 'online'}}},
+      data: {
+        type: 'webcam-detail',
+        item: {
+          name: 'Barricata',
+          status: {stream: {status: 'online'}},
+          rawInternalPayload: 'dato non necessario',
+        },
+      },
     },
     callLlm: async request => {
       prompt = request.messages[1].content
@@ -27,6 +34,7 @@ test('composes a natural reply only from verified read data', async () => {
   assert.equal(result.reply, 'Barricata ha lo stream online.')
   assert.match(prompt, /Barricata/)
   assert.match(prompt, /online/)
+  assert.doesNotMatch(prompt, /rawInternalPayload|dato non necessario/)
 })
 
 test('never sends navigation or operational actions to the narrator', async () => {
