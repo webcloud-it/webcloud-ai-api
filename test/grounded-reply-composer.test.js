@@ -41,6 +41,24 @@ test('never sends navigation or operational actions to the narrator', async () =
   assert.equal(shouldComposeGroundedReply({message: 'apri Barricata', result: action}), false)
 })
 
+test('keeps simple read lists deterministic to avoid unnecessary latency', () => {
+  const result = {
+    ok: true,
+    intent: 'read-query',
+    source: 'tool-fast',
+    reply: 'Ho trovato 2 clienti.',
+    data: {type: 'read-query-result', items: [{name: 'A'}, {name: 'B'}]},
+  }
+
+  assert.equal(
+    shouldComposeGroundedReply({
+      message: 'quali clienti scadono a settembre 2026',
+      result,
+    }),
+    false
+  )
+})
+
 test('falls back to the verified deterministic reply if the model is unavailable', async () => {
   const original = {
     ok: true,

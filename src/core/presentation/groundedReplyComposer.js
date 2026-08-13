@@ -4,7 +4,7 @@ import {callOllamaChat} from '../providers/ollamaProvider.js'
 const SAFE_SOURCES = new Set(['tool-fast', 'tool-semantic'])
 const UNSAFE_INTENTS = /(?:action|open|navigate|clarification|confirmation|mutation|preview|draft|execute)/i
 const UNSAFE_DATA_TYPES = /(?:action|navigation|clarification|confirmation|mutation|preview|draft)/i
-const NARRATIVE_REQUEST = /\b(?:spieg|analizz|confront|valut|riassum|perch[eé]|come mai|cosa significa|dimmi|parlami|ultim[oa]|pi[uù] recente)\b/i
+const NARRATIVE_REQUEST = /\b(?:spieg|analizz|confront|valut|riassum|perch[eé]|come mai|cosa significa|dimmi|parlami)\b/i
 const DETAIL_INTENTS = new Set([
   'webcam-detail',
   'webcam-status',
@@ -14,16 +14,6 @@ const DETAIL_INTENTS = new Set([
   'customer-report',
   'group-report',
   'summary',
-])
-const LIST_INTENTS = new Set([
-  'webcam-list',
-  'service-list',
-  'space-full',
-  'space-low',
-  'dont-renew',
-  'to-renew',
-  'to-transfer',
-  'read-query',
 ])
 const SENSITIVE_KEY = /(?:token|password|secret|api.?key|authorization|authcode|credential)/i
 
@@ -41,12 +31,6 @@ function sanitize(value, depth = 0) {
   )
 }
 
-function resultSize(result = {}) {
-  const data = result.data || {}
-  const items = data.items || data.todo || []
-  return Array.isArray(items) ? items.length : 0
-}
-
 export function shouldComposeGroundedReply({message = '', result = {}} = {}) {
   if (!env.groundedRepliesEnabled || result?.ok !== true || !result?.data) return false
   if (!SAFE_SOURCES.has(result.source)) return false
@@ -54,9 +38,7 @@ export function shouldComposeGroundedReply({message = '', result = {}} = {}) {
   if (UNSAFE_DATA_TYPES.test(String(result.data?.type || ''))) return false
 
   if (DETAIL_INTENTS.has(result.intent)) return true
-  if (NARRATIVE_REQUEST.test(String(message || ''))) return true
-
-  return LIST_INTENTS.has(result.intent) && resultSize(result) > 0 && resultSize(result) <= 8
+  return NARRATIVE_REQUEST.test(String(message || ''))
 }
 
 export async function composeGroundedReply({
