@@ -39,7 +39,7 @@ import {httpError} from '../../../utils/httpError.js'
 import {contextualizeRenewalsMessage, getContextScope} from '../../../core/context/pageContext.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
-import {planReadQuery} from './readQueryPlanner.js'
+import {isAnalyticalReadQueryRequest, planReadQuery} from './readQueryPlanner.js'
 import {executeReadQuery} from './readQueryExecutor.js'
 import {buildReadQueryReply} from './readQueryFormatters.js'
 import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
@@ -1729,6 +1729,7 @@ export async function chat(req, res) {
     groupId: resolvedGroupId,
   })
   const hasExplicitRenewalsIntent = Boolean(explicitRenewalsIntent)
+  const analyticalReadRequest = isAnalyticalReadQueryRequest(message)
 
   const deterministicReadUtterance = parseReadQueryUtterance(message)
   const pendingReadTargetSelection = resolvePendingReadQueryTargetClarification({
@@ -1778,7 +1779,7 @@ export async function chat(req, res) {
 
   const readUtterance =
     deterministicReadUtterance ||
-    (hasExplicitRenewalsIntent
+    (hasExplicitRenewalsIntent || analyticalReadRequest
       ? null
       : await interpretReadQueryUtterance({
           message,
@@ -1853,9 +1854,10 @@ export async function chat(req, res) {
     }
   }
 
-  const readQueryPlan = skipReadQueryForServiceTarget || hasExplicitRenewalsIntent
-    ? null
-    : await planReadQuery({
+  const readQueryPlan =
+    skipReadQueryForServiceTarget || (hasExplicitRenewalsIntent && !analyticalReadRequest)
+      ? null
+      : await planReadQuery({
         message,
         history: Array.isArray(history) ? history : [],
         actorToken: req.auth.token,
@@ -1866,7 +1868,8 @@ export async function chat(req, res) {
 
   if (readQueryPlan) {
     const dataLoadStartedAt = Date.now()
-    const useCatalog = canExecuteReadQueryFromCatalog(readQueryPlan)
+    const useCatalog =
+      readQueryPlan.operation !== 'aggregate' && canExecuteReadQueryFromCatalog(readQueryPlan)
     let catalogError = null
 
     const catalogPromise = useCatalog

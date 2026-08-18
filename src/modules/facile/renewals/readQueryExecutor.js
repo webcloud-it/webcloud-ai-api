@@ -178,6 +178,179 @@ function sortRecords(records, sort = [], fields = {}) {
 }
 
 
+function uniqueGroupValues(values = []) {
+  const map = new Map()
+
+  for (const value of values.length ? values : [null]) {
+    const key = value === null || value === undefined
+      ? '__null__'
+      : `${typeof value}:${normalizeComparable(value)}`
+
+    if (!map.has(key)) map.set(key, value ?? null)
+  }
+
+  return [...map.values()]
+}
+
+function buildGroupCombinations(record, groupBy = []) {
+  if (!groupBy.length) return [{}]
+
+  let combinations = [{}]
+
+  for (const field of groupBy) {
+    const values = uniqueGroupValues(getPathValues(record, field))
+    const next = []
+
+    for (const combination of combinations) {
+      for (const value of values) {
+        next.push({...combination, [field]: value})
+      }
+    }
+
+    combinations = next
+  }
+
+  return combinations
+}
+
+function groupCombinationKey(group = {}, groupBy = []) {
+  return JSON.stringify(
+    groupBy.map(field => {
+      const value = group[field]
+      return value === null || value === undefined
+        ? [field, '__null__']
+        : [field, typeof value, normalizeComparable(value)]
+    })
+  )
+}
+
+function metricValues(records = [], field = '') {
+  if (!field) return []
+  return records.flatMap(record => getPathValues(record, field))
+}
+
+function computeMetric(records = [], metric = {}, fields = {}) {
+  if (metric.function === 'count') return records.length
+
+  const values = metricValues(records, metric.field)
+    .filter(value => value !== null && value !== undefined && value !== '')
+
+  if (metric.function === 'count-distinct') {
+    return new Set(values.map(value => `${typeof value}:${normalizeComparable(value)}`)).size
+  }
+
+  const fieldType = fields?.[metric.field]?.type || 'string'
+
+  if (metric.function === 'sum' || metric.function === 'avg') {
+    const numbers = values
+      .map(toComparableNumber)
+      .filter(value => value !== null)
+
+    if (!numbers.length) return null
+    const sum = numbers.reduce((total, value) => total + value, 0)
+    return metric.function === 'sum' ? sum : sum / numbers.length
+  }
+
+  if (metric.function === 'min' || metric.function === 'max') {
+    if (fieldType === 'date') {
+      const dated = values
+        .map(value => ({value, comparable: toComparableTime(value)}))
+        .filter(item => item.comparable !== null)
+        .sort((first, second) => first.comparable - second.comparable)
+
+      if (!dated.length) return null
+      return metric.function === 'min' ? dated[0].value : dated[dated.length - 1].value
+    }
+
+    const numbers = values
+      .map(toComparableNumber)
+      .filter(value => value !== null)
+      .sort((first, second) => first - second)
+
+    if (!numbers.length) return null
+    return metric.function === 'min' ? numbers[0] : numbers[numbers.length - 1]
+  }
+
+  return null
+}
+
+function getAggregateSortType(field = '', plan = {}, fields = {}) {
+  const metric = (plan.metrics || []).find(item => item.id === field)
+
+  if (!metric) return fields?.[field]?.type || 'string'
+  if (['count', 'count-distinct', 'sum', 'avg'].includes(metric.function)) return 'number'
+  return fields?.[metric.field]?.type || 'string'
+}
+
+function getAggregateSortValue(row = {}, field = '') {
+  if (Object.prototype.hasOwnProperty.call(row.metrics || {}, field)) {
+    return row.metrics[field]
+  }
+
+  if (Object.prototype.hasOwnProperty.call(row.group || {}, field)) {
+    return row.group[field]
+  }
+
+  return null
+}
+
+function sortAggregateRows(rows = [], sort = [], plan = {}, fields = {}) {
+  if (!sort.length) return rows
+
+  return [...rows].sort((first, second) => {
+    for (const entry of sort) {
+      const firstValue = getAggregateSortValue(first, entry.field)
+      const secondValue = getAggregateSortValue(second, entry.field)
+      const firstMissing = firstValue === null || firstValue === undefined || firstValue === ''
+      const secondMissing = secondValue === null || secondValue === undefined || secondValue === ''
+
+      if (firstMissing !== secondMissing) return firstMissing ? 1 : -1
+
+      const comparison = compareValues(
+        firstValue,
+        secondValue,
+        getAggregateSortType(entry.field, plan, fields)
+      )
+
+      if (comparison !== 0) {
+        return entry.direction === 'desc' ? -comparison : comparison
+      }
+    }
+
+    return 0
+  })
+}
+
+function aggregateRecords(records = [], plan = {}, fields = {}) {
+  const grouped = new Map()
+
+  if (!(plan.groupBy || []).length) {
+    grouped.set('[]', {group: {}, records: []})
+  }
+
+  for (const record of records) {
+    for (const group of buildGroupCombinations(record, plan.groupBy || [])) {
+      const key = groupCombinationKey(group, plan.groupBy || [])
+      const bucket = grouped.get(key) || {group, records: []}
+      bucket.records.push(record)
+      grouped.set(key, bucket)
+    }
+  }
+
+  const rows = [...grouped.values()].map(bucket => ({
+    group: bucket.group,
+    metrics: Object.fromEntries(
+      (plan.metrics || []).map(metric => [
+        metric.id,
+        computeMetric(bucket.records, metric, fields),
+      ])
+    ),
+  }))
+
+  return sortAggregateRows(rows, plan.sort || [], plan, fields)
+}
+
+
 const OPERATIONAL_ENRICHMENT_FIELDS = [
   'serviceCount',
   'subscriptionCount',
@@ -334,6 +507,43 @@ export function executeReadQuery({
   const normalizedPlan = validation.plan
   const entity = validation.entity
   const records = buildReadEntityRecords(entity.id, {services, options})
+
+  if (normalizedPlan.operation === 'aggregate') {
+    const filtered = records.filter(record =>
+      normalizedPlan.filters.every(filter =>
+        matchesFilter(record, filter, entity.fields?.[filter.field])
+      )
+    )
+    const aggregated = aggregateRecords(filtered, normalizedPlan, entity.fields)
+    const offset = normalizedPlan.offset || 0
+    const limit = normalizedPlan.limit || 20
+    const items = aggregated.slice(offset, offset + limit)
+
+    return {
+      ok: true,
+      type: 'read-query-result',
+      entity: entity.id,
+      entityLabel: entity.label,
+      entitySingular: entity.singular || entity.label,
+      operation: 'aggregate',
+      plan: normalizedPlan,
+      dataSource: 'operational-services',
+      sourceScope: 'used-or-referenced-data',
+      total: aggregated.length,
+      shown: items.length,
+      offset,
+      limit,
+      nextOffset: offset + items.length,
+      previousOffset: Math.max(offset - limit, 0),
+      hasMore: offset + items.length < aggregated.length,
+      items,
+      aggregate: {
+        groupBy: normalizedPlan.groupBy || [],
+        metrics: normalizedPlan.metrics || [],
+        sourceRecords: filtered.length,
+      },
+    }
+  }
 
   if (
     catalogResult?.ok === true &&

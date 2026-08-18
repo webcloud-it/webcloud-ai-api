@@ -1,4 +1,4 @@
-const ALLOWED_OPERATIONS = new Set(['list', 'count', 'detail'])
+const ALLOWED_OPERATIONS = new Set(['list', 'count', 'detail', 'aggregate'])
 const ALLOWED_OPERATORS = new Set([
   'equals',
   'not-equals',
@@ -14,9 +14,19 @@ const ALLOWED_OPERATORS = new Set([
   'falsey',
 ])
 const ALLOWED_DIRECTIONS = new Set(['asc', 'desc'])
+const ALLOWED_AGGREGATE_FUNCTIONS = new Set([
+  'count',
+  'count-distinct',
+  'sum',
+  'avg',
+  'min',
+  'max',
+])
 
 export const DEFAULT_READ_QUERY_LIMIT = 20
 export const MAX_READ_QUERY_LIMIT = 50
+export const MAX_READ_QUERY_GROUP_BY_FIELDS = 2
+export const MAX_READ_QUERY_METRICS = 4
 
 function clampInteger(value, fallback, {min = 0, max = Number.MAX_SAFE_INTEGER} = {}) {
   const number = Number.parseInt(String(value ?? ''), 10)
@@ -98,6 +108,69 @@ function normalizeSort(sort = [], allowedFields = new Set()) {
   return out.slice(0, 3)
 }
 
+function normalizeGroupBy(groupBy = [], allowedFields = new Set()) {
+  const values = Array.isArray(groupBy) ? groupBy : [groupBy]
+  const out = []
+
+  for (const value of values) {
+    const field = String(value || '').trim()
+    if (!field || !allowedFields.has(field) || out.includes(field)) continue
+    out.push(field)
+  }
+
+  return out.slice(0, MAX_READ_QUERY_GROUP_BY_FIELDS)
+}
+
+function isNumberType(type = '') {
+  return type === 'number' || type === 'number-array'
+}
+
+function isOrderableAggregateType(type = '') {
+  return isNumberType(type) || type === 'date'
+}
+
+function normalizeMetricId(value = '', index = 0) {
+  const id = String(value || '').trim()
+  if (/^[a-zA-Z][a-zA-Z0-9_-]{0,47}$/.test(id)) return id
+  return `metric${index + 1}`
+}
+
+function normalizeMetrics(metrics = [], fields = {}) {
+  const source = Array.isArray(metrics) ? metrics : []
+  const out = []
+  const usedIds = new Set()
+
+  for (const [index, entry] of source.entries()) {
+    const fn = String(entry?.function || entry?.fn || '').trim().toLowerCase()
+    if (!ALLOWED_AGGREGATE_FUNCTIONS.has(fn)) continue
+
+    const field = entry?.field == null ? null : String(entry.field).trim()
+    const fieldDefinition = field ? fields?.[field] : null
+
+    if (fn !== 'count' && (!field || !fieldDefinition)) continue
+    if (['sum', 'avg'].includes(fn) && !isNumberType(fieldDefinition?.type)) continue
+    if (['min', 'max'].includes(fn) && !isOrderableAggregateType(fieldDefinition?.type)) continue
+
+    let id = normalizeMetricId(entry?.id, index)
+    if (usedIds.has(id)) continue
+    usedIds.add(id)
+
+    out.push({
+      id,
+      function: fn,
+      field: fn === 'count' ? null : field,
+    })
+  }
+
+  return out.slice(0, MAX_READ_QUERY_METRICS)
+}
+
+function defaultAggregateSort(groupBy = [], metrics = []) {
+  if (metrics.length) return [{field: metrics[0].id, direction: 'desc'}]
+  if (groupBy.length) return [{field: groupBy[0], direction: 'asc'}]
+  return []
+}
+
 export function validateReadQueryPlan(plan = {}, registry) {
   const entityId = String(plan?.entity || '').trim()
   const entity = registry?.get(entityId)
@@ -110,12 +183,100 @@ export function validateReadQueryPlan(plan = {}, registry) {
     }
   }
 
-  const operation = ALLOWED_OPERATIONS.has(plan?.operation) ? plan.operation : 'list'
-  const allowedFields = new Set(Object.keys(entity.fields || {}))
-  const filters = (Array.isArray(plan?.filters) ? plan.filters : [])
+  const requestedOperation = String(plan?.operation || '').trim()
+  if (requestedOperation && !ALLOWED_OPERATIONS.has(requestedOperation)) {
+    return {
+      ok: false,
+      reason: 'unsupported-operation',
+      message: `Operazione non supportata: ${requestedOperation}`,
+    }
+  }
+
+  const operation = requestedOperation || 'list'
+  const fields = entity.fields || {}
+  const allowedFields = new Set(Object.keys(fields))
+  const rawFilters = Array.isArray(plan?.filters) ? plan.filters : []
+  const filters = rawFilters
     .map(filter => normalizeFilter(filter, allowedFields))
     .filter(Boolean)
-  const sort = normalizeSort(plan?.sort, allowedFields)
+
+  if (filters.length !== rawFilters.length) {
+    return {
+      ok: false,
+      reason: 'invalid-filter',
+      message: 'La query contiene almeno un filtro, campo o operatore non autorizzato.',
+    }
+  }
+
+  const rawGroupBy = operation === 'aggregate'
+    ? (Array.isArray(plan?.groupBy) ? plan.groupBy : plan?.groupBy ? [plan.groupBy] : [])
+    : []
+  const groupBy = operation === 'aggregate'
+    ? normalizeGroupBy(rawGroupBy, allowedFields)
+    : []
+
+  if (operation === 'aggregate' && (rawGroupBy.length > MAX_READ_QUERY_GROUP_BY_FIELDS || groupBy.length !== rawGroupBy.length)) {
+    return {
+      ok: false,
+      reason: 'invalid-group-by',
+      message: 'La query contiene un raggruppamento non autorizzato o troppo ampio.',
+    }
+  }
+
+  const rawMetrics = operation === 'aggregate' && Array.isArray(plan?.metrics) ? plan.metrics : []
+  const metrics = operation === 'aggregate'
+    ? normalizeMetrics(rawMetrics, fields)
+    : []
+
+  if (operation === 'aggregate' && rawMetrics.length > MAX_READ_QUERY_METRICS) {
+    return {
+      ok: false,
+      reason: 'too-many-aggregate-metrics',
+      message: `Sono consentite al massimo ${MAX_READ_QUERY_METRICS} metriche per query.`,
+    }
+  }
+
+  if (operation === 'aggregate' && metrics.length !== rawMetrics.length) {
+    return {
+      ok: false,
+      reason: 'invalid-aggregate-metric',
+      message: 'La query contiene almeno una metrica o un campo aggregato non autorizzato.',
+    }
+  }
+
+  if (operation === 'aggregate' && metrics.some(metric => allowedFields.has(metric.id))) {
+    return {
+      ok: false,
+      reason: 'aggregate-metric-id-conflict',
+      message: 'L’id di una metrica aggregata non può coincidere con un campo dell’entità.',
+    }
+  }
+
+  if (operation === 'aggregate' && !metrics.length) {
+    return {
+      ok: false,
+      reason: 'aggregate-metrics-required',
+      message: 'Una query aggregata richiede almeno una metrica valida.',
+    }
+  }
+
+  const aggregateSortFields = new Set([
+    ...groupBy,
+    ...metrics.map(metric => metric.id),
+  ])
+  const rawSort = Array.isArray(plan?.sort) ? plan.sort : []
+  const sort = normalizeSort(
+    rawSort,
+    operation === 'aggregate' ? aggregateSortFields : allowedFields
+  )
+
+  if (sort.length !== rawSort.length) {
+    return {
+      ok: false,
+      reason: 'invalid-sort',
+      message: 'La query contiene almeno un ordinamento su un campo non autorizzato.',
+    }
+  }
   const limit = clampInteger(
     operation === 'count' ? 0 : plan?.limit,
     operation === 'detail' ? 10 : DEFAULT_READ_QUERY_LIMIT,
@@ -126,6 +287,12 @@ export function validateReadQueryPlan(plan = {}, registry) {
     ? Math.max(0, Math.min(1, Number(plan.confidence)))
     : 1
 
+  const normalizedSort = sort.length
+    ? sort
+    : operation === 'aggregate'
+      ? defaultAggregateSort(groupBy, metrics)
+      : entity.defaultSort || [{field: 'name', direction: 'asc'}]
+
   return {
     ok: true,
     plan: {
@@ -133,7 +300,9 @@ export function validateReadQueryPlan(plan = {}, registry) {
       operation,
       entity: entity.id,
       filters,
-      sort: sort.length ? sort : entity.defaultSort || [{field: 'name', direction: 'asc'}],
+      sort: normalizedSort,
+      groupBy,
+      metrics,
       limit,
       offset,
       include: Array.isArray(plan?.include)
@@ -155,12 +324,34 @@ export function mergeReadQueryPlans(previousPlan = null, patch = {}) {
   const previousFilters = (previousPlan.filters || []).filter(
     filter => !replaceFamilies.has(filter.field)
   )
+  const operation = patch.operation || previousPlan.operation
+  const sameAggregateMode =
+    operation === 'aggregate' &&
+    previousPlan.operation === 'aggregate' &&
+    String(patch.entity || previousPlan.entity) === String(previousPlan.entity)
 
   return {
     ...previousPlan,
     ...patch,
+    operation,
     filters: [...previousFilters, ...(patch.filters || [])],
     sort: patch.sort?.length ? patch.sort : previousPlan.sort,
+    groupBy:
+      operation === 'aggregate'
+        ? patch.groupBy?.length
+          ? patch.groupBy
+          : sameAggregateMode
+            ? previousPlan.groupBy || []
+            : []
+        : [],
+    metrics:
+      operation === 'aggregate'
+        ? patch.metrics?.length
+          ? patch.metrics
+          : sameAggregateMode
+            ? previousPlan.metrics || []
+            : []
+        : [],
     offset: patch.offset ?? 0,
     sourceMessage: patch.sourceMessage || previousPlan.sourceMessage,
     previousPlan,

@@ -252,9 +252,72 @@ Puoi chiedermi "altri ${result.limit}" per continuare.`
 ${lines.join('\n')}${tail}`
 }
 
+function formatAggregateValue(value) {
+  if (value === null || value === undefined || value === '') return '—'
+
+  if (typeof value === 'number') {
+    return new Intl.NumberFormat('it-IT', {maximumFractionDigits: 2}).format(value)
+  }
+
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}(?:T|$)/.test(value)) {
+    return formatDate(value)
+  }
+
+  return String(value)
+}
+
+function formatAggregateMetric(metric = {}, value = null) {
+  const labels = {
+    count: 'conteggio',
+    'count-distinct': metric.field ? `valori distinti di ${metric.field}` : 'valori distinti',
+    sum: metric.field ? `somma di ${metric.field}` : 'somma',
+    avg: metric.field ? `media di ${metric.field}` : 'media',
+    min: metric.field ? `minimo di ${metric.field}` : 'minimo',
+    max: metric.field ? `massimo di ${metric.field}` : 'massimo',
+  }
+
+  return `${labels[metric.function] || metric.id}: ${formatAggregateValue(value)}`
+}
+
+function formatAggregateRow(item = {}, result = {}) {
+  const groupBy = result?.aggregate?.groupBy || result?.plan?.groupBy || []
+  const metrics = result?.aggregate?.metrics || result?.plan?.metrics || []
+  const groups = groupBy.map(field => ({field, value: item?.group?.[field]}))
+  const groupLabel = groups.length === 1
+    ? formatAggregateValue(groups[0].value)
+    : groups.length > 1
+      ? groups.map(group => `${group.field}: ${formatAggregateValue(group.value)}`).join(' | ')
+      : 'totale'
+  const metricLabels = metrics.map(metric =>
+    formatAggregateMetric(metric, item?.metrics?.[metric.id])
+  )
+
+  return `- ${groupLabel}${metricLabels.length ? ` | ${metricLabels.join(' | ')}` : ''}`
+}
+
+function buildAggregateReply(result = {}) {
+  const sourceRecords = Number(result?.aggregate?.sourceRecords || 0)
+  const groupBy = result?.aggregate?.groupBy || result?.plan?.groupBy || []
+  const start = result.offset + 1
+  const end = result.offset + result.shown
+  const lines = (result.items || []).map(item => formatAggregateRow(item, result))
+  const heading = groupBy.length
+    ? `Ho analizzato ${sourceRecords} ${getEntityLabel(result, sourceRecords)} e ottenuto ${result.total} gruppi${buildSourceSuffix(result)}${result.total > result.shown || result.offset > 0 ? `. Ti mostro i risultati ${start}-${end}.` : '.'}`
+    : `Ho calcolato l’aggregazione su ${sourceRecords} ${getEntityLabel(result, sourceRecords)}${buildSourceSuffix(result)}.`
+  const tail = result.hasMore
+    ? `\n\nPuoi chiedermi "altri ${result.limit}" per continuare.`
+    : ''
+
+  return `${heading}\n\n${lines.join('\n')}${tail}`
+}
+
 export function buildReadQueryReply(result = {}) {
   if (!result?.ok) {
     return result?.error || 'Non è stato possibile eseguire la richiesta.'
+  }
+
+  if (result.operation === 'aggregate') {
+    return buildAggregateReply(result)
   }
 
   if (result.operation === 'count') {

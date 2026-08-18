@@ -22,6 +22,20 @@ function normalizeText(value = '') {
     .trim()
 }
 
+const ANALYTICAL_READ_PATTERN =
+  /\b(?:raggrupp|aggreg|classific|ranking|top|maggior|minore|minor|massim|minim|media|medie|somma|distint|distribuz|confront|correl|per\s+(?:ogni|ciascun|ciascuna)|piu|meno|primi\s+\d{1,2}|prime\s+\d{1,2})\b/i
+
+export function isAnalyticalReadQueryRequest(message = '') {
+  const text = normalizeText(message)
+  if (!text) return false
+
+  return (
+    ANALYTICAL_READ_PATTERN.test(text) ||
+    /\b(?:quanti|quante|conteggio|numero)\b[\s\S]{0,80}\bper\b/i.test(text) ||
+    /\bper\b[\s\S]{0,80}\b(?:quanti|quante|conteggio|numero)\b/i.test(text)
+  )
+}
+
 function cleanTarget(value = '') {
   return String(value || '')
     .replace(/[?.!,;:]+$/g, '')
@@ -70,7 +84,7 @@ function buildReadQueryStateFromData(data = {}) {
 }
 
 function buildReadQueryStateFromPlan(plan = null, previousState = null) {
-  if (!plan?.entity || plan.entity === 'services') return null
+  if (!plan?.entity || (plan.entity === 'services' && plan.operation !== 'aggregate')) return null
 
   const sameEntity = previousState?.entity === plan.entity
   const offset = toFiniteNumber(plan.offset, 0)
@@ -181,7 +195,7 @@ export function getPreviousReadQueryState(history = [], {fallbackState = null} =
 
       const explicitEntity = detectPrimaryEntity(content)
 
-      if (explicitEntity?.id === 'services') {
+      if (explicitEntity?.id === 'services' && !isAnalyticalReadQueryRequest(content)) {
         state = null
         hasExplicitTopicAnchor = true
         continue
@@ -672,6 +686,7 @@ function shouldUseSemanticPlanner(message = '', previousState = null, readUttera
   const text = normalizeText(message)
   if (!text) return false
   if (readUtterance?.operation === 'detail') return false
+  if (isAnalyticalReadQueryRequest(text)) return true
 
   if (previousState && /^(?:e|ora|adesso|solo|soltanto|quelli|quelle|questi|queste|tra questi|fra questi)\b/i.test(text)) {
     return true
@@ -686,7 +701,9 @@ async function buildSemanticPlan({message, previousState, callLlm}) {
     id: definition.id,
     label: definition.label,
     aliases: definition.aliases,
-    fields: Object.keys(definition.fields || {}),
+    fields: Object.fromEntries(
+      Object.entries(definition.fields || {}).map(([field, config]) => [field, config?.type || 'string'])
+    ),
   }))
 
   const systemPrompt = [
@@ -695,8 +712,14 @@ async function buildSemanticPlan({message, previousState, callLlm}) {
     'Trasforma la richiesta in un piano JSON usando esclusivamente entità, campi e operatori consentiti.',
     'Le action, le conferme, gli annullamenti e le diagnostiche sono gestiti prima di questo planner.',
     'Non inventare nomi, filtri o valori non presenti nella richiesta.',
-    'Se la richiesta è un seguito, modifica il previousPlan senza perdere i filtri non sostituiti.',
-    'Per richieste sui servizi puoi usare entity=services, ma il backend può delegarle al planner storico.',
+    'Se la richiesta è un seguito, modifica il previousPlan senza perdere filtri, raggruppamenti o metriche ancora pertinenti.',
+    'Usa operation=aggregate soltanto quando servono raggruppamenti o metriche calcolate; se una metrica è già un campo numerico dell’entità preferisci list + sort.',
+    'Per aggregate puoi usare groupBy con al massimo 2 campi e metrics con al massimo 4 metriche.',
+    'Funzioni metriche consentite: count, count-distinct, sum, avg, min, max.',
+    'count non richiede field; count-distinct richiede un field; sum e avg richiedono campi number/number-array; min e max richiedono campi number/number-array/date.',
+    'Nelle query aggregate sort può riferirsi soltanto a un campo di groupBy oppure all’id di una metrica.',
+    'Non creare join, subquery o piani multi-step: se la richiesta li richiede, produci soltanto ciò che è rappresentabile dal contratto.',
+    'Per entity=services usa il nuovo planner soltanto con operation=aggregate; list, count e detail restano affidati al planner storico.',
     'Operatori consentiti: equals, not-equals, contains, not-contains, in, between, gte, lte, exists, not-exists, truthy, falsey.',
     'Restituisci esclusivamente JSON valido senza markdown.',
   ].join(' ')
@@ -706,10 +729,12 @@ async function buildSemanticPlan({message, previousState, callLlm}) {
     previousPlan: previousState?.plan || null,
     entities: registrySummary,
     outputSchema: {
-      operation: 'list | count | detail',
+      operation: 'list | count | detail | aggregate',
       entity: 'entity id',
       filters: [{field: 'allowed field', operator: 'allowed operator', value: 'scalar | array | {start,end}'}],
-      sort: [{field: 'allowed field', direction: 'asc | desc'}],
+      groupBy: ['allowed field; only for aggregate'],
+      metrics: [{id: 'short stable id', function: 'count | count-distinct | sum | avg | min | max', field: 'allowed field or null'}],
+      sort: [{field: 'allowed entity field, groupBy field or metric id', direction: 'asc | desc'}],
       limit: '1..50',
       offset: '>=0',
       confidence: '0..1',
@@ -756,7 +781,9 @@ export async function planReadQuery({
     readUtterance
   )
 
-  if (deterministic) {
+  const analyticalRequest = isAnalyticalReadQueryRequest(message)
+
+  if (deterministic && (!analyticalRequest || deterministic.source === 'follow-up-pagination')) {
     const validation = validateReadQueryPlan(deterministic, registry)
     if (validation.ok) return validation.plan
   }
@@ -775,7 +802,9 @@ export async function planReadQuery({
     const validation = validateReadQueryPlan(merged, registry)
 
     if (!validation.ok) return null
-    if (validation.plan.entity === 'services') return null
+    if (validation.plan.entity === 'services' && validation.plan.operation !== 'aggregate') {
+      return null
+    }
 
     return validation.plan
   } catch {
