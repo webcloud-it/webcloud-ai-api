@@ -1486,8 +1486,16 @@ export async function planReadQuery({
   readUtterance = null,
   onSemanticError = null,
 } = {}) {
+  const effectiveHistory = Array.isArray(history) ? [...history] : []
+  const lastHistoryItem = effectiveHistory.at(-1)
+  if (
+    lastHistoryItem?.role === 'user' &&
+    normalizeText(getHistoryContent(lastHistoryItem)) === normalizeText(message)
+  ) {
+    effectiveHistory.pop()
+  }
   const rememberedState = getRememberedReadQueryContext({actorToken})
-  const previousState = getPreviousReadQueryState(history, {
+  const previousState = getPreviousReadQueryState(effectiveHistory, {
     fallbackState: rememberedState,
   })
   const registry = getReadEntityRegistry()

@@ -612,6 +612,31 @@ test('planner analitico: pagina con una quantità naturale scritta in lettere', 
   assert.equal(nextPlan.offset, firstResult.nextOffset)
 })
 
+test('planner analitico: non applica due volte il messaggio corrente duplicato nella cronologia', async () => {
+  const actorToken = 'analytical-pagination-dedup-token'
+  const firstPlan = await planReadQuery({
+    message: 'quali fornitori hanno più servizi in scadenza nel 2027?',
+    allowSemantic: false,
+  })
+  const firstResult = executeReadQuery({plan: {...firstPlan, limit: 3}, services, options})
+  rememberReadQueryContext({
+    actorToken,
+    plan: {...firstPlan, limit: 3},
+    result: firstResult,
+  })
+
+  const message = 'Mostrami gli altri tre'
+  const nextPlan = await planReadQuery({
+    message,
+    history: [{role: 'user', content: message}],
+    actorToken,
+    allowSemantic: false,
+  })
+
+  assert.equal(nextPlan.limit, 3)
+  assert.equal(nextPlan.offset, firstResult.nextOffset)
+})
+
 test('readiness: verifica a runtime il piano critico della build', () => {
   assert.deepEqual(checkAnalyticalReadPlannerReadiness(), {
     ok: true,
