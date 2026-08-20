@@ -15,6 +15,7 @@ import {
 import {recordChatAudit} from '../core/observability/chatAudit.js'
 import {attachChatPresentation} from '../core/presentation/chatPresentation.js'
 import {env} from '../config/env.js'
+import {buildInfo} from '../config/build.js'
 
 const router = express.Router()
 
@@ -31,6 +32,8 @@ router.post(
         ...(payload.meta || {}),
         requestId: req.requestId,
         model: env.ollamaChatModel,
+        buildId: buildInfo.id,
+        buildCommit: buildInfo.commit,
       }
       recordChatAudit({
         requestId: req.requestId,

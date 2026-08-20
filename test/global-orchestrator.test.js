@@ -63,6 +63,20 @@ test('clear compound renewals filters preserve the original request without the 
   assert.equal(modelCalled, false)
 })
 
+test('analytical renewals ranking reaches the renewals module unchanged', async () => {
+  let modelCalled = false
+  const message = 'Quali fornitori hanno più servizi in scadenza nel 2027?'
+  const plan = await resolveGlobalChatPlan({message, credentials}, async () => {
+    modelCalled = true
+    return null
+  })
+
+  assert.equal(plan.moduleId, 'facile.renewals')
+  assert.equal(plan.canonicalMessage, undefined)
+  assert.equal(plan.source, 'message')
+  assert.equal(modelCalled, false)
+})
+
 test('global planner routes an explicit renewals request from WebcamGo', () => {
   const plan = planGlobalChat({
     message: 'Mostrami i rinnovi in scadenza',

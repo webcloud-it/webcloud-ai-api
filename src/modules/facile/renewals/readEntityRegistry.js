@@ -100,6 +100,7 @@ function createBaseDefinition({
   defaultSort,
   buildRecords,
   catalog = null,
+  analytics = null,
 }) {
   return {
     id,
@@ -110,6 +111,7 @@ function createBaseDefinition({
     defaultSort,
     buildRecords,
     catalog,
+    analytics,
   }
 }
 
@@ -1168,10 +1170,15 @@ const definitions = [
     fields: {
       ...COMMON_NAME_FIELDS,
       kind: {type: 'string'},
+      'service.id': {type: 'string', label: 'ID servizio', aggregateLabel: 'servizi distinti', aliases: ['id servizio', 'service id']},
       'service.name': {type: 'string', label: 'servizio', aliases: ['servizio', 'servizi']},
+      'customer.id': {type: 'string', label: 'ID cliente', aggregateLabel: 'clienti distinti', aliases: ['id cliente', 'customer id']},
       'customer.name': {type: 'string', label: 'cliente', aliases: ['cliente', 'clienti', 'azienda', 'aziende']},
+      'group.id': {type: 'string', label: 'ID gruppo', aggregateLabel: 'gruppi distinti', aliases: ['id gruppo', 'group id']},
       'group.name': {type: 'string', label: 'gruppo', aliases: ['gruppo', 'gruppi', 'gruppo aziendale']},
+      'plan.id': {type: 'string', label: 'ID piano', aggregateLabel: 'piani distinti', aliases: ['id piano', 'plan id']},
       'plan.name': {type: 'string', label: 'piano', aliases: ['piano', 'piani', 'plan', 'plans']},
+      'supplier.id': {type: 'string', label: 'ID fornitore', aggregateLabel: 'fornitori distinti', aliases: ['id fornitore', 'supplier id', 'provider id']},
       'supplier.name': {type: 'string', label: 'fornitore', aliases: ['fornitore', 'fornitori', 'provider', 'supplier']},
       startsOn: {type: 'date', label: 'data inizio', aliases: ['inizio', 'data inizio', 'starts on']},
       endsOn: {type: 'date', label: 'scadenza', aliases: ['scadenza', 'data scadenza', 'fine', 'ends on']},
@@ -1179,6 +1186,29 @@ const definitions = [
       addonCount: {type: 'number', label: 'numero add-on', aliases: ['add-on', 'addon', 'numero add-on']},
     },
     defaultSort: [{field: 'endsOn', direction: 'asc'}],
+    analytics: {
+      grain: 'subscription',
+      timeField: 'endsOn',
+      relations: {
+        services: {idField: 'service.id', labelField: 'service.name'},
+        providers: {
+          idField: 'supplier.id',
+          labelField: 'supplier.name',
+          filters: [{field: 'kind', operator: 'equals', value: 'supplier'}],
+        },
+        customers: {
+          idField: 'customer.id',
+          labelField: 'customer.name',
+          filters: [{field: 'kind', operator: 'equals', value: 'customer'}],
+        },
+        groups: {
+          idField: 'group.id',
+          labelField: 'group.name',
+          filters: [{field: 'kind', operator: 'equals', value: 'customer'}],
+        },
+        plans: {idField: 'plan.id', labelField: 'plan.name'},
+      },
+    },
     buildRecords: buildSubscriptions,
   }),
   createBaseDefinition({
@@ -1306,6 +1336,13 @@ export function getReadEntityDefinitions() {
           enabled: definition.catalog.enabled === true,
           fields: definition.catalog.fields,
           sortableFields: definition.catalog.sortableFields,
+        }
+      : null,
+    analytics: definition.analytics
+      ? {
+          grain: definition.analytics.grain || definition.id,
+          timeField: definition.analytics.timeField || null,
+          relations: definition.analytics.relations || {},
         }
       : null,
   }))

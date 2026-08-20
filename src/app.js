@@ -2,6 +2,7 @@ import cors from 'cors'
 import express from 'express'
 
 import {env} from './config/env.js'
+import {buildInfo} from './config/build.js'
 import {errorHandler} from './middlewares/errorHandler.js'
 import {notFoundHandler} from './middlewares/notFoundHandler.js'
 import chatRouter from './routes/chat.js'
@@ -16,6 +17,7 @@ import {
   getServiceOptions,
   getSettings,
 } from './modules/facile/renewals/service.js'
+import {checkAnalyticalReadPlannerReadiness} from './modules/facile/renewals/readQueryPlanner.js'
 
 const app = express()
 
@@ -32,18 +34,22 @@ app.get('/health', (req, res) => {
     ok: true,
     service: 'webcloud-ai-api',
     env: env.nodeEnv,
+    build: buildInfo,
   })
 })
 
 app.get('/ready', async (req, res) => {
   const ollama = await checkOllamaReadiness()
-  const ready = !env.ollamaRequired || ollama.ok
+  const analyticalReadPlanner = checkAnalyticalReadPlannerReadiness()
+  const ready = (!env.ollamaRequired || ollama.ok) && analyticalReadPlanner.ok
 
   res.status(ready ? 200 : 503).json({
     ok: ready,
     service: 'webcloud-ai-api',
+    build: buildInfo,
     dependencies: {
       ollama: {...ollama, required: env.ollamaRequired},
+      analyticalReadPlanner,
     },
   })
 })

@@ -134,6 +134,28 @@ export function isAnalyticalReadQueryRequest(message = '') {
   )
 }
 
+export function checkAnalyticalReadPlannerReadiness() {
+  const message = 'Quali fornitori hanno più servizi in scadenza nel 2027?'
+  const candidate = buildDeterministicAnalyticalPlan(message)
+  const validation = validateReadQueryPlan(candidate || {}, getReadEntityRegistry())
+  const plan = validation.plan || null
+  const ok =
+    validation.ok === true &&
+    plan?.operation === 'aggregate' &&
+    plan?.entity === 'subscriptions' &&
+    plan?.groupBy?.[0] === 'supplier.name' &&
+    plan?.metrics?.[0]?.function === 'count-distinct' &&
+    plan?.metrics?.[0]?.field === 'service.id'
+
+  return {
+    ok,
+    signature: ok
+      ? 'subscriptions:supplier.name:count-distinct(service.id)'
+      : null,
+    reason: ok ? null : validation.reason || 'unexpected-plan',
+  }
+}
+
 
 function escapeRegExp(value = '') {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -282,6 +304,41 @@ function findRelationDimension(measureDefinition = null, targetDefinition = null
   return matches[0].field
 }
 
+function mergeAnalyticalFilters(...sources) {
+  const filters = sources.flat().filter(Boolean)
+  const seen = new Set()
+
+  return filters.filter(filter => {
+    const key = JSON.stringify([filter.field, filter.operator, filter.value])
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function findRelationalFact(definitions = [], target = null, measure = null) {
+  if (!target || !measure) return null
+
+  return definitions
+    .map(definition => {
+      const targetRelation = definition.analytics?.relations?.[target.id]
+      const measureRelation = definition.analytics?.relations?.[measure.id]
+      if (!targetRelation?.labelField || !measureRelation?.idField) return null
+
+      const fields = definition.fields || {}
+      if (!fields[targetRelation.labelField] || !fields[measureRelation.idField]) return null
+
+      return {
+        definition,
+        targetRelation,
+        measureRelation,
+        score: definition.analytics?.timeField ? 1 : 0,
+      }
+    })
+    .filter(Boolean)
+    .sort((first, second) => second.score - first.score)[0] || null
+}
+
 function buildRelationalRankingPlan(message = '', previousState = null) {
   const text = normalizeText(message)
   const direction = /\b(?:piu|maggior\w*|massim\w*|top)\b/i.test(text)
@@ -308,6 +365,40 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
   )?.definition || null
 
   if (!target || !measure) return null
+
+  const relationalFact = findRelationalFact(definitions, target, measure)
+  if (relationalFact) {
+    const dimension = relationalFact.targetRelation.labelField
+    const filters = mergeAnalyticalFilters(
+      buildDeterministicFilters(relationalFact.definition.id, text)
+        .filter(filter => filter.field !== dimension),
+      relationalFact.targetRelation.filters || [],
+      relationalFact.measureRelation.filters || []
+    )
+
+    return {
+      type: 'read-query-plan',
+      operation: 'aggregate',
+      entity: relationalFact.definition.id,
+      filters,
+      groupBy: [dimension],
+      metrics: [{
+        id: 'count',
+        function: 'count-distinct',
+        field: relationalFact.measureRelation.idField,
+      }],
+      sort: [
+        {field: 'count', direction},
+        {field: dimension, direction: 'asc'},
+      ],
+      limit: extractAnalyticalLimit(text, target),
+      offset: 0,
+      confidence: 1,
+      source: 'deterministic-analytical',
+      sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
 
   const dimension = findRelationDimension(measure, target)
   if (!dimension) return null

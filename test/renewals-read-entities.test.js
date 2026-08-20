@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import {planReadQuery, getPreviousReadQueryState} from '../src/modules/facile/renewals/readQueryPlanner.js'
+import {
+  checkAnalyticalReadPlannerReadiness,
+  planReadQuery,
+  getPreviousReadQueryState,
+} from '../src/modules/facile/renewals/readQueryPlanner.js'
 import {executeReadQuery} from '../src/modules/facile/renewals/readQueryExecutor.js'
 import {buildReadQueryReply} from '../src/modules/facile/renewals/readQueryFormatters.js'
 import {
@@ -531,16 +535,34 @@ test('planner analitico: classifica fornitori contando solo i servizi nel period
   })
 
   assert.equal(plan.operation, 'aggregate')
-  assert.equal(plan.entity, 'services')
-  assert.deepEqual(plan.groupBy, ['providerNames'])
-  assert.deepEqual(plan.metrics, [{id: 'count', function: 'count', field: null}])
+  assert.equal(plan.entity, 'subscriptions')
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.deepEqual(plan.metrics, [
+    {id: 'count', function: 'count-distinct', field: 'service.id'},
+  ])
   assert.deepEqual(plan.filters, [
-    {field: 'expiryYears', operator: 'contains', value: 2027},
+    {
+      field: 'endsOn',
+      operator: 'between',
+      value: {
+        start: '2027-01-01T00:00:00.000Z',
+        end: '2027-12-31T23:59:59.999Z',
+      },
+    },
+    {field: 'kind', operator: 'equals', value: 'supplier'},
   ])
   assert.deepEqual(plan.sort, [
     {field: 'count', direction: 'desc'},
-    {field: 'providerNames', direction: 'asc'},
+    {field: 'supplier.name', direction: 'asc'},
   ])
+})
+
+test('readiness: verifica a runtime il piano critico della build', () => {
+  assert.deepEqual(checkAnalyticalReadPlannerReadiness(), {
+    ok: true,
+    signature: 'subscriptions:supplier.name:count-distinct(service.id)',
+    reason: null,
+  })
 })
 
 test('planner analitico: riusa la stessa capacità per gruppi e servizi', async () => {
@@ -550,10 +572,18 @@ test('planner analitico: riusa la stessa capacità per gruppi e servizi', async 
   })
 
   assert.equal(plan.operation, 'aggregate')
-  assert.equal(plan.entity, 'services')
+  assert.equal(plan.entity, 'subscriptions')
   assert.deepEqual(plan.groupBy, ['group.name'])
   assert.deepEqual(plan.filters, [
-    {field: 'expiryYears', operator: 'contains', value: 2027},
+    {
+      field: 'endsOn',
+      operator: 'between',
+      value: {
+        start: '2027-01-01T00:00:00.000Z',
+        end: '2027-12-31T23:59:59.999Z',
+      },
+    },
+    {field: 'kind', operator: 'equals', value: 'customer'},
   ])
   assert.deepEqual(plan.sort, [
     {field: 'count', direction: 'asc'},
@@ -565,13 +595,23 @@ test('executor analitico: filtra il dataset completo prima di raggruppare e cont
   const result = executeReadQuery({
     plan: {
       operation: 'aggregate',
-      entity: 'services',
-      filters: [{field: 'expiryYears', operator: 'contains', value: 2027}],
-      groupBy: ['providerNames'],
-      metrics: [{id: 'count', function: 'count', field: null}],
+      entity: 'subscriptions',
+      filters: [
+        {
+          field: 'endsOn',
+          operator: 'between',
+          value: {
+            start: '2027-01-01T00:00:00.000Z',
+            end: '2027-12-31T23:59:59.999Z',
+          },
+        },
+        {field: 'kind', operator: 'equals', value: 'supplier'},
+      ],
+      groupBy: ['supplier.name'],
+      metrics: [{id: 'count', function: 'count-distinct', field: 'service.id'}],
       sort: [
         {field: 'count', direction: 'desc'},
-        {field: 'providerNames', direction: 'asc'},
+        {field: 'supplier.name', direction: 'asc'},
       ],
       limit: 20,
       offset: 0,
@@ -584,9 +624,9 @@ test('executor analitico: filtra il dataset completo prima di raggruppare e cont
   assert.equal(result.operation, 'aggregate')
   assert.equal(result.aggregate.sourceRecords, 1)
   assert.deepEqual(result.items, [
-    {group: {providerNames: 'MisterDomain'}, metrics: {count: 1}},
-    {group: {providerNames: 'WebCloud'}, metrics: {count: 1}},
+    {group: {'supplier.name': 'MisterDomain'}, metrics: {count: 1}},
   ])
+  assert.match(buildReadQueryReply(result), /MisterDomain \| servizi distinti: 1/)
 })
 
 

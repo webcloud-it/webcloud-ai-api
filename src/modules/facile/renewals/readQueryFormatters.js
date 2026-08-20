@@ -1,3 +1,5 @@
+import {getReadEntityRegistry} from './readEntityRegistry.js'
+
 function pluralize(value, singular, plural) {
   return `${value} ${Number(value) === 1 ? singular : plural}`
 }
@@ -266,14 +268,17 @@ function formatAggregateValue(value) {
   return String(value)
 }
 
-function formatAggregateMetric(metric = {}, value = null) {
+function formatAggregateMetric(metric = {}, value = null, result = {}) {
+  const fieldDefinition = metric.field
+    ? getReadEntityRegistry().get(result.entity)?.fields?.[metric.field]
+    : null
   const labels = {
     count: 'conteggio',
-    'count-distinct': metric.field ? `valori distinti di ${metric.field}` : 'valori distinti',
-    sum: metric.field ? `somma di ${metric.field}` : 'somma',
-    avg: metric.field ? `media di ${metric.field}` : 'media',
-    min: metric.field ? `minimo di ${metric.field}` : 'minimo',
-    max: metric.field ? `massimo di ${metric.field}` : 'massimo',
+    'count-distinct': fieldDefinition?.aggregateLabel || (metric.field ? `valori distinti di ${fieldDefinition?.label || metric.field}` : 'valori distinti'),
+    sum: metric.field ? `somma di ${fieldDefinition?.label || metric.field}` : 'somma',
+    avg: metric.field ? `media di ${fieldDefinition?.label || metric.field}` : 'media',
+    min: metric.field ? `minimo di ${fieldDefinition?.label || metric.field}` : 'minimo',
+    max: metric.field ? `massimo di ${fieldDefinition?.label || metric.field}` : 'massimo',
   }
 
   return `${labels[metric.function] || metric.id}: ${formatAggregateValue(value)}`
@@ -289,7 +294,7 @@ function formatAggregateRow(item = {}, result = {}) {
       ? groups.map(group => `${group.field}: ${formatAggregateValue(group.value)}`).join(' | ')
       : 'totale'
   const metricLabels = metrics.map(metric =>
-    formatAggregateMetric(metric, item?.metrics?.[metric.id])
+    formatAggregateMetric(metric, item?.metrics?.[metric.id], result)
   )
 
   return `- ${groupLabel}${metricLabels.length ? ` | ${metricLabels.join(' | ')}` : ''}`
