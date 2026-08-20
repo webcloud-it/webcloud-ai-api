@@ -836,9 +836,12 @@ function parsePagination(message = '', previousState = null) {
   if (!previousState) return null
   const text = normalizeText(message)
 
-  if (/^(?:e\s+)?(?:altri|altre|prossimi|prossime|successivi|successive|seguenti|ancora|continua|prosegui|vai avanti|avanti)(?:\s+\d{1,2})?[?.!]*$/i.test(text)) {
-    const explicit = text.match(/\b(\d{1,2})\b/)?.[1]
-    const limit = explicit ? Math.min(Math.max(Number(explicit), 1), 50) : previousState.limit
+  const nextPageMatch = text.match(
+    /^(?:e\s+)?(?:(?:mostra|mostrami|fammi\s+vedere)\s+)?(?:(?:gli|le|i)\s+)?(?:altri|altre|prossimi|prossime|successivi|successive|seguenti|ancora|continua|prosegui|vai avanti|avanti)(?:\s+(\d{1,2}|[a-z]+))?[?.!]*$/i
+  )
+  if (nextPageMatch) {
+    const explicitLimit = parseLimitToken(nextPageMatch[1])
+    const limit = explicitLimit || previousState.limit
     return {
       ...previousState.plan,
       limit,
@@ -934,17 +937,21 @@ const ITALIAN_LIMITS = new Map([
   ['diciannove', 19], ['venti', 20],
 ])
 
+function parseLimitToken(value = '') {
+  const token = normalizeText(value)
+  if (!token) return null
+  const parsed = /^\d+$/.test(token) ? Number(token) : ITALIAN_LIMITS.get(token)
+  if (!Number.isFinite(parsed)) return null
+  return Math.min(Math.max(parsed, 1), 50)
+}
+
 function extractRequestedLimit(text = '') {
   const match = normalizeText(text).match(
     /\b(?:primi|prime|mostra|mostrami|elenca|elencami|dammi|top)\s+(\d{1,2}|[a-z]+)\b/i
   )
   if (!match?.[1]) return null
 
-  const parsed = /^\d+$/.test(match[1])
-    ? Number(match[1])
-    : ITALIAN_LIMITS.get(match[1])
-  if (!Number.isFinite(parsed)) return null
-  return Math.min(Math.max(parsed, 1), 50)
+  return parseLimitToken(match[1])
 }
 
 function extractLimit(text = '') {

@@ -100,6 +100,27 @@ test('elliptical follow-ups stay in the previous module without a router model c
   assert.equal(modelCalled, false)
 })
 
+test('natural pagination commands belong to the previous result, not the page module', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan({
+    message: 'Mostrami gli altri tre',
+    context: {activeEntity: {type: 'webcam', slug: 'barricata'}},
+    history: [{
+      role: 'assistant',
+      data: {type: 'read-query-result'},
+      meta: {moduleId: 'facile.renewals'},
+    }],
+    credentials,
+  }, async () => {
+    modelCalled = true
+    return null
+  })
+
+  assert.equal(plan.moduleId, 'facile.renewals')
+  assert.equal(plan.source, 'history')
+  assert.equal(modelCalled, false)
+})
+
 test('global planner routes an explicit renewals request from WebcamGo', () => {
   const plan = planGlobalChat({
     message: 'Mostrami i rinnovi in scadenza',

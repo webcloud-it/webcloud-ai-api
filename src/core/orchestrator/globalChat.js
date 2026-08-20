@@ -82,6 +82,7 @@ const DOMAIN_PATTERNS = {
 
 const HELP_PATTERN = /^\s*(?:cosa puoi fare|come puoi aiutarmi|quali (?:funzioni|capacit[aà]|strumenti) (?:hai|sono disponibili))(?:\s+su\s+[\w .-]+)?\s*[?!.]?\s*$/i
 const GREETING_PATTERN = /^\s*(?:ciao|salve|buongiorno|buonasera|hey|ehi)\s*[!,.]?\s*$/i
+const HISTORY_COMMAND_PATTERN = /^\s*(?:(?:mostra|mostrami|fammi\s+vedere)\s+)?(?:(?:gli|le|i)\s+)?(?:altr[ei]|successiv[ei]|prossim[ei]|precedent[ei])(?:\s+(?:\d{1,2}|[a-z]+))?\s*[?!.]?\s*$/i
 
 const UNSUPPORTED_DOMAINS = [
 ]
@@ -195,6 +196,7 @@ function isContextualModuleFastPath(message = '', plan = {}) {
 
 function isHistoryContinuationFastPath(message = '', plan = {}) {
   if (plan.type !== 'module' || plan.source !== 'history') return false
+  if (HISTORY_COMMAND_PATTERN.test(String(message || ''))) return true
 
   return /^\s*(?:e|ed|ma|invece|ora|adesso|poi|tra\s+quest[ei]|fra\s+quest[ei]|di\s+quest[ei]|quest[ei]|quell[ei])\b/i.test(
     String(message || '')
@@ -220,6 +222,9 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   }
 
   const entityModuleId = moduleFromActiveEntityRequest(text, context)
+  const historyCommandModuleId = HISTORY_COMMAND_PATTERN.test(String(message || ''))
+    ? moduleFromHistory(history)
+    : null
   const scores = scoreModules(text)
   const best = scores[0]
   const second = scores[1]
@@ -227,7 +232,10 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   let moduleId = null
   let source = null
 
-  if (entityModuleId) {
+  if (historyCommandModuleId) {
+    moduleId = historyCommandModuleId
+    source = 'history'
+  } else if (entityModuleId) {
     moduleId = entityModuleId
     source = 'active-entity'
   } else if (best?.score > 0 && best.score > (second?.score || 0)) {

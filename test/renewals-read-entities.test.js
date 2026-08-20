@@ -592,6 +592,26 @@ test('planner analitico: un follow-up cambia anno e limite senza perdere il pian
   ])
 })
 
+test('planner analitico: pagina con una quantità naturale scritta in lettere', async () => {
+  const actorToken = 'analytical-pagination-token'
+  const firstPlan = await planReadQuery({
+    message: 'quali fornitori hanno più servizi in scadenza nel 2027?',
+    allowSemantic: false,
+  })
+  const firstResult = executeReadQuery({plan: firstPlan, services, options})
+  rememberReadQueryContext({actorToken, plan: firstPlan, result: firstResult})
+
+  const nextPlan = await planReadQuery({
+    message: 'Mostrami gli altri tre',
+    actorToken,
+    allowSemantic: false,
+  })
+
+  assert.equal(nextPlan.operation, 'aggregate')
+  assert.equal(nextPlan.limit, 3)
+  assert.equal(nextPlan.offset, firstResult.nextOffset)
+})
+
 test('readiness: verifica a runtime il piano critico della build', () => {
   assert.deepEqual(checkAnalyticalReadPlannerReadiness(), {
     ok: true,
