@@ -557,6 +557,41 @@ test('planner analitico: classifica fornitori contando solo i servizi nel period
   ])
 })
 
+test('planner analitico: un follow-up cambia anno e limite senza perdere il piano precedente', async () => {
+  const actorToken = 'analytical-follow-up-token'
+  const firstPlan = await planReadQuery({
+    message: 'quali fornitori hanno più servizi in scadenza nel 2027?',
+    allowSemantic: false,
+  })
+  const firstResult = executeReadQuery({plan: firstPlan, services, options})
+  rememberReadQueryContext({actorToken, plan: firstPlan, result: firstResult})
+
+  const followUpPlan = await planReadQuery({
+    message: 'E nel 2026 quali sono i primi tre?',
+    actorToken,
+    allowSemantic: false,
+  })
+
+  assert.equal(followUpPlan.operation, 'aggregate')
+  assert.equal(followUpPlan.entity, 'subscriptions')
+  assert.equal(followUpPlan.limit, 3)
+  assert.deepEqual(followUpPlan.groupBy, ['supplier.name'])
+  assert.deepEqual(followUpPlan.metrics, [
+    {id: 'count', function: 'count-distinct', field: 'service.id'},
+  ])
+  assert.deepEqual(followUpPlan.filters, [
+    {field: 'kind', operator: 'equals', value: 'supplier'},
+    {
+      field: 'endsOn',
+      operator: 'between',
+      value: {
+        start: '2026-01-01T00:00:00.000Z',
+        end: '2026-12-31T23:59:59.999Z',
+      },
+    },
+  ])
+})
+
 test('readiness: verifica a runtime il piano critico della build', () => {
   assert.deepEqual(checkAnalyticalReadPlannerReadiness(), {
     ok: true,

@@ -410,7 +410,11 @@ function formatListReply(payload = {}) {
       .filter(Boolean)
       .join(', ')
 
-    return `${offset + index + 1}. ${item.name} (${item.slug || 'slug assente'})${location}${reseller} | ${status} | ${flags}`
+    const anomalySince = payload.query?.includeStatusSince
+      ? formatCurrentAnomalySince(item)
+      : null
+
+    return `${offset + index + 1}. ${item.name} (${item.slug || 'slug assente'})${location}${reseller} | ${status} | ${flags}${anomalySince ? ` | ${anomalySince}` : ''}`
   })
 
   if (payload.hasMore) {
@@ -418,6 +422,21 @@ function formatListReply(payload = {}) {
   }
 
   return [intro, ...lines].join('\n')
+}
+
+function formatCurrentAnomalySince(item = {}) {
+  const states = [
+    ['stream', item.status?.stream],
+    ['snapshot', item.snapshotEnabled ? item.status?.snapshot : null],
+    ['connettività', item.status?.connectivity],
+    ['MikroTik', item.hasMikrotik ? item.status?.mikrotik : null],
+  ]
+    .filter(([, value]) => value?.status && value.status !== 'online')
+    .map(([label, value]) =>
+      `${label} ${value.status}${value.changedOn ? ` dal ${formatDateTime(value.changedOn)}` : ' (inizio non disponibile)'}`
+    )
+
+  return states.length ? states.join(', ') : 'inizio anomalia non disponibile'
 }
 
 function formatStatus(label, value = {}) {

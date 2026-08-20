@@ -144,6 +144,27 @@ test('combina località e stati alternativi senza includere parole della frase n
   assert.deepEqual(result.data.items.map(item => item.id).sort(), ['cam-4', 'cam-5'])
 })
 
+test('interpreta ferme come anomalie correnti e mostra da quando sono iniziate', () => {
+  const offline = webcam('cam-4', 'Gallio Centro', 'gallio-centro', 'Gallio')
+  offline.status.overall = 'offline'
+  offline.status.stream = {
+    status: 'offline',
+    changedOn: '2026-08-20T08:00:00.000Z',
+  }
+
+  const result = handleWebcamgoChat({
+    message: 'Quali webcam abbiamo ferme in questo momento e da quando?',
+    webcams: [...webcams, offline],
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.deepEqual(result.data.query.filters, ['offline'])
+  assert.equal(result.data.query.includeStatusSince, true)
+  assert.deepEqual(result.data.items.map(item => item.id), ['cam-4'])
+  assert.match(result.reply, /stream offline dal/i)
+  assert.match(result.reply, /20\/08\/26/)
+})
+
 test('filtra lo storico per interruzioni superiori alla durata richiesta', () => {
   const now = new Date('2026-08-12T12:00:00.000Z')
   const statusLogs = [

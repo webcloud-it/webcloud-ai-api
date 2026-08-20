@@ -193,6 +193,14 @@ function isContextualModuleFastPath(message = '', plan = {}) {
   return patterns[plan.moduleId]?.test(String(message || '')) === true
 }
 
+function isHistoryContinuationFastPath(message = '', plan = {}) {
+  if (plan.type !== 'module' || plan.source !== 'history') return false
+
+  return /^\s*(?:e|ed|ma|invece|ora|adesso|poi|tra\s+quest[ei]|fra\s+quest[ei]|di\s+quest[ei]|quest[ei]|quell[ei])\b/i.test(
+    String(message || '')
+  )
+}
+
 export function planGlobalChat({message = '', context = {}, history = [], credentials = {}} = {}) {
   const availableModuleIds = getAvailableModuleIds({credentials})
   const text = normalizeText(message)
@@ -270,6 +278,7 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
     isSemanticFastPath(options.message) ||
     isConfidentDeterministicModulePlan(options.message, deterministicPlan) ||
     isContextualModuleFastPath(options.message, deterministicPlan) ||
+    isHistoryContinuationFastPath(options.message, deterministicPlan) ||
     (deterministicPlan.type === 'module' &&
       deterministicPlan.source === 'active-entity' &&
       hasExplicitActiveEntityReference(options.message))

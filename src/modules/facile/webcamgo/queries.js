@@ -225,6 +225,13 @@ function parseFilters(message = '') {
     filters.push('online')
   }
 
+  const genericStoppedWebcam =
+    (/\b(?:webcam|telecamer[ae])\b.{0,60}\b(?:ferm[ae]|blocc[ae]|guast[ae]|ko|non\s+funzionant[ei])\b/i.test(text) ||
+      /\b(?:ferm[ae]|blocc[ae]|guast[ae]|ko|non\s+funzionant[ei])\b.{0,60}\b(?:webcam|telecamer[ae])\b/i.test(text)) &&
+    !/\b(?:stream|snapshot|router|connettivita|mikrotik)\b/i.test(text)
+
+  if (genericStoppedWebcam) filters.push('offline')
+
   return [...new Set(filters)]
 }
 
@@ -319,6 +326,9 @@ export function parseListQuery(message = '', previousQuery = null, pagination = 
     filterMode,
     term,
     label: describeQuery(filters, term, filterMode),
+    includeStatusSince: /\b(?:da\s+quando|da\s+quanto(?:\s+tempo)?)\b/i.test(
+      normalizeSearchText(message)
+    ),
     limit,
     offset: 0,
     sourceMessage: String(message || '').trim(),

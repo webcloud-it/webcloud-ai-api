@@ -121,7 +121,7 @@ const READ_QUERY_PLAN_OUTPUT_SCHEMA = Object.freeze({
 })
 
 const ANALYTICAL_READ_PATTERN =
-  /\b(?:raggrupp\w*|aggreg\w*|classific\w*|ranking|top|maggior\w*|minor\w*|massim\w*|minim\w*|medi[ae]?|somm\w*|distint\w*|distribuz\w*|confront\w*|correl\w*|per\s+(?:ogni|ciascun\w*)|piu|meno|primi\s+\d{1,2}|prime\s+\d{1,2})\b/i
+  /\b(?:raggrupp\w*|aggreg\w*|classific\w*|ranking|top|maggior\w*|minor\w*|massim\w*|minim\w*|medi[ae]?|somm\w*|distint\w*|distribuz\w*|confront\w*|correl\w*|per\s+(?:ogni|ciascun\w*)|piu|meno|prim[ei]\s+(?:\d{1,2}|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci))\b/i
 
 export function isAnalyticalReadQueryRequest(message = '') {
   const text = normalizeText(message)
@@ -926,10 +926,29 @@ function detectOperation(text = '') {
   return 'list'
 }
 
+const ITALIAN_LIMITS = new Map([
+  ['uno', 1], ['un', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4],
+  ['cinque', 5], ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10],
+  ['undici', 11], ['dodici', 12], ['tredici', 13], ['quattordici', 14],
+  ['quindici', 15], ['sedici', 16], ['diciassette', 17], ['diciotto', 18],
+  ['diciannove', 19], ['venti', 20],
+])
+
+function extractRequestedLimit(text = '') {
+  const match = normalizeText(text).match(
+    /\b(?:primi|prime|mostra|mostrami|elenca|elencami|dammi|top)\s+(\d{1,2}|[a-z]+)\b/i
+  )
+  if (!match?.[1]) return null
+
+  const parsed = /^\d+$/.test(match[1])
+    ? Number(match[1])
+    : ITALIAN_LIMITS.get(match[1])
+  if (!Number.isFinite(parsed)) return null
+  return Math.min(Math.max(parsed, 1), 50)
+}
+
 function extractLimit(text = '') {
-  const match = text.match(/\b(?:primi|prime|mostra|mostrami|elenca|elencami|dammi)\s+(\d{1,2})\b/i)
-  if (match?.[1]) return Math.min(Math.max(Number(match[1]), 1), 50)
-  return DEFAULT_READ_QUERY_LIMIT
+  return extractRequestedLimit(text) || DEFAULT_READ_QUERY_LIMIT
 }
 
 function yearRange(year) {
@@ -1169,6 +1188,52 @@ function buildDeterministicFilters(entityId, message = '') {
   return filters
 }
 
+function buildDeterministicFollowUpPlan(message = '', previousState = null) {
+  const previousPlan = previousState?.plan
+  const text = normalizeText(message)
+  if (!previousPlan?.entity || !text) return null
+  if (!/^\s*(?:e|ed|ma|invece|ora|adesso|poi|tra\s+quest[ei]|fra\s+quest[ei]|di\s+quest[ei]|quest[ei]|quell[ei])\b/i.test(text)) {
+    return null
+  }
+
+  const year = extractYear(text)
+  const requestedLimit = extractRequestedLimit(text)
+  if (!year && !requestedLimit) return null
+
+  const definition = getAnalyticalEntityDefinition(previousPlan.entity)
+  const timeField = definition?.analytics?.timeField || null
+  const filters = Array.isArray(previousPlan.filters) ? [...previousPlan.filters] : []
+
+  if (year) {
+    const fallbackTimeField = filters.find(filter =>
+      filter?.operator === 'between' &&
+      /^20\d{2}-/.test(String(filter?.value?.start || '')) &&
+      /^20\d{2}-/.test(String(filter?.value?.end || ''))
+    )?.field
+    const resolvedTimeField = timeField || fallbackTimeField
+    if (!resolvedTimeField) return null
+
+    const retainedFilters = filters.filter(filter => filter.field !== resolvedTimeField)
+    retainedFilters.push({
+      field: resolvedTimeField,
+      operator: 'between',
+      value: yearRange(year),
+    })
+    filters.splice(0, filters.length, ...retainedFilters)
+  }
+
+  return {
+    ...previousPlan,
+    filters,
+    limit: requestedLimit || previousPlan.limit || DEFAULT_READ_QUERY_LIMIT,
+    offset: 0,
+    confidence: 1,
+    source: 'deterministic-follow-up',
+    sourceMessage: message,
+    previousPlan,
+  }
+}
+
 function buildDeterministicPlan(
   message = '',
   previousState = null,
@@ -1180,6 +1245,9 @@ function buildDeterministicPlan(
 
   const pagination = parsePagination(message, previousState)
   if (pagination) return pagination
+
+  const followUp = buildDeterministicFollowUpPlan(message, previousState)
+  if (followUp) return followUp
 
   const analyticalPlan = buildDeterministicAnalyticalPlan(message, previousState)
   if (analyticalPlan) return analyticalPlan
@@ -1429,6 +1497,7 @@ export async function planReadQuery({
     deterministic &&
     (!analyticalRequest ||
       deterministic.source === 'follow-up-pagination' ||
+      deterministic.source === 'deterministic-follow-up' ||
       deterministic.source === 'deterministic-analytical')
   ) {
     const validation = validateReadQueryPlan(deterministic, registry)
