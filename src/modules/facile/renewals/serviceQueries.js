@@ -976,12 +976,12 @@ function detectBooleanFilters(message = '') {
   }
 
   if (
-    /\b(senza|non\s+collegat[oi]\s+a?)\s+plesk\b|\bplesk\s+(mancante|assente|non collegato)\b/.test(
+    /\b(?:senza|non\s+(?:sono\s+)?collegat[oi](?:\s+a)?)\s+plesk\b|\bplesk\s+(?:mancante|assente|non collegato)\b/.test(
       text
     )
   ) {
     filters.push({kind: 'no-plesk', label: 'non collegati a Plesk'})
-  } else if (/\b(collegat[oi]\s+a?\s+plesk|con\s+plesk|plesk\s+collegato)\b/.test(text)) {
+  } else if (/\b(?:collegat[oi](?:\s+a)?\s+plesk|con\s+plesk|plesk\s+collegato)\b/.test(text)) {
     filters.push({kind: 'has-plesk', label: 'collegati a Plesk'})
   }
 

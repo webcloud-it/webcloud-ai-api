@@ -224,6 +224,18 @@ test('global planner routes Send in Italy when its credential is available', () 
   assert.equal(plan.moduleId, 'facile.sendinitaly')
 })
 
+test('an explicit Send in Italy brand wins over generic plans and the active page', () => {
+  const plan = planGlobalChat({
+    message: 'Elenca i piani Send in Italy.',
+    context: {activeEntity: {type: 'webcam', slug: 'barricata'}},
+    credentials: {...credentials, specialk: 'specialk-token'},
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.sendinitaly')
+  assert.equal(plan.source, 'message')
+})
+
 test('global planner uses the active section for ambiguous business entities', () => {
   const sendPlan = planGlobalChat({
     message: 'Apri il cliente Acme',
@@ -453,6 +465,16 @@ test('global planner routes a natural minisite closing question to opening hours
   assert.equal(plan.moduleId, 'facile.businesshours')
 })
 
+test('global planner routes plural open minisites to opening hours', () => {
+  const plan = planGlobalChat({
+    message: 'Quali minisiti sono aperti adesso?',
+    credentials: {...credentials, cmsAsiagoIt: 'cms-token'},
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.businesshours')
+})
+
 test('global planner routes Asiago events when the CMS credential is available', () => {
   const plan = planGlobalChat({
     message: 'Mostrami i prossimi eventi di Asiago',
@@ -487,6 +509,29 @@ test('global planner routes snow bulletin, pricelists and redirects to Asiago', 
     assert.equal(plan.type, 'module')
     assert.equal(plan.moduleId, 'facile.asiago')
   }
+})
+
+test('global planner routes renewal add-on prices even from a WebcamGo page', () => {
+  const plan = planGlobalChat({
+    message: 'Mostrami i prezzi degli add-on nel listino 2026.',
+    context: {path: '/webcamgo/webcams/barricata'},
+    credentials,
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.renewals')
+  assert.equal(plan.source, 'message')
+})
+
+test('global planner keeps the latest offline event on the active WebcamGo entity', () => {
+  const plan = planGlobalChat({
+    message: 'Qual è stato il suo ultimo evento offline?',
+    context: {activeEntity: {type: 'webcam', slug: 'melette1'}},
+    credentials: {...credentials, cmsAsiagoIt: 'cms-token'},
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.webcamgo')
 })
 
 test('global planner routes assets, holidays and automations to Webcloud tools', () => {

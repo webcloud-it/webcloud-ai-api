@@ -35,6 +35,47 @@ const webcams = [
   webcam('cam-3', 'Asiago Piazza II Risorgimento', 'asiago-piazza-risorgimento', 'Asiago'),
 ]
 
+test('il riepilogo non considera gli stati N/A come problemi reali', () => {
+  const withUnknownConnectivity = webcam('cam-na', 'Webcam senza test', 'webcam-na')
+  withUnknownConnectivity.status.connectivity.status = 'na'
+  withUnknownConnectivity.hasMikrotik = true
+  withUnknownConnectivity.status.mikrotik.status = 'unknown'
+
+  const result = handleWebcamgoChat({
+    message: 'Dammi un riepilogo generale di WebcamGo.',
+    webcams: [withUnknownConnectivity],
+  })
+
+  assert.match(result.reply, /problemi di connettività: 0/i)
+  assert.match(result.reply, /MikroTik non online: 0/i)
+})
+
+test('riconosce il downtime programmato attivo senza confonderlo con quello configurato', () => {
+  const active = webcam('cam-active', 'Webcam in downtime', 'cam-active')
+  active.downtime = {configured: true, enabledCount: 1, active: true, activeSchedule: {}}
+  const configured = webcam('cam-configured', 'Webcam pianificata', 'cam-configured')
+  configured.downtime = {configured: true, enabledCount: 1, active: false, activeSchedule: null}
+
+  const result = handleWebcamgoChat({
+    message: 'Quali webcam hanno un downtime programmato attivo?',
+    webcams: [active, configured],
+  })
+
+  assert.equal(result.data.totale, 1)
+  assert.equal(result.data.items[0].id, 'cam-active')
+})
+
+test('una lista filtrata resta plurale anche nella pagina di una webcam', () => {
+  const result = handleWebcamgoChat({
+    message: 'Mostrami le webcam monitorate con snapshot abilitato.',
+    context: {activeEntity: {type: 'webcam', slug: 'le-melette'}},
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.equal(result.data.totale, 3)
+})
+
 test('apre automaticamente una webcam identificata in modo univoco', () => {
   const result = handleWebcamgoChat({message: 'apri la webcam delle melette', webcams})
 
@@ -98,6 +139,17 @@ test('usa la webcam della pagina per richieste implicite e follow-up tecnici', (
     assert.equal(result.intent, 'webcam-detail', message)
     assert.equal(result.data.item.id, 'cam-2', message)
   }
+})
+
+test('usa la webcam aperta invece di interpretare i campi richiesti come nome', () => {
+  const result = handleWebcamgoChat({
+    message: 'Qual è lo stato di stream, snapshot e router della webcam aperta?',
+    context: {activeEntity: {type: 'webcam', slug: 'le-melette'}},
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-detail')
+  assert.equal(result.data.item.id, 'cam-1')
 })
 
 test('apre la webcam corrente con un pronome', () => {

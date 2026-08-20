@@ -20,7 +20,7 @@ import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 function resolveRequestedTarget(message, contextTarget) {
   if (
     contextTarget &&
-    /\b(?:questa\s+(?:webcam|telecamera|qui)|quella\s+(?:webcam|telecamera)|webcam\s+corrente|telecamera\s+corrente|essa)\b/i.test(String(message || ''))
+    /\b(?:questa\s+(?:webcam|telecamera|qui)|quella\s+(?:webcam|telecamera)|(?:webcam|telecamera)\s+(?:corrente|attuale|aperta)|essa)\b/i.test(String(message || ''))
   ) {
     return contextTarget
   }

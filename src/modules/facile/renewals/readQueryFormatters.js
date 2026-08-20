@@ -95,7 +95,8 @@ function formatResource(item, result = {}) {
     details.push(`piano: ${matchingUsages.map(usage => usage.planName).filter(Boolean).join(', ')}`)
   }
   if (item.supplierNames?.length) details.push(`fornitori: ${item.supplierNames.slice(0, 4).join(', ')}`)
-  return `- ${item.name} | ${details.join(' | ')}`
+  const name = item.name || item.label || item.key
+  return `- ${name || 'risorsa senza nome nel catalogo'} | ${details.join(' | ')}`
 }
 
 function formatCustomer(item) {

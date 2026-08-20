@@ -1171,7 +1171,7 @@ function buildDeterministicFilters(entityId, message = '') {
   }
 
   if (entityId === 'domains') {
-    if (/\bnon collegat[oi]\s+(?:a\s+)?plesk\b|\bsenza plesk\b/i.test(text)) {
+    if (/\bnon\s+(?:sono\s+)?collegat[oi]\s+(?:a\s+)?plesk\b|\bsenza plesk\b/i.test(text)) {
       filters.push({field: 'hasPlesk', operator: 'falsey', value: null})
     } else if (/\bcollegat[oi]\s+(?:a\s+)?plesk\b|\bcon plesk\b/i.test(text)) {
       filters.push({field: 'hasPlesk', operator: 'truthy', value: null})

@@ -29,10 +29,9 @@ const DOMAIN_PATTERNS = {
   ],
   'facile.businesshours': [
     /\borari\b/,
-    /\bapertur[aeo]\b/,
-    /\bchiusur[aeo]\b/,
-    /\bminisit[oi]\b.{0,40}\b(?:orari|apert|chius|apre|chiude)\b/,
-    /\b(?:orari|apert|chius|apre|chiude)\b.{0,40}\bminisit[oi]\b/,
+    /\bminisit[oi]\b.{0,40}\b(?:apert[oi]|chius[oi])\b/,
+    /\bminisit[oi]\b.{0,40}\b(?:orari|apert\w*|chius\w*|apre|chiude)\b/,
+    /\b(?:orari|apert\w*|chius\w*|apre|chiude)\b.{0,40}\bminisit[oi]\b/,
     /\b(?:quando|a\s+che\s+ora)\b.{0,24}\b(?:apre|chiude)\b/,
   ],
   'facile.asiago': [
@@ -64,6 +63,8 @@ const DOMAIN_PATTERNS = {
     /\bptz\b/,
     /\bmikrotik\b/,
     /\bconnettivit[aà]\b/,
+    /\boffline\b/,
+    /\b(?:ultimo|recente)\b.{0,32}\b(?:evento|stato|periodo)\b.{0,24}\boffline\b/,
   ],
   'facile.renewals': [
     /\brinnov/,
@@ -72,6 +73,9 @@ const DOMAIN_PATTERNS = {
     /\bgrupp[oi]\b/,
     /\bfornitor/,
     /\bpiani?\b/,
+    /\badd[- ]?on\b/,
+    /\bcomponenti\s+aggiuntiv[ei]\b/,
+    /\b(?:prezz[oi]|cost[oi]|tariff[ae])\b.{0,48}\b(?:piani?|add[- ]?on|listino)\b/,
     /\bplesk\b/,
     /\bfattur/,
     /\bnon rinnovare\b/,
@@ -83,6 +87,14 @@ const DOMAIN_PATTERNS = {
 const HELP_PATTERN = /^\s*(?:cosa puoi fare|come puoi aiutarmi|quali (?:funzioni|capacit[aà]|strumenti) (?:hai|sono disponibili))(?:\s+su\s+[\w .-]+)?\s*[?!.]?\s*$/i
 const GREETING_PATTERN = /^\s*(?:ciao|salve|buongiorno|buonasera|hey|ehi)\s*[!,.]?\s*$/i
 const HISTORY_COMMAND_PATTERN = /^\s*(?:(?:mostra|mostrami|fammi\s+vedere)\s+)?(?:(?:gli|le|i)\s+)?(?:altr[ei]|successiv[ei]|prossim[ei]|precedent[ei])(?:\s+(?:\d{1,2}|[a-z]+))?\s*[?!.]?\s*$/i
+
+const EXPLICIT_MODULE_PATTERNS = [
+  ['facile.sendinitaly', /\bsend\s*in\s*italy\b/i],
+  ['facile.webcamgo', /\bwebcamgo\b/i],
+  ['facile.asiago', /\basiago\.it\b/i],
+  ['facile.businesshours', /\bbusiness\s*hours?\b/i],
+  ['facile.renewals', /\b(?:pannello\s+)?rinnovi\b/i],
+]
 
 const UNSUPPORTED_DOMAINS = [
 ]
@@ -147,6 +159,10 @@ function scoreModules(message = '') {
     .sort((a, b) => b.score - a.score)
 }
 
+function moduleFromExplicitBrand(message = '') {
+  return EXPLICIT_MODULE_PATTERNS.find(([, pattern]) => pattern.test(String(message || '')))?.[0] || null
+}
+
 function isConfidentDeterministicModulePlan(message = '', plan = {}) {
   if (plan.type !== 'module' || plan.source !== 'message' || !plan.moduleId) return false
 
@@ -158,10 +174,10 @@ function isConfidentDeterministicModulePlan(message = '', plan = {}) {
 const LOCAL_ENTITY_REQUEST = /\b(?:dettagli?|informazioni?|info|scheda|stat[oi]|situazione|come\s+(?:sta|stanno)|funziona|problemi?|controlla|verifica|analizza|apri|mostra(?:mi)?|questa?|questo|corrente|attuale)\b/i
 
 const STRONG_DOMAIN_PATTERNS = {
-  'facile.webcamgo': /\b(?:webcamgo|webcam|telecamer[ae]|snapshot|stream|ptz|mikrotik)\b/i,
-  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|plesk|fattur|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b/i,
+  'facile.webcamgo': /\b(?:webcamgo|webcam|telecamer[ae]|snapshot|stream|offline|ptz|mikrotik)\b/i,
+  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|add[- ]?on|componenti\s+aggiuntiv[ei]|plesk|fattur|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b/i,
   'facile.sendinitaly': /\b(?:send\s*in\s*italy|newsletter|campagn[ae]|postal|mittent[ei])\b/i,
-  'facile.businesshours': /\b(?:orari|apertur[aeo]|chiusur[aeo]|apre|chiude)\b/i,
+  'facile.businesshours': /\b(?:orari|apertura|aperture|chiusura|chiusure|apre|chiude)\b|\bminisit[oi]\b.{0,40}\b(?:apert\w*|chius\w*)\b/i,
   'facile.asiago': /\b(?:cms|event[oi]|manifestazion[ei]|minisit[oi]|contenut[oi]|articol[oi]|bollettino|listini?|redirects?)\b/i,
   'facile.webcloud': /\b(?:assets?|wam|cloudflare|cache|festivit[aà]|ferie|malatti[ae]|automazion[ei]|mattemation|workflow|chatbot)\b/i,
 }
@@ -222,6 +238,7 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   }
 
   const entityModuleId = moduleFromActiveEntityRequest(text, context)
+  const explicitBrandModuleId = moduleFromExplicitBrand(message)
   const historyCommandModuleId = HISTORY_COMMAND_PATTERN.test(String(message || ''))
     ? moduleFromHistory(history)
     : null
@@ -235,6 +252,9 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   if (historyCommandModuleId) {
     moduleId = historyCommandModuleId
     source = 'history'
+  } else if (explicitBrandModuleId) {
+    moduleId = explicitBrandModuleId
+    source = 'message'
   } else if (entityModuleId) {
     moduleId = entityModuleId
     source = 'active-entity'

@@ -355,6 +355,28 @@ test('formatter: produce una risposta leggibile', async () => {
   assert.match(reply, /WebCloud/i)
 })
 
+test('formatter: rende esplicita una risorsa priva di nome', () => {
+  const reply = buildReadQueryReply({
+    ok: true,
+    type: 'read-query-result',
+    entity: 'resources',
+    entityLabel: 'tipi di risorsa',
+    entitySingular: 'risorsa',
+    operation: 'detail',
+    dataSource: 'operational-services',
+    total: 1,
+    shown: 1,
+    offset: 0,
+    limit: 10,
+    hasMore: false,
+    items: [{id: 'resource-without-name', name: null, planCount: 1}],
+    plan: {filters: []},
+  })
+
+  assert.match(reply, /risorsa senza nome nel catalogo/i)
+  assert.doesNotMatch(reply, /- —/)
+})
+
 test('stato: recupera il piano strutturato dalla cronologia', () => {
   const history = [
     {role: 'user', content: 'tutti i fornitori'},

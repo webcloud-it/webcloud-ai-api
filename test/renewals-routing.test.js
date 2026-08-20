@@ -173,6 +173,17 @@ describe('Intenti espliciti e precedenze', () => {
     assert.equal(findFilter({filters}, 'customer-or-group')?.term, 'Zilio Group')
   })
 
+  test('interpreta la negazione naturale dei collegamenti Plesk', () => {
+    const filters = parseServiceListQuery({
+      message: 'Quali domini non sono collegati a Plesk?',
+      settings: SETTINGS,
+      now: NOW,
+    }).filters
+
+    assert.ok(findFilter({filters}, 'no-plesk'))
+    assert.equal(findFilter({filters}, 'has-plesk'), null)
+  })
+
   test('un dominio isolato resta una possibile entità rinnovi', () => {
     assert.equal(isLikelyBareRenewalsEntity('eco-pv.it'), true)
   })

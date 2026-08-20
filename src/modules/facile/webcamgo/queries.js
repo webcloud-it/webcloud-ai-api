@@ -10,6 +10,11 @@ const MAX_LIMIT = 50
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
 
+function isKnownOfflineStatus(value) {
+  const status = normalizeSearchText(value)
+  return Boolean(status) && !['online', 'na', 'n a', 'n/a', 'unknown', 'sconosciuto'].includes(status)
+}
+
 const ORDINALS = new Map([
   ['primo', 1],
   ['prima', 1],
@@ -201,7 +206,7 @@ function parseFilters(message = '') {
     filters.push('monitored')
   }
 
-  if (/\b(downtime attivo|spegnimento attivo|attualmente spente per pianificazione)\b/i.test(text)) {
+  if (/\b(downtime(?:\s+programmato)?\s+attiv[oi]|spegnimento(?:\s+programmato)?\s+attiv[oi]|attualmente spente per pianificazione)\b/i.test(text)) {
     filters.push('active-downtime')
   } else if (
     /\b(downtime|spegnimento programmato|spegnimenti programmati|pianificazione|pianificazioni)\b/i.test(
@@ -352,10 +357,10 @@ function matchesFilters(webcam, filters = [], filterMode = 'all') {
       case 'connectivity-offline':
         return (
           webcam.connectivityTestReachable === false ||
-          (webcam.status.connectivity.status && webcam.status.connectivity.status !== 'online')
+          isKnownOfflineStatus(webcam.status.connectivity.status)
         )
       case 'mikrotik-offline':
-        return webcam.hasMikrotik && webcam.status.mikrotik.status !== 'online'
+        return webcam.hasMikrotik && isKnownOfflineStatus(webcam.status.mikrotik.status)
       case 'in-use':
         return webcam.inUse
       case 'not-in-use':
@@ -483,10 +488,10 @@ export function buildWebcamSummaryPayload(webcams = []) {
       connectivityProblems: count(
         webcam =>
           webcam.connectivityTestReachable === false ||
-          (webcam.status.connectivity.status && webcam.status.connectivity.status !== 'online')
+          isKnownOfflineStatus(webcam.status.connectivity.status)
       ),
       mikrotikOffline: count(
-        webcam => webcam.hasMikrotik && webcam.status.mikrotik.status !== 'online'
+        webcam => webcam.hasMikrotik && isKnownOfflineStatus(webcam.status.mikrotik.status)
       ),
       vpn: count(webcam => webcam.vpn),
       reseller: count(webcam => Boolean(webcam.reseller)),
@@ -901,7 +906,7 @@ export function detectIntent(message = '', {previousList = null, hasActiveEntity
   if (
     hasActiveEntity &&
     /\b(?:stream|snapshot|connettivit[aà]|router|mikrotik|vpn|encoding|hardware|monitoraggio|downtime)\b/i.test(text) &&
-    !/\b(?:quali|elenca|elencami|lista|tutte|tutti|webcam\s+(?:con|che))\b/i.test(text)
+    !/\b(?:quali|elenca|elencami|lista|tutte|tutti|le\s+webcam|webcam\s+(?:con|che))\b/i.test(text)
   ) {
     return 'webcam-detail'
   }

@@ -117,6 +117,7 @@ function createBaseDefinition({
 
 function buildProviders({services = [], options = {}} = {}) {
   const map = new Map()
+  const now = Date.now()
 
   const ensure = provider => {
     const id = relationId(provider)
@@ -158,7 +159,7 @@ function buildProviders({services = [], options = {}} = {}) {
       if (year) provider.expiryYears.add(year)
 
       const expiry = ref.subscription?.endsOn ? new Date(ref.subscription.endsOn) : null
-      if (expiry && !Number.isNaN(expiry.getTime())) {
+      if (expiry && !Number.isNaN(expiry.getTime()) && expiry.getTime() >= now) {
         if (!provider.nextExpiry || expiry < new Date(provider.nextExpiry)) {
           provider.nextExpiry = expiry.toISOString()
         }
