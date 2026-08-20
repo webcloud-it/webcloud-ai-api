@@ -175,11 +175,19 @@ const LOCAL_ENTITY_REQUEST = /\b(?:dettagli?|informazioni?|info|scheda|stat[oi]|
 
 const STRONG_DOMAIN_PATTERNS = {
   'facile.webcamgo': /\b(?:webcamgo|webcam|telecamer[ae]|snapshot|stream|offline|ptz|mikrotik)\b/i,
-  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|add[- ]?on|componenti\s+aggiuntiv[ei]|plesk|fattur|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b/i,
+  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|add[- ]?on|componenti\s+aggiuntiv[ei]|plesk|fattur|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b|\bservizi?\b.{0,64}\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b|\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b.{0,64}\bservizi?\b/i,
   'facile.sendinitaly': /\b(?:send\s*in\s*italy|newsletter|campagn[ae]|postal|mittent[ei])\b/i,
   'facile.businesshours': /\b(?:orari|apertura|aperture|chiusura|chiusure|apre|chiude)\b|\bminisit[oi]\b.{0,40}\b(?:apert\w*|chius\w*)\b/i,
   'facile.asiago': /\b(?:cms|event[oi]|manifestazion[ei]|minisit[oi]|contenut[oi]|articol[oi]|bollettino|listini?|redirects?)\b/i,
   'facile.webcloud': /\b(?:assets?|wam|cloudflare|cache|festivit[aà]|ferie|malatti[ae]|automazion[ei]|mattemation|workflow|chatbot)\b/i,
+}
+
+function moduleFromStrongDomain(message = '') {
+  const matches = Object.entries(STRONG_DOMAIN_PATTERNS)
+    .filter(([, pattern]) => pattern.test(String(message || '')))
+    .map(([moduleId]) => moduleId)
+
+  return matches.length === 1 ? matches[0] : null
 }
 
 function moduleFromActiveEntityRequest(message = '', context = {}) {
@@ -239,6 +247,7 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
 
   const entityModuleId = moduleFromActiveEntityRequest(text, context)
   const explicitBrandModuleId = moduleFromExplicitBrand(message)
+  const strongDomainModuleId = moduleFromStrongDomain(text)
   const historyCommandModuleId = HISTORY_COMMAND_PATTERN.test(String(message || ''))
     ? moduleFromHistory(history)
     : null
@@ -254,6 +263,9 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
     source = 'history'
   } else if (explicitBrandModuleId) {
     moduleId = explicitBrandModuleId
+    source = 'message'
+  } else if (strongDomainModuleId && strongDomainModuleId !== entityModuleId) {
+    moduleId = strongDomainModuleId
     source = 'message'
   } else if (entityModuleId) {
     moduleId = entityModuleId

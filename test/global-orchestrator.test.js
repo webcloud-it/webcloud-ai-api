@@ -343,6 +343,23 @@ test('an unrelated named subject on an entity page still reaches semantic planni
   assert.equal(plan.moduleId, 'facile.renewals')
 })
 
+test('global planner routes CRM services by group away from an active webcam', () => {
+  const plan = planGlobalChat({
+    message: 'Mostrami i servizi di Zilio Group.',
+    context: {
+      activeModuleId: 'facile.webcamgo',
+      section: 'webcamgo',
+      path: '/webcamgo/webcams/barricata',
+      activeEntity: {type: 'webcam', slug: 'barricata'},
+    },
+    credentials,
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.renewals')
+  assert.equal(plan.source, 'message')
+})
+
 test('renewals scope accepts the typed active entity and legacy route query', () => {
   assert.deepEqual(
     getContextScope({activeEntity: {type: 'service', id: 'service-42'}}),
