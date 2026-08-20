@@ -1854,6 +1854,7 @@ export async function chat(req, res) {
     }
   }
 
+  let readQueryPlannerError = null
   const readQueryPlan =
     skipReadQueryForServiceTarget || (hasExplicitRenewalsIntent && !analyticalReadRequest)
       ? null
@@ -1864,6 +1865,9 @@ export async function chat(req, res) {
         resolvedDetailTarget,
         readUtterance,
         allowSemantic: true,
+        onSemanticError: error => {
+          readQueryPlannerError = error
+        },
       })
 
   if (readQueryPlan) {
@@ -1929,6 +1933,62 @@ export async function chat(req, res) {
     })
 
     return res.json(response)
+  }
+
+  if (analyticalReadRequest) {
+    if (readQueryPlannerError) {
+      const plannerErrorMessage = String(readQueryPlannerError?.message || '')
+      const plannerFailure = /timeout/i.test(plannerErrorMessage)
+        ? 'timeout'
+        : /non [eè] raggiungibile|unreachable|ECONNREFUSED|ENOTFOUND/i.test(plannerErrorMessage)
+          ? 'unreachable'
+          : 'error'
+
+      return res.json({
+        ok: true,
+        intent: 'unavailable',
+        source: 'tool-fast',
+        reply:
+          plannerFailure === 'timeout'
+            ? 'La richiesta richiede il motore di analisi semantica, ma questa volta non ha risposto entro il tempo previsto. Riprova tra qualche secondo.'
+            : 'Il motore di analisi semantica non è disponibile in questo momento. Riprova tra qualche secondo.',
+        data: {
+          type: 'capability-unavailable',
+          reason: `analytical-read-planner-${plannerFailure}`,
+        },
+        meta: {
+          moduleId: 'facile.renewals',
+          intent: 'unavailable',
+          analyticalReadRequest: true,
+          plannerFailure,
+          timings: {
+            targetResolutionMs,
+            totalMs: Date.now() - startedAt,
+          },
+        },
+      })
+    }
+
+    return res.json({
+      ok: true,
+      intent: 'clarification',
+      source: 'tool-fast',
+      reply:
+        'Ho riconosciuto una richiesta analitica, ma non sono riuscito a costruire un piano di calcolo verificabile con sufficiente sicurezza. Riformula indicando l’entità da analizzare e il criterio di raggruppamento o confronto.',
+      data: {
+        type: 'clarification',
+        reason: 'analytical-read-plan-unresolved',
+      },
+      meta: {
+        moduleId: 'facile.renewals',
+        intent: 'clarification',
+        analyticalReadRequest: true,
+        timings: {
+          targetResolutionMs,
+          totalMs: Date.now() - startedAt,
+        },
+      },
+    })
   }
 
   const downstreamMessage = resolvedServiceDetailMessage || message

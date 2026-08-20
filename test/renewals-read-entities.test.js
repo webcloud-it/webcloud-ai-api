@@ -464,6 +464,53 @@ test('semantic planner: valida un piano JSON e conserva il previousPlan', async 
   ])
 })
 
+test('semantic planner: normalizza entità e campi espressi con alias naturali', async () => {
+  let plannerRequest = null
+  const plan = await planReadQuery({
+    message: 'crea un ranking dei provider in base al carico operativo',
+    callLlm: async request => {
+      plannerRequest = request
+      return {
+        operation: 'list',
+        entity: 'fornitori',
+        filters: [],
+        groupBy: [],
+        metrics: [],
+        sort: [{field: 'numero servizi', direction: 'desc'}],
+        limit: 10,
+        offset: 0,
+        confidence: 0.94,
+      }
+    },
+  })
+
+  assert.equal(plan.entity, 'providers')
+  assert.deepEqual(plan.sort, [{field: 'serviceCount', direction: 'desc'}])
+  assert.equal(plannerRequest.timeoutMs, 12000)
+  assert.equal(plannerRequest.options.temperature, 0)
+  assert.equal(plannerRequest.options.num_predict, 500)
+  assert.equal(plannerRequest.format.type, 'object')
+})
+
+test('semantic planner: non esegue piani con campi inventati dal modello', async () => {
+  const plan = await planReadQuery({
+    message: 'crea un ranking dei provider in base a una correlazione complessa',
+    callLlm: async () => ({
+      operation: 'list',
+      entity: 'providers',
+      filters: [{field: 'secretScore', operator: 'gte', value: 1}],
+      groupBy: [],
+      metrics: [],
+      sort: [{field: 'serviceCount', direction: 'desc'}],
+      limit: 10,
+      offset: 0,
+      confidence: 0.99,
+    }),
+  })
+
+  assert.equal(plan, null)
+})
+
 test('contratto: rifiuta campi non registrati', () => {
   const validation = validateReadQueryPlan(
     {
@@ -473,8 +520,73 @@ test('contratto: rifiuta campi non registrati', () => {
     },
     getReadEntityRegistry()
   )
-  assert.equal(validation.ok, true)
-  assert.deepEqual(validation.plan.filters, [])
+  assert.equal(validation.ok, false)
+  assert.equal(validation.reason, 'invalid-filter')
+})
+
+test('planner analitico: classifica fornitori contando solo i servizi nel periodo richiesto', async () => {
+  const plan = await planReadQuery({
+    message: 'quali fornitori hanno più servizi in scadenza nel 2027?',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'services')
+  assert.deepEqual(plan.groupBy, ['providerNames'])
+  assert.deepEqual(plan.metrics, [{id: 'count', function: 'count', field: null}])
+  assert.deepEqual(plan.filters, [
+    {field: 'expiryYears', operator: 'contains', value: 2027},
+  ])
+  assert.deepEqual(plan.sort, [
+    {field: 'count', direction: 'desc'},
+    {field: 'providerNames', direction: 'asc'},
+  ])
+})
+
+test('planner analitico: riusa la stessa capacità per gruppi e servizi', async () => {
+  const plan = await planReadQuery({
+    message: 'quali gruppi hanno meno servizi nel 2027?',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'services')
+  assert.deepEqual(plan.groupBy, ['group.name'])
+  assert.deepEqual(plan.filters, [
+    {field: 'expiryYears', operator: 'contains', value: 2027},
+  ])
+  assert.deepEqual(plan.sort, [
+    {field: 'count', direction: 'asc'},
+    {field: 'group.name', direction: 'asc'},
+  ])
+})
+
+test('executor analitico: filtra il dataset completo prima di raggruppare e contare', () => {
+  const result = executeReadQuery({
+    plan: {
+      operation: 'aggregate',
+      entity: 'services',
+      filters: [{field: 'expiryYears', operator: 'contains', value: 2027}],
+      groupBy: ['providerNames'],
+      metrics: [{id: 'count', function: 'count', field: null}],
+      sort: [
+        {field: 'count', direction: 'desc'},
+        {field: 'providerNames', direction: 'asc'},
+      ],
+      limit: 20,
+      offset: 0,
+    },
+    services,
+    options,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.operation, 'aggregate')
+  assert.equal(result.aggregate.sourceRecords, 1)
+  assert.deepEqual(result.items, [
+    {group: {providerNames: 'MisterDomain'}, metrics: {count: 1}},
+    {group: {providerNames: 'WebCloud'}, metrics: {count: 1}},
+  ])
 })
 
 

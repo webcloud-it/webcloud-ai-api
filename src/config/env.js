@@ -22,6 +22,7 @@ export const env = {
   ollamaChatModel: process.env.OLLAMA_CHAT_MODEL || 'qwen3.5:0.8b',
   ollamaTimeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 45000),
   ollamaRouterTimeoutMs: Number(process.env.OLLAMA_ROUTER_TIMEOUT_MS || 15000),
+  ollamaReadPlannerTimeoutMs: Number(process.env.OLLAMA_READ_PLANNER_TIMEOUT_MS || 12000),
   ollamaRequired: String(process.env.OLLAMA_REQUIRED || '').toLowerCase() === 'true',
   ollamaThink: String(process.env.OLLAMA_THINK || 'false').toLowerCase() === 'true',
   ollamaKeepAlive: process.env.OLLAMA_KEEP_ALIVE || '10m',

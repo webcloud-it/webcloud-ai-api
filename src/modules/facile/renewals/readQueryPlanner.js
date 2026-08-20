@@ -1,4 +1,5 @@
 import {callOllamaChat} from '../../../core/providers/ollamaProvider.js'
+import {env} from '../../../config/env.js'
 import {
   DEFAULT_READ_QUERY_LIMIT,
   mergeReadQueryPlans,
@@ -6,6 +7,7 @@ import {
 } from './readQueryContract.js'
 import {
   findReadEntityByAlias,
+  findReadEntityFieldByAlias,
   getReadEntityDefinitions,
   getReadEntityRegistry,
 } from './readEntityRegistry.js'
@@ -22,8 +24,104 @@ function normalizeText(value = '') {
     .trim()
 }
 
+
+const READ_QUERY_PLAN_OUTPUT_SCHEMA = Object.freeze({
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    operation: {
+      type: 'string',
+      enum: ['list', 'count', 'detail', 'aggregate', 'unknown'],
+    },
+    entity: {
+      anyOf: [{type: 'string'}, {type: 'null'}],
+    },
+    filters: {
+      type: 'array',
+      maxItems: 8,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          field: {type: 'string'},
+          operator: {
+            type: 'string',
+            enum: [
+              'equals',
+              'not-equals',
+              'contains',
+              'not-contains',
+              'in',
+              'between',
+              'gte',
+              'lte',
+              'exists',
+              'not-exists',
+              'truthy',
+              'falsey',
+            ],
+          },
+          value: {},
+        },
+        required: ['field', 'operator', 'value'],
+      },
+    },
+    groupBy: {
+      type: 'array',
+      maxItems: 2,
+      items: {type: 'string'},
+    },
+    metrics: {
+      type: 'array',
+      maxItems: 4,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: {type: 'string'},
+          function: {
+            type: 'string',
+            enum: ['count', 'count-distinct', 'sum', 'avg', 'min', 'max'],
+          },
+          field: {
+            anyOf: [{type: 'string'}, {type: 'null'}],
+          },
+        },
+        required: ['id', 'function', 'field'],
+      },
+    },
+    sort: {
+      type: 'array',
+      maxItems: 3,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          field: {type: 'string'},
+          direction: {type: 'string', enum: ['asc', 'desc']},
+        },
+        required: ['field', 'direction'],
+      },
+    },
+    limit: {type: 'integer', minimum: 0, maximum: 50},
+    offset: {type: 'integer', minimum: 0},
+    confidence: {type: 'number', minimum: 0, maximum: 1},
+  },
+  required: [
+    'operation',
+    'entity',
+    'filters',
+    'groupBy',
+    'metrics',
+    'sort',
+    'limit',
+    'offset',
+    'confidence',
+  ],
+})
+
 const ANALYTICAL_READ_PATTERN =
-  /\b(?:raggrupp|aggreg|classific|ranking|top|maggior|minore|minor|massim|minim|media|medie|somma|distint|distribuz|confront|correl|per\s+(?:ogni|ciascun|ciascuna)|piu|meno|primi\s+\d{1,2}|prime\s+\d{1,2})\b/i
+  /\b(?:raggrupp\w*|aggreg\w*|classific\w*|ranking|top|maggior\w*|minor\w*|massim\w*|minim\w*|medi[ae]?|somm\w*|distint\w*|distribuz\w*|confront\w*|correl\w*|per\s+(?:ogni|ciascun\w*)|piu|meno|primi\s+\d{1,2}|prime\s+\d{1,2})\b/i
 
 export function isAnalyticalReadQueryRequest(message = '') {
   const text = normalizeText(message)
@@ -34,6 +132,418 @@ export function isAnalyticalReadQueryRequest(message = '') {
     /\b(?:quanti|quante|conteggio|numero)\b[\s\S]{0,80}\bper\b/i.test(text) ||
     /\bper\b[\s\S]{0,80}\b(?:quanti|quante|conteggio|numero)\b/i.test(text)
   )
+}
+
+
+function escapeRegExp(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function getAnalyticalFieldTerms(fieldId = '', config = {}) {
+  return [...new Set([
+    fieldId,
+    config?.label,
+    ...(Array.isArray(config?.aliases) ? config.aliases : []),
+  ])]
+    .filter(Boolean)
+    .map(value => normalizeText(value))
+    .filter(Boolean)
+    .sort((first, second) => second.length - first.length)
+}
+
+function getAnalyticalEntityDefinition(entityId = '') {
+  return getReadEntityDefinitions().find(definition => definition.id === entityId) || null
+}
+
+function findGroupingField(definition = null, message = '') {
+  if (!definition) return null
+  const text = normalizeText(message)
+  const matches = []
+
+  for (const [fieldId, config] of Object.entries(definition.fields || {})) {
+    for (const term of getAnalyticalFieldTerms(fieldId, config)) {
+      const escaped = escapeRegExp(term)
+      const explicitPer = new RegExp(
+        `\\bper\\s+(?:(?:ogni|ciascun\\w*)\\s+)?(?:(?:il|lo|la|i|gli|le|un|una)\\s+)?${escaped}\\b`,
+        'i'
+      )
+      const explicitGroup = new RegExp(
+        `\\b(?:raggrupp\\w*|divid\\w*|suddivid\\w*)\\b[\\s\\S]{0,90}\\b${escaped}\\b`,
+        'i'
+      )
+
+      if (!explicitPer.test(text) && !explicitGroup.test(text)) continue
+      matches.push({field: fieldId, termLength: term.length})
+      break
+    }
+  }
+
+  matches.sort((first, second) => second.termLength - first.termLength)
+  if (!matches.length) return null
+  const best = matches[0]
+  return matches.filter(item => item.termLength === best.termLength && item.field !== best.field).length
+    ? null
+    : best.field
+}
+
+function findRankingField(definition = null, message = '') {
+  if (!definition) return null
+  const text = normalizeText(message)
+  const candidates = []
+
+  for (const [fieldId, config] of Object.entries(definition.fields || {})) {
+    if (config?.type !== 'number') continue
+
+    for (const term of getAnalyticalFieldTerms(fieldId, config)) {
+      const pattern = new RegExp(`\\b${escapeRegExp(term)}\\b`, 'i')
+      if (!pattern.test(text)) continue
+      candidates.push({field: fieldId, termLength: term.length})
+      break
+    }
+  }
+
+  candidates.sort((first, second) => second.termLength - first.termLength)
+  if (!candidates.length) return null
+  const best = candidates[0]
+  return candidates.filter(item => item.termLength === best.termLength && item.field !== best.field).length
+    ? null
+    : best.field
+}
+
+function extractAnalyticalLimit(message = '', definition = null) {
+  const text = normalizeText(message)
+  const normalLimit = extractLimit(text)
+  if (normalLimit !== DEFAULT_READ_QUERY_LIMIT) return normalLimit
+
+  const top = text.match(/\btop\s+(\d{1,2})\b/i)
+  if (top?.[1]) return Math.min(Math.max(Number(top[1]), 1), 50)
+
+  const entityTerms = definition
+    ? [definition.label, definition.singular, ...(definition.aliases || [])]
+        .filter(Boolean)
+        .map(value => normalizeText(value))
+        .sort((first, second) => second.length - first.length)
+    : []
+
+  for (const term of entityTerms) {
+    const match = text.match(new RegExp(`\\b(\\d{1,2})\\s+${escapeRegExp(term)}\\b`, 'i'))
+    if (match?.[1]) return Math.min(Math.max(Number(match[1]), 1), 50)
+  }
+
+  return DEFAULT_READ_QUERY_LIMIT
+}
+
+function getEntitySemanticTerms(definition = null) {
+  if (!definition) return []
+
+  return [...new Set([
+    definition.id,
+    definition.label,
+    definition.singular,
+    ...(definition.aliases || []),
+  ])]
+    .filter(Boolean)
+    .map(value => normalizeText(value))
+    .filter(Boolean)
+    .sort((first, second) => second.length - first.length)
+}
+
+function findEntityMention(definition = null, message = '') {
+  const text = normalizeText(message)
+  const matches = getEntitySemanticTerms(definition)
+    .map(term => {
+      const match = new RegExp(`\\b${escapeRegExp(term)}\\b`, 'i').exec(text)
+      return match ? {index: match.index, termLength: term.length} : null
+    })
+    .filter(Boolean)
+    .sort((first, second) => first.index - second.index || second.termLength - first.termLength)
+
+  return matches[0] || null
+}
+
+function findRelationDimension(measureDefinition = null, targetDefinition = null) {
+  if (!measureDefinition || !targetDefinition) return null
+
+  const targetTerms = new Set(getEntitySemanticTerms(targetDefinition))
+  const matches = Object.entries(measureDefinition.fields || {})
+    .filter(([, config]) => ['string', 'string-array'].includes(config?.type))
+    .map(([field, config]) => {
+      const overlap = getAnalyticalFieldTerms(field, config)
+        .filter(term => targetTerms.has(term))
+        .sort((first, second) => second.length - first.length)
+
+      return overlap.length ? {field, score: overlap[0].length} : null
+    })
+    .filter(Boolean)
+    .sort((first, second) => second.score - first.score)
+
+  if (!matches.length) return null
+  if (matches.length > 1 && matches[0].score === matches[1].score) return null
+  return matches[0].field
+}
+
+function buildRelationalRankingPlan(message = '', previousState = null) {
+  const text = normalizeText(message)
+  const direction = /\b(?:piu|maggior\w*|massim\w*|top)\b/i.test(text)
+    ? 'desc'
+    : /\b(?:meno|minor\w*|minim\w*)\b/i.test(text)
+      ? 'asc'
+      : null
+
+  if (!direction) return null
+  if (/\b(?:esclud\w*|tranne|eccetto|confront\w*|rispetto)\b/i.test(text)) return null
+
+  const definitions = getReadEntityDefinitions()
+  const mentions = definitions
+    .map(definition => ({definition, mention: findEntityMention(definition, text)}))
+    .filter(item => item.mention)
+    .sort((first, second) =>
+      first.mention.index - second.mention.index ||
+      second.mention.termLength - first.mention.termLength
+    )
+
+  const target = mentions[0]?.definition || null
+  const measure = mentions.find(item =>
+    item.definition.id !== target?.id && item.mention.index > mentions[0].mention.index
+  )?.definition || null
+
+  if (!target || !measure) return null
+
+  const dimension = findRelationDimension(measure, target)
+  if (!dimension) return null
+
+  const filters = buildDeterministicFilters(measure.id, text)
+    .filter(filter => filter.field !== dimension)
+
+  return {
+    type: 'read-query-plan',
+    operation: 'aggregate',
+    entity: measure.id,
+    filters,
+    groupBy: [dimension],
+    metrics: [{id: 'count', function: 'count', field: null}],
+    sort: [
+      {field: 'count', direction},
+      {field: dimension, direction: 'asc'},
+    ],
+    limit: extractAnalyticalLimit(text, target),
+    offset: 0,
+    confidence: 1,
+    source: 'deterministic-analytical',
+    sourceMessage: message,
+    previousPlan: previousState?.plan || null,
+  }
+}
+
+function buildDeterministicAnalyticalPlan(message = '', previousState = null) {
+  const text = normalizeText(message)
+  if (!text || !isAnalyticalReadQueryRequest(text)) return null
+
+  const relationalRankingPlan = buildRelationalRankingPlan(message, previousState)
+  if (relationalRankingPlan) return relationalRankingPlan
+
+  const explicitEntity = detectPrimaryEntity(text)
+  const entityId = explicitEntity?.id || previousState?.entity || null
+  if (!entityId) return null
+
+  const entity = getReadEntityRegistry().get(entityId)
+  const definition = getAnalyticalEntityDefinition(entityId)
+  if (!entity || !definition) return null
+
+  const groupByField = findGroupingField(definition, text)
+  const asksGrouping = /\b(?:raggrupp\w*|divid\w*|suddivid\w*)\b/i.test(text)
+  const asksCountByGroup =
+    /\b(?:quanti|quante|conteggio|numero|conta)\b[\s\S]{0,100}\bper\b/i.test(text) ||
+    /\bper\b[\s\S]{0,100}\b(?:quanti|quante|conteggio|numero|conta)\b/i.test(text)
+
+  if (groupByField && (asksGrouping || asksCountByGroup)) {
+    return {
+      type: 'read-query-plan',
+      operation: 'aggregate',
+      entity: entity.id,
+      filters: buildDeterministicFilters(entity.id, text),
+      groupBy: [groupByField],
+      metrics: [{id: 'count', function: 'count', field: null}],
+      sort: [{field: 'count', direction: 'desc'}],
+      limit: extractAnalyticalLimit(text, definition),
+      offset: 0,
+      confidence: 1,
+      source: 'deterministic-analytical',
+      sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
+
+  const rankDirection = /\b(?:piu|maggior\w*|massim\w*|top)\b/i.test(text)
+    ? 'desc'
+    : /\b(?:meno|minor\w*|minim\w*)\b/i.test(text)
+      ? 'asc'
+      : null
+  const rankingField = rankDirection ? findRankingField(definition, text) : null
+
+  if (rankingField) {
+    return {
+      type: 'read-query-plan',
+      operation: 'list',
+      entity: entity.id,
+      filters: buildDeterministicFilters(entity.id, text),
+      sort: [{field: rankingField, direction: rankDirection}],
+      limit: extractAnalyticalLimit(text, definition),
+      offset: 0,
+      confidence: 1,
+      source: 'deterministic-analytical',
+      sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
+
+  return null
+}
+
+function containsSemanticAlias(text = '', alias = '') {
+  const haystack = normalizeText(text)
+  const needle = normalizeText(alias)
+  if (!haystack || !needle) return false
+  if (haystack === needle) return true
+  return (` ${haystack} `).includes(` ${needle} `)
+}
+
+function getSemanticEntityDefinitions(message = '', previousState = null) {
+  const definitions = getReadEntityDefinitions()
+  const selected = []
+
+  const add = definition => {
+    if (!definition?.id || selected.some(item => item.id === definition.id)) return
+    selected.push(definition)
+  }
+
+  for (const definition of definitions) {
+    const aliases = [definition.id, definition.label, definition.singular, ...(definition.aliases || [])]
+    if (aliases.some(alias => containsSemanticAlias(message, alias))) add(definition)
+  }
+
+  if (previousState?.entity) {
+    add(definitions.find(definition => definition.id === previousState.entity))
+  }
+
+  return selected.length ? selected.slice(0, 6) : definitions
+}
+
+function normalizeSemanticOperation(value = '') {
+  const operation = normalizeText(value).replace(/\s+/g, '-')
+  const aliases = new Map([
+    ['group', 'aggregate'],
+    ['group-by', 'aggregate'],
+    ['groupby', 'aggregate'],
+    ['aggregation', 'aggregate'],
+    ['aggregazione', 'aggregate'],
+    ['rank', 'list'],
+    ['ranking', 'list'],
+  ])
+  return aliases.get(operation) || operation
+}
+
+function normalizeSemanticMetricFunction(value = '') {
+  const fn = normalizeText(value).replace(/[_\s]+/g, '-')
+  const aliases = new Map([
+    ['countdistinct', 'count-distinct'],
+    ['distinct-count', 'count-distinct'],
+    ['conteggio-distinti', 'count-distinct'],
+    ['media', 'avg'],
+    ['average', 'avg'],
+    ['somma', 'sum'],
+    ['minimum', 'min'],
+    ['massimo', 'max'],
+    ['maximum', 'max'],
+  ])
+  return aliases.get(fn) || fn
+}
+
+function normalizeSemanticEntity(value = '') {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  const registry = getReadEntityRegistry()
+  if (registry.has(raw)) return raw
+  return findReadEntityByAlias(raw)?.id || raw
+}
+
+function normalizeSemanticField(entityId = '', value = '') {
+  const raw = String(value || '').trim()
+  if (!raw) return raw
+  const entity = getReadEntityRegistry().get(entityId)
+  if (!entity) return raw
+  if (Object.prototype.hasOwnProperty.call(entity.fields || {}, raw)) return raw
+  return findReadEntityFieldByAlias(entity, raw)?.id || raw
+}
+
+function normalizeSemanticMetricId(value = '', index = 0) {
+  const raw = String(value || '').trim()
+  if (/^[a-zA-Z][a-zA-Z0-9_-]{0,47}$/.test(raw)) return raw
+  return `metric${index + 1}`
+}
+
+function normalizeSemanticPlan(rawPlan = {}) {
+  if (!rawPlan || typeof rawPlan !== 'object') return rawPlan
+
+  const operation = normalizeSemanticOperation(rawPlan.operation)
+  const entity = normalizeSemanticEntity(rawPlan.entity)
+  if (!entity) return {...rawPlan, operation}
+
+  const filters = (Array.isArray(rawPlan.filters) ? rawPlan.filters : []).map(filter => ({
+    ...filter,
+    field: normalizeSemanticField(entity, filter?.field),
+  }))
+
+  const groupBySource = Array.isArray(rawPlan.groupBy)
+    ? rawPlan.groupBy
+    : rawPlan.groupBy
+      ? [rawPlan.groupBy]
+      : []
+  const groupBy = groupBySource.map(field => normalizeSemanticField(entity, field))
+
+  const metrics = (Array.isArray(rawPlan.metrics) ? rawPlan.metrics : []).map((metric, index) => ({
+    ...metric,
+    id: normalizeSemanticMetricId(metric?.id, index),
+    function: normalizeSemanticMetricFunction(metric?.function || metric?.fn),
+    field:
+      normalizeSemanticMetricFunction(metric?.function || metric?.fn) === 'count'
+        ? null
+        : normalizeSemanticField(entity, metric?.field),
+  }))
+  const metricIds = new Set(metrics.map(metric => metric.id))
+
+  const sort = (Array.isArray(rawPlan.sort) ? rawPlan.sort : []).map(entry => {
+    const rawField = String(entry?.field || '').trim()
+    if (metricIds.has(rawField)) return {...entry, field: rawField}
+
+    const normalizedSortTerm = normalizeText(rawField)
+    const matchingMetric = metrics.filter(metric =>
+      normalizeText(metric.function) === normalizedSortTerm ||
+      (metric.function === 'count' && ['conteggio', 'numero', 'totale', 'count'].includes(normalizedSortTerm))
+    )
+
+    return {
+      ...entry,
+      field:
+        matchingMetric.length === 1
+          ? matchingMetric[0].id
+          : normalizeSemanticField(entity, rawField),
+    }
+  })
+
+  return {
+    ...rawPlan,
+    operation,
+    entity,
+    filters,
+    groupBy,
+    metrics,
+    sort,
+  }
+}
+
+function summarizePlannerRejection(stage, payload = {}) {
+  console.warn('[renewals-read-query-planner]', JSON.stringify({stage, ...payload}))
 }
 
 function cleanTarget(value = '') {
@@ -580,6 +1090,9 @@ function buildDeterministicPlan(
   const pagination = parsePagination(message, previousState)
   if (pagination) return pagination
 
+  const analyticalPlan = buildDeterministicAnalyticalPlan(message, previousState)
+  if (analyticalPlan) return analyticalPlan
+
   if (resolvedDetailTarget?.entityId) {
     if (resolvedDetailTarget.entityId === 'services') return null
 
@@ -696,24 +1209,34 @@ function shouldUseSemanticPlanner(message = '', previousState = null, readUttera
 }
 
 async function buildSemanticPlan({message, previousState, callLlm}) {
-  const definitions = getReadEntityDefinitions()
+  const definitions = getSemanticEntityDefinitions(message, previousState)
   const registrySummary = definitions.map(definition => ({
     id: definition.id,
     label: definition.label,
+    singular: definition.singular,
     aliases: definition.aliases,
-    fields: Object.fromEntries(
-      Object.entries(definition.fields || {}).map(([field, config]) => [field, config?.type || 'string'])
-    ),
+    fields: Object.entries(definition.fields || {}).map(([id, config]) => ({
+      id,
+      type: config?.type || 'string',
+      label: config?.label || id,
+      aliases: Array.isArray(config?.aliases) ? config.aliases : [],
+    })),
   }))
 
   const systemPrompt = [
     'Sei il planner strutturato di sola lettura del modulo rinnovi Webcloud.',
     'Non rispondere all’utente e non accedere a database o API.',
     'Trasforma la richiesta in un piano JSON usando esclusivamente entità, campi e operatori consentiti.',
+    'Puoi usare sia gli id canonici sia label/alias semantici dei campi: il backend li normalizzerà e poi validerà il piano.',
     'Le action, le conferme, gli annullamenti e le diagnostiche sono gestiti prima di questo planner.',
     'Non inventare nomi, filtri o valori non presenti nella richiesta.',
     'Se la richiesta è un seguito, modifica il previousPlan senza perdere filtri, raggruppamenti o metriche ancora pertinenti.',
+    'Nelle richieste analitiche, espressioni come "per <dimensione>", "per ogni <dimensione>" o "per ciascuna <dimensione>" indicano normalmente una dimensione di groupBy, non il valore di un filtro.',
+    'Non usare mai articoli, preposizioni o congiunzioni isolate come e, ed, di, del, con o per come valori di filtro.',
+    'Se l’utente chiede quanti record esistono per ciascun valore di una dimensione, usa aggregate con groupBy su quella dimensione e una metrica count.',
     'Usa operation=aggregate soltanto quando servono raggruppamenti o metriche calcolate; se una metrica è già un campo numerico dell’entità preferisci list + sort.',
+    'Le entità possono già contenere metriche derivate. Per esempio, se una entità espone un campo come numero servizi o numero piani, usalo direttamente invece di ricontare i record dell’entità.',
+    'Non aggregare una entità per il suo stesso nome per contare gli elementi collegati: usa una metrica derivata disponibile oppure aggrega l’entità che rappresenta davvero gli elementi da contare.',
     'Per aggregate puoi usare groupBy con al massimo 2 campi e metrics con al massimo 4 metriche.',
     'Funzioni metriche consentite: count, count-distinct, sum, avg, min, max.',
     'count non richiede field; count-distinct richiede un field; sum e avg richiedono campi number/number-array; min e max richiedono campi number/number-array/date.',
@@ -728,32 +1251,59 @@ async function buildSemanticPlan({message, previousState, callLlm}) {
     request: String(message || '').trim(),
     previousPlan: previousState?.plan || null,
     entities: registrySummary,
-    outputSchema: {
-      operation: 'list | count | detail | aggregate',
-      entity: 'entity id',
-      filters: [{field: 'allowed field', operator: 'allowed operator', value: 'scalar | array | {start,end}'}],
-      groupBy: ['allowed field; only for aggregate'],
-      metrics: [{id: 'short stable id', function: 'count | count-distinct | sum | avg | min | max', field: 'allowed field or null'}],
-      sort: [{field: 'allowed entity field, groupBy field or metric id', direction: 'asc | desc'}],
-      limit: '1..50',
-      offset: '>=0',
-      confidence: '0..1',
-    },
+    outputInstructions: [
+      'Compila tutti i campi richiesti dallo schema strutturato.',
+      'Usa array vuoti per filters, groupBy, metrics e sort quando non servono.',
+      'Per operation=unknown usa entity=null e gli array vuoti.',
+    ],
+    outputSchema: READ_QUERY_PLAN_OUTPUT_SCHEMA,
   }
 
   const raw = await callLlm({
-    timeoutMs: 7000,
+    timeoutMs: env.ollamaReadPlannerTimeoutMs,
+    format: READ_QUERY_PLAN_OUTPUT_SCHEMA,
+    options: {temperature: 0, num_predict: 500},
     messages: [
       {role: 'system', content: systemPrompt},
       {role: 'user', content: JSON.stringify(payload)},
     ],
   })
 
-  const parsed = extractJsonObject(raw)
-  if (!parsed || Number(parsed.confidence || 0) < 0.7) return null
+  const parsed = raw && typeof raw === 'object' ? raw : extractJsonObject(raw)
+  if (!parsed) {
+    const rawText = String(raw || '').trim()
+    summarizePlannerRejection('invalid-json', {
+      rawLength: rawText.length,
+      startsWithBrace: rawText.startsWith('{'),
+      endsWithBrace: rawText.endsWith('}'),
+      firstChar: rawText.slice(0, 1) || null,
+      lastChar: rawText.slice(-1) || null,
+    })
+    return null
+  }
+
+  const operation = normalizeSemanticOperation(parsed.operation)
+  if (!operation || operation === 'unknown') {
+    summarizePlannerRejection('model-unknown', {
+      operation: operation || null,
+      entity: parsed?.entity || null,
+      confidence: Number.isFinite(Number(parsed?.confidence)) ? Number(parsed.confidence) : null,
+    })
+    return null
+  }
+
+  const explicitConfidence = Number(parsed.confidence)
+  if (Number.isFinite(explicitConfidence) && explicitConfidence < 0.45) {
+    summarizePlannerRejection('low-model-confidence', {
+      confidence: explicitConfidence,
+      operation,
+      entity: parsed.entity || null,
+    })
+    return null
+  }
 
   return {
-    ...parsed,
+    ...normalizeSemanticPlan(parsed),
     source: 'semantic',
     sourceMessage: message,
     previousPlan: previousState?.plan || null,
@@ -768,6 +1318,7 @@ export async function planReadQuery({
   actorToken = '',
   resolvedDetailTarget = null,
   readUtterance = null,
+  onSemanticError = null,
 } = {}) {
   const rememberedState = getRememberedReadQueryContext({actorToken})
   const previousState = getPreviousReadQueryState(history, {
@@ -783,9 +1334,22 @@ export async function planReadQuery({
 
   const analyticalRequest = isAnalyticalReadQueryRequest(message)
 
-  if (deterministic && (!analyticalRequest || deterministic.source === 'follow-up-pagination')) {
+  if (
+    deterministic &&
+    (!analyticalRequest ||
+      deterministic.source === 'follow-up-pagination' ||
+      deterministic.source === 'deterministic-analytical')
+  ) {
     const validation = validateReadQueryPlan(deterministic, registry)
     if (validation.ok) return validation.plan
+
+    if (deterministic.source === 'deterministic-analytical') {
+      summarizePlannerRejection('deterministic-analytical-validation', {
+        reason: validation.reason || null,
+        operation: deterministic.operation || null,
+        entity: deterministic.entity || null,
+      })
+    }
   }
 
   if (!allowSemantic || !shouldUseSemanticPlanner(message, previousState, readUtterance)) {
@@ -801,13 +1365,37 @@ export async function planReadQuery({
       : semantic
     const validation = validateReadQueryPlan(merged, registry)
 
-    if (!validation.ok) return null
+    if (!validation.ok) {
+      summarizePlannerRejection('validation', {
+        reason: validation.reason || null,
+        operation: merged?.operation || null,
+        entity: merged?.entity || null,
+        groupBy: Array.isArray(merged?.groupBy) ? merged.groupBy : [],
+        metrics: Array.isArray(merged?.metrics)
+          ? merged.metrics.map(metric => ({id: metric?.id || null, function: metric?.function || null, field: metric?.field || null}))
+          : [],
+        sort: Array.isArray(merged?.sort) ? merged.sort : [],
+      })
+      return null
+    }
     if (validation.plan.entity === 'services' && validation.plan.operation !== 'aggregate') {
+      summarizePlannerRejection('services-non-aggregate', {
+        operation: validation.plan.operation,
+      })
       return null
     }
 
     return validation.plan
-  } catch {
+  } catch (error) {
+    summarizePlannerRejection('exception', {
+      errorName: error?.name || 'Error',
+      message: String(error?.message || '').slice(0, 240),
+    })
+
+    if (typeof onSemanticError === 'function') {
+      onSemanticError(error)
+    }
+
     return null
   }
 }

@@ -809,8 +809,8 @@ function buildServices({services = []} = {}) {
 }
 
 const COMMON_NAME_FIELDS = {
-  id: {type: 'string'},
-  name: {type: 'string'},
+  id: {type: 'string', label: 'ID', aliases: ['id', 'identificativo']},
+  name: {type: 'string', label: 'nome', aliases: ['nome', 'denominazione']},
 }
 
 const definitions = [
@@ -821,12 +821,12 @@ const definitions = [
     aliases: ['servizi', 'servizio', 'domini gestiti'],
     fields: {
       ...COMMON_NAME_FIELDS,
-      'customer.name': {type: 'string'},
-      'group.name': {type: 'string'},
-      'domain.name': {type: 'string'},
-      providerNames: {type: 'string-array'},
-      planNames: {type: 'string-array'},
-      expiryYears: {type: 'number-array'},
+      'customer.name': {type: 'string', label: 'cliente', aliases: ['cliente', 'clienti', 'azienda', 'aziende']},
+      'group.name': {type: 'string', label: 'gruppo', aliases: ['gruppo', 'gruppi', 'gruppo aziendale', 'gruppi aziendali']},
+      'domain.name': {type: 'string', label: 'dominio', aliases: ['dominio', 'domini', 'domain']},
+      providerNames: {type: 'string-array', label: 'fornitori', aliases: ['fornitore', 'fornitori', 'provider', 'providers', 'supplier', 'suppliers']},
+      planNames: {type: 'string-array', label: 'piani', aliases: ['piano', 'piani', 'plan', 'plans']},
+      expiryYears: {type: 'number-array', label: 'anni di scadenza', aliases: ['anno scadenza', 'anni scadenza', 'scadenza', 'scadenze']},
       dontRenew: {type: 'boolean'},
       autoRenew: {type: 'boolean'},
       toRenew: {type: 'boolean'},
@@ -843,12 +843,12 @@ const definitions = [
     aliases: ['fornitori', 'fornitore', 'provider', 'providers', 'supplier', 'suppliers'],
     fields: {
       ...COMMON_NAME_FIELDS,
-      serviceCount: {type: 'number'},
-      subscriptionCount: {type: 'number'},
-      planCount: {type: 'number'},
-      planNames: {type: 'string-array'},
-      expiryYears: {type: 'number-array'},
-      nextExpiry: {type: 'date'},
+      serviceCount: {type: 'number', label: 'numero servizi', aliases: ['servizi', 'numero servizi', 'conteggio servizi', 'service count']},
+      subscriptionCount: {type: 'number', label: 'numero sottoscrizioni', aliases: ['sottoscrizioni', 'numero sottoscrizioni', 'abbonamenti', 'subscription count']},
+      planCount: {type: 'number', label: 'numero piani', aliases: ['piani', 'numero piani', 'conteggio piani', 'plan count']},
+      planNames: {type: 'string-array', label: 'piani', aliases: ['piano', 'piani', 'plan', 'plans']},
+      expiryYears: {type: 'number-array', label: 'anni di scadenza', aliases: ['anno scadenza', 'anni scadenza', 'scadenza', 'scadenze']},
+      nextExpiry: {type: 'date', label: 'prossima scadenza', aliases: ['prossima scadenza', 'scadenza più vicina', 'next expiry']},
       present: {type: 'boolean'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
@@ -872,10 +872,10 @@ const definitions = [
       'priceListVersion.id': {type: 'string'},
       'priceListVersion.name': {type: 'string'},
       'priceListVersion.version': {type: 'number'},
-      serviceCount: {type: 'number'},
-      planCount: {type: 'number'},
-      providerNames: {type: 'string-array'},
-      expiryYears: {type: 'number-array'},
+      serviceCount: {type: 'number', label: 'numero servizi', aliases: ['servizi', 'numero servizi', 'conteggio servizi']},
+      planCount: {type: 'number', label: 'numero piani', aliases: ['piani', 'numero piani', 'conteggio piani']},
+      providerNames: {type: 'string-array', label: 'fornitori', aliases: ['fornitore', 'fornitori', 'provider', 'supplier']},
+      expiryYears: {type: 'number-array', label: 'anni di scadenza', aliases: ['anno scadenza', 'anni scadenza', 'scadenza', 'scadenze']},
       expiryDates: {type: 'date'},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
@@ -905,10 +905,10 @@ const definitions = [
       'priceListVersion.id': {type: 'string'},
       'priceListVersion.name': {type: 'string'},
       'priceListVersion.version': {type: 'number'},
-      customerCount: {type: 'number'},
-      serviceCount: {type: 'number'},
-      providerNames: {type: 'string-array'},
-      expiryYears: {type: 'number-array'},
+      customerCount: {type: 'number', label: 'numero clienti', aliases: ['clienti', 'numero clienti', 'conteggio clienti']},
+      serviceCount: {type: 'number', label: 'numero servizi', aliases: ['servizi', 'numero servizi', 'conteggio servizi']},
+      providerNames: {type: 'string-array', label: 'fornitori', aliases: ['fornitore', 'fornitori', 'provider', 'supplier']},
+      expiryYears: {type: 'number-array', label: 'anni di scadenza', aliases: ['anno scadenza', 'anni scadenza', 'scadenza', 'scadenze']},
     },
     defaultSort: [{field: 'name', direction: 'asc'}],
     catalog: {
@@ -936,8 +936,8 @@ const definitions = [
       kind: {type: 'string'},
       duration: {type: 'number'},
       activationFee: {type: 'number'},
-      'supplier.id': {type: 'string'},
-      'supplier.name': {type: 'string'},
+      'supplier.id': {type: 'string', label: 'ID fornitore', aliases: ['id fornitore', 'supplier id', 'provider id']},
+      'supplier.name': {type: 'string', label: 'fornitore', aliases: ['fornitore', 'fornitori', 'provider', 'supplier']},
       sourceKinds: {type: 'string-array'},
       isAddon: {type: 'boolean'},
       serviceCount: {type: 'number'},
@@ -995,8 +995,8 @@ const definitions = [
       kind: {type: 'string'},
       duration: {type: 'number'},
       activationFee: {type: 'number'},
-      'supplier.id': {type: 'string'},
-      'supplier.name': {type: 'string'},
+      'supplier.id': {type: 'string', label: 'ID fornitore', aliases: ['id fornitore', 'supplier id', 'provider id']},
+      'supplier.name': {type: 'string', label: 'fornitore', aliases: ['fornitore', 'fornitori', 'provider', 'supplier']},
       serviceCount: {type: 'number'},
       subscriptionCount: {type: 'number'},
       customerNames: {type: 'string-array'},
@@ -1057,8 +1057,8 @@ const definitions = [
       'plan.id': {type: 'string'},
       'plan.name': {type: 'string'},
       'plan.kind': {type: 'string'},
-      'supplier.id': {type: 'string'},
-      'supplier.name': {type: 'string'},
+      'supplier.id': {type: 'string', label: 'ID fornitore', aliases: ['id fornitore', 'supplier id', 'provider id']},
+      'supplier.name': {type: 'string', label: 'fornitore', aliases: ['fornitore', 'fornitori', 'provider', 'supplier']},
       'priceListVersion.id': {type: 'string'},
       'priceListVersion.name': {type: 'string'},
       'priceListVersion.version': {type: 'number'},
@@ -1168,15 +1168,15 @@ const definitions = [
     fields: {
       ...COMMON_NAME_FIELDS,
       kind: {type: 'string'},
-      'service.name': {type: 'string'},
-      'customer.name': {type: 'string'},
-      'group.name': {type: 'string'},
-      'plan.name': {type: 'string'},
-      'supplier.name': {type: 'string'},
-      startsOn: {type: 'date'},
-      endsOn: {type: 'date'},
-      expiryYear: {type: 'number'},
-      addonCount: {type: 'number'},
+      'service.name': {type: 'string', label: 'servizio', aliases: ['servizio', 'servizi']},
+      'customer.name': {type: 'string', label: 'cliente', aliases: ['cliente', 'clienti', 'azienda', 'aziende']},
+      'group.name': {type: 'string', label: 'gruppo', aliases: ['gruppo', 'gruppi', 'gruppo aziendale']},
+      'plan.name': {type: 'string', label: 'piano', aliases: ['piano', 'piani', 'plan', 'plans']},
+      'supplier.name': {type: 'string', label: 'fornitore', aliases: ['fornitore', 'fornitori', 'provider', 'supplier']},
+      startsOn: {type: 'date', label: 'data inizio', aliases: ['inizio', 'data inizio', 'starts on']},
+      endsOn: {type: 'date', label: 'scadenza', aliases: ['scadenza', 'data scadenza', 'fine', 'ends on']},
+      expiryYear: {type: 'number', label: 'anno di scadenza', aliases: ['anno scadenza', 'anno di scadenza']},
+      addonCount: {type: 'number', label: 'numero add-on', aliases: ['add-on', 'addon', 'numero add-on']},
     },
     defaultSort: [{field: 'endsOn', direction: 'asc'}],
     buildRecords: buildSubscriptions,
@@ -1239,6 +1239,48 @@ const definitions = [
 
 const registry = new Map(definitions.map(definition => [definition.id, definition]))
 
+function splitFieldId(value = '') {
+  return String(value || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function getFieldSemanticTerms(fieldId = '', config = {}) {
+  return [...new Set([
+    fieldId,
+    splitFieldId(fieldId),
+    config?.label,
+    ...(Array.isArray(config?.aliases) ? config.aliases : []),
+  ])]
+    .filter(Boolean)
+    .map(normalizeText)
+    .filter(Boolean)
+}
+
+export function findReadEntityFieldByAlias(entityOrId, value = '') {
+  const definition =
+    typeof entityOrId === 'string'
+      ? registry.get(String(entityOrId || '').trim())
+      : entityOrId
+
+  if (!definition) return null
+
+  const needle = normalizeText(value)
+  if (!needle) return null
+
+  const matches = Object.entries(definition.fields || {})
+    .map(([id, config]) => ({
+      id,
+      config,
+      terms: getFieldSemanticTerms(id, config),
+    }))
+    .filter(item => item.terms.includes(needle))
+
+  return matches.length === 1 ? {id: matches[0].id, ...matches[0].config} : null
+}
+
 export function getReadEntityRegistry() {
   return registry
 }
@@ -1249,7 +1291,16 @@ export function getReadEntityDefinitions() {
     label: definition.label,
     singular: definition.singular,
     aliases: definition.aliases,
-    fields: definition.fields,
+    fields: Object.fromEntries(
+      Object.entries(definition.fields || {}).map(([id, config]) => [
+        id,
+        {
+          ...config,
+          label: config?.label || splitFieldId(id),
+          aliases: Array.isArray(config?.aliases) ? config.aliases : [],
+        },
+      ])
+    ),
     catalog: definition.catalog
       ? {
           enabled: definition.catalog.enabled === true,
