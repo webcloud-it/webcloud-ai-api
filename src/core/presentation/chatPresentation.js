@@ -98,7 +98,9 @@ function sendInItalyPresentation(data) {
     return list(`DNS · ${text(data.user?.companyName, 'Send in Italy')}`, data.items.map(item => ({
       id: text(item.domain),
       title: text(item.domain, 'Dominio'),
+      subtitle: text(item.companyName),
       badge: text(item.status, 'unknown'),
+      action: item.userId ? {type: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(text(item.userId))}`} : undefined,
       details: [
         detail('SPF', item.checks?.spf ? 'OK' : 'da verificare'),
         detail('Click', item.checks?.click2 ? 'OK' : 'da verificare'),

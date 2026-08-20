@@ -87,6 +87,17 @@ test('builds structured DNS cards for Send in Italy', () => {
   assert.equal(presentation.cards[0].details[2].value, 'da verificare')
 })
 
+test('builds cross-user DNS cards with owner navigation', () => {
+  const presentation = buildChatPresentation({
+    type: 'sendinitaly-dns-status',
+    scope: 'all-users',
+    items: [{userId: 'u1', companyName: 'Acme', domain: 'mail.acme.it', status: 'configured', checks: {spf: true, click2: true, ss1rp: true}}],
+  })
+
+  assert.equal(presentation.cards[0].subtitle, 'Acme')
+  assert.equal(presentation.cards[0].action.path, '/sendinitaly/users/u1')
+})
+
 test('builds navigable Asiago event and minisite cards', () => {
   const events = buildChatPresentation({
     type: 'asiago-events',

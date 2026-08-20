@@ -30,6 +30,23 @@ function extractUserTarget(message = '') {
     .trim()
 }
 
+function extractDnsUserTarget(message = '') {
+  const quoted = extractQuotedValue(message)
+  if (quoted) return quoted
+
+  const text = String(message)
+    .replace(/\b(?:su|di)\s+send\s*in\s*italy\b/gi, ' ')
+    .replace(/\b(?:verifica|verificare|controlla|controllare|mostra|stato|situazione|problemi?|configurazione)\b/gi, ' ')
+    .replace(/\b(?:dns|spf|dkim|domini?|mittent[ei])\b/gi, ' ')
+    .replace(/\b(?:utent[ei]?|account|azienda|cliente)\b/gi, ' ')
+    .replace(/\b(?:il|lo|la|i|gli|le|un|una|di|del|dello|della|dei|degli|delle)\b/gi, ' ')
+    .replace(/[?.!,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  return text
+}
+
 async function resolveUser({target, token, services}) {
   if (!target) return {status: 'missing'}
   const payload = await services.getUsers({token, search: target, limit: 20})
@@ -82,6 +99,37 @@ function sanitizeUserDetail(raw = {}) {
     senderDomains: Array.isArray(raw.sender_domains) ? raw.sender_domains.map(String).filter(Boolean).slice(0, 10) : [],
     alerts: alerts.slice(0, 10).map(item => ({type: item.type || null, level: item.level || null, label: item.label || null, message: item.message || null})),
   }
+}
+
+async function checkSenderDomainsForUser({userRef, token, services}) {
+  const detailPayload = await services.getUser({token, userId: userRef.id})
+  const user = sanitizeUserDetail(detailPayload?.data || {})
+  const items = await Promise.all(user.senderDomains.map(async domain => {
+    try {
+      const payload = await services.getUserDnsStatus({token, userId: user.id, domain})
+      const value = payload?.data || {}
+      return {
+        domain,
+        status: value.status || (value.found ? 'configured' : 'zone_not_found'),
+        found: value.found === true,
+        checks: {
+          spf: value.checks?.spf === true,
+          click2: value.checks?.click2 === true,
+          ss1rp: value.checks?.ss1rp === true,
+        },
+      }
+    } catch (error) {
+      return {
+        domain,
+        status: 'error',
+        found: false,
+        checks: {spf: false, click2: false, ss1rp: false},
+        error: String(error?.message || 'verifica non riuscita').slice(0, 160),
+      }
+    }
+  }))
+
+  return {user, items}
 }
 
 function formatUserDetail(user) {
@@ -213,23 +261,33 @@ export async function handleSendInItalyChat({message, token, services = {getCamp
   }
 
   if (/\b(dns|spf|dkim|mittent[ei])\b/.test(text) && /\b(verifica|controlla|stato|problemi|configurazione)\b/.test(text)) {
-    const target = extractUserTarget(message)
-    const resolution = await resolveUser({target, token, services})
-    if (resolution.status !== 'resolved') return {ok: true, intent: 'clarification', source: 'tool-fast', reply: userClarification(resolution, target), data: {type: 'clarification', reason: `sendinitaly-user-${resolution.status}`}, meta: {moduleId: 'facile.sendinitaly'}}
-    const detailPayload = await services.getUser({token, userId: resolution.item.id})
-    const user = sanitizeUserDetail(detailPayload?.data || {})
-    if (!user.senderDomains.length) return {ok: true, intent: 'sendinitaly-dns-status', source: 'tool-fast', reply: `${user.companyName} non ha domini mittente da verificare.`, data: {type: 'sendinitaly-dns-status', user: {id: user.id, companyName: user.companyName}, items: [], actions: [{id: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(String(user.id))}`}]}, meta: {moduleId: 'facile.sendinitaly'}}
-    const checks = await Promise.all(user.senderDomains.map(async domain => {
+    const target = extractDnsUserTarget(message)
+
+    if (target) {
+      const resolution = await resolveUser({target, token, services})
+      if (resolution.status !== 'resolved') return {ok: true, intent: 'clarification', source: 'tool-fast', reply: userClarification(resolution, target), data: {type: 'clarification', reason: `sendinitaly-user-${resolution.status}`}, meta: {moduleId: 'facile.sendinitaly'}}
+      const {user, items} = await checkSenderDomainsForUser({userRef: resolution.item, token, services})
+      if (!items.length) return {ok: true, intent: 'sendinitaly-dns-status', source: 'tool-fast', reply: `${user.companyName} non ha domini mittente da verificare.`, data: {type: 'sendinitaly-dns-status', user: {id: user.id, companyName: user.companyName}, items: [], actions: [{id: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(String(user.id))}`}]}, meta: {moduleId: 'facile.sendinitaly'}}
+      const healthy = items.filter(item => item.status === 'configured' || Object.values(item.checks).every(Boolean)).length
+      return {ok: true, intent: 'sendinitaly-dns-status', source: 'tool-fast', reply: `DNS mittenti di ${user.companyName}: ${healthy}/${items.length} domini completi.`, data: {type: 'sendinitaly-dns-status', user: {id: user.id, companyName: user.companyName}, items, actions: [{id: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(String(user.id))}`}]}, meta: {moduleId: 'facile.sendinitaly'}}
+    }
+
+    const usersPayload = await services.getUsers({token, limit: 100})
+    const users = Array.isArray(usersPayload?.data) ? usersPayload.data.filter(item => item?.id).slice(0, 100) : []
+    const results = await Promise.all(users.map(async userRef => {
       try {
-        const payload = await services.getUserDnsStatus({token, userId: user.id, domain})
-        const value = payload?.data || {}
-        return {domain, status: value.status || (value.found ? 'configured' : 'zone_not_found'), found: value.found === true, checks: {spf: value.checks?.spf === true, click2: value.checks?.click2 === true, ss1rp: value.checks?.ss1rp === true}}
-      } catch (error) {
-        return {domain, status: 'error', found: false, checks: {spf: false, click2: false, ss1rp: false}, error: String(error?.message || 'verifica non riuscita').slice(0, 160)}
+        return await checkSenderDomainsForUser({userRef, token, services})
+      } catch {
+        return {user: {id: userRef.id, companyName: userRef.company_name || userRef.name || String(userRef.id)}, items: []}
       }
     }))
-    const healthy = checks.filter(item => item.status === 'configured' || Object.values(item.checks).every(Boolean)).length
-    return {ok: true, intent: 'sendinitaly-dns-status', source: 'tool-fast', reply: `DNS mittenti di ${user.companyName}: ${healthy}/${checks.length} domini completi.`, data: {type: 'sendinitaly-dns-status', user: {id: user.id, companyName: user.companyName}, items: checks, actions: [{id: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(String(user.id))}`}]}, meta: {moduleId: 'facile.sendinitaly'}}
+    const items = results.flatMap(({user, items: userItems}) => userItems.map(item => ({...item, userId: user.id, companyName: user.companyName})))
+    const healthy = items.filter(item => item.status === 'configured' || Object.values(item.checks).every(Boolean)).length
+    const owners = new Set(items.map(item => item.userId)).size
+    const reply = items.length
+      ? `DNS mittenti complessivi: ${healthy}/${items.length} domini completi su ${owners} utenti.`
+      : `Non risultano domini mittente configurati nei ${users.length} utenti Send in Italy analizzati.`
+    return {ok: true, intent: 'sendinitaly-dns-status', source: 'tool-fast', reply, data: {type: 'sendinitaly-dns-status', scope: 'all-users', items, actions: [{id: 'navigate', label: 'Apri utenti', path: '/sendinitaly/users'}]}, meta: {moduleId: 'facile.sendinitaly'}}
   }
 
   if (/\b(dettaglio|scheda|situazione|stato)\b/.test(text) && /\b(utent[ei]?|account|azienda|cliente)\b/.test(text)) {

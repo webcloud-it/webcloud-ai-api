@@ -86,3 +86,50 @@ test('checks sender DNS domains and isolates per-domain failures', async () => {
   assert.equal(result.data.items.length, 2)
   assert.equal(result.data.items.find(item => item.domain === 'ko.it').status, 'error')
 })
+
+test('checks sender DNS domains across all users when no user is named', async () => {
+  const checked = []
+  const result = await handleSendInItalyChat({
+    message: 'Controlla i domini mittente di Send in Italy',
+    token: 'token',
+    services: mockServices({
+      getUsers: async () => ({data: [
+        {id: 'u1', company_name: 'Acme'},
+        {id: 'u2', company_name: 'Beta'},
+      ]}),
+      getUser: async ({userId}) => ({data: {
+        id: userId,
+        company_name: userId === 'u1' ? 'Acme' : 'Beta',
+        sender_domains: userId === 'u1' ? ['mail.acme.it'] : ['mail.beta.it'],
+      }}),
+      getUserDnsStatus: async ({userId, domain}) => {
+        checked.push([userId, domain])
+        return {data: {found: true, status: 'configured', checks: {spf: true, click2: true, ss1rp: true}}}
+      },
+    }),
+  })
+
+  assert.equal(result.intent, 'sendinitaly-dns-status')
+  assert.equal(result.data.scope, 'all-users')
+  assert.equal(result.data.items.length, 2)
+  assert.equal(result.data.items[0].companyName, 'Acme')
+  assert.deepEqual(checked, [['u1', 'mail.acme.it'], ['u2', 'mail.beta.it']])
+})
+
+test('checks a named sender DNS user without requiring an entity keyword', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Controlla lo stato DNS di Acme',
+    token: 'token',
+    services: mockServices({
+      getUsers: async ({search}) => {
+        assert.equal(search, 'Acme')
+        return {data: [{id: 'u1', company_name: 'Acme'}]}
+      },
+      getUser: async () => ({data: {id: 'u1', company_name: 'Acme', sender_domains: ['mail.acme.it']}}),
+      getUserDnsStatus: async () => ({data: {found: true, status: 'configured', checks: {spf: true, click2: true, ss1rp: true}}}),
+    }),
+  })
+
+  assert.equal(result.data.scope, undefined)
+  assert.equal(result.data.user.companyName, 'Acme')
+})
