@@ -431,7 +431,9 @@ function formatCurrentAnomalySince(item = {}) {
     ['connettività', item.status?.connectivity],
     ['MikroTik', item.hasMikrotik ? item.status?.mikrotik : null],
   ]
-    .filter(([, value]) => value?.status && value.status !== 'online')
+    .filter(([, value]) =>
+      value?.status && !['online', 'na', 'n/a', 'unknown'].includes(String(value.status).toLowerCase())
+    )
     .map(([label, value]) =>
       `${label} ${value.status}${value.changedOn ? ` dal ${formatDateTime(value.changedOn)}` : ' (inizio non disponibile)'}`
     )

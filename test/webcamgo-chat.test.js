@@ -158,7 +158,7 @@ test('interpreta ferme come anomalie correnti e mostra da quando sono iniziate',
   })
 
   assert.equal(result.intent, 'webcam-list')
-  assert.deepEqual(result.data.query.filters, ['offline'])
+  assert.deepEqual(result.data.query.filters, ['stopped'])
   assert.equal(result.data.query.includeStatusSince, true)
   assert.deepEqual(result.data.items.map(item => item.id), ['cam-4'])
   assert.match(result.reply, /stream offline dal/i)

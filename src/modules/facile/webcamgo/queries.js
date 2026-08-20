@@ -37,6 +37,7 @@ const FILTER_LABELS = {
   all: 'webcam',
   online: 'webcam online',
   offline: 'webcam offline',
+  stopped: 'webcam con anomalie operative correnti',
   'stream-offline': 'webcam con stream non online',
   'snapshot-offline': 'webcam con snapshot non online',
   'connectivity-offline': 'webcam con problemi di connettività',
@@ -230,7 +231,7 @@ function parseFilters(message = '') {
       /\b(?:ferm[ae]|blocc[ae]|guast[ae]|ko|non\s+funzionant[ei])\b.{0,60}\b(?:webcam|telecamer[ae])\b/i.test(text)) &&
     !/\b(?:stream|snapshot|router|connettivita|mikrotik)\b/i.test(text)
 
-  if (genericStoppedWebcam) filters.push('offline')
+  if (genericStoppedWebcam) filters.push('stopped')
 
   return [...new Set(filters)]
 }
@@ -342,6 +343,8 @@ function matchesFilters(webcam, filters = [], filterMode = 'all') {
         return webcam.status.overall === 'online'
       case 'offline':
         return webcam.status.overall !== 'online'
+      case 'stopped':
+        return webcam.status.overall === 'offline'
       case 'stream-offline':
         return webcam.status.stream.status !== 'online'
       case 'snapshot-offline':
