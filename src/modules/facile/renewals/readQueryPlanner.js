@@ -832,6 +832,25 @@ export function getPreviousReadQueryState(history = [], {fallbackState = null} =
   return fallbackState || null
 }
 
+function isAggregateRefinementRequest(message = '') {
+  const text = normalizeText(message)
+  if (!text) return false
+
+  return /\b(?:ranking|classifica|graduatoria|confront\w*|esclud\w*|tranne|eccetto|tra\s+(?:i|le|gli)|fra\s+(?:i|le|gli))\b/i.test(text)
+}
+
+function getMostRecentAggregateReadQueryState(history = [], fallbackState = null) {
+  const items = Array.isArray(history) ? history : []
+
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index]?.role !== 'assistant') continue
+    const state = buildReadQueryStateFromData(getHistoryData(items[index]))
+    if (state?.plan?.operation === 'aggregate') return state
+  }
+
+  return fallbackState?.plan?.operation === 'aggregate' ? fallbackState : null
+}
+
 function parsePagination(message = '', previousState = null) {
   if (!previousState) return null
   const text = normalizeText(message)
@@ -1199,13 +1218,18 @@ function buildDeterministicFollowUpPlan(message = '', previousState = null) {
   const previousPlan = previousState?.plan
   const text = normalizeText(message)
   if (!previousPlan?.entity || !text) return null
-  if (!/^\s*(?:e|ed|ma|invece|ora|adesso|poi|tra\s+quest[ei]|fra\s+quest[ei]|di\s+quest[ei]|quest[ei]|quell[ei])\b/i.test(text)) {
+  const aggregateRefinement = previousPlan.operation === 'aggregate' && isAggregateRefinementRequest(text)
+  if (!aggregateRefinement && !/^\s*(?:e|ed|ma|invece|ora|adesso|poi|tra\s+quest[ei]|fra\s+quest[ei]|di\s+quest[ei]|quest[ei]|quell[ei])\b/i.test(text)) {
     return null
   }
 
   const year = extractYear(text)
   const requestedLimit = extractRequestedLimit(text)
-  if (!year && !requestedLimit) return null
+  const exclusionMatch = text.match(
+    /\b(?:esclud\w*|tranne|eccetto)\s+(.+?)(?=\s+(?:e|ed)\s+(?:confront\w*|mostra\w*|ordina\w*|limita\w*)\b|[,;.!?]|$)/i
+  )
+  const exclusion = cleanTarget(exclusionMatch?.[1] || '')
+  if (!year && !requestedLimit && !exclusion) return null
 
   const definition = getAnalyticalEntityDefinition(previousPlan.entity)
   const timeField = definition?.analytics?.timeField || null
@@ -1226,6 +1250,16 @@ function buildDeterministicFollowUpPlan(message = '', previousState = null) {
       operator: 'between',
       value: yearRange(year),
     })
+    filters.splice(0, filters.length, ...retainedFilters)
+  }
+
+  if (exclusion) {
+    const groupField = Array.isArray(previousPlan.groupBy) ? previousPlan.groupBy[0] : null
+    if (!groupField) return null
+    const retainedFilters = filters.filter(filter =>
+      !(filter.field === groupField && filter.operator === 'not-equals')
+    )
+    retainedFilters.push({field: groupField, operator: 'not-equals', value: exclusion})
     filters.splice(0, filters.length, ...retainedFilters)
   }
 
@@ -1498,10 +1532,16 @@ export async function planReadQuery({
   const previousState = getPreviousReadQueryState(effectiveHistory, {
     fallbackState: rememberedState,
   })
+  const aggregateState = isAggregateRefinementRequest(message)
+    ? getMostRecentAggregateReadQueryState(effectiveHistory, rememberedState)
+    : null
+  const deterministicState = previousState?.plan?.operation === 'aggregate'
+    ? previousState
+    : aggregateState || previousState
   const registry = getReadEntityRegistry()
   const deterministic = buildDeterministicPlan(
     message,
-    previousState,
+    deterministicState,
     resolvedDetailTarget,
     readUtterance
   )

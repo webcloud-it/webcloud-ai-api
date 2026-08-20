@@ -614,6 +614,69 @@ test('planner analitico: un follow-up cambia anno e limite senza perdere il pian
   ])
 })
 
+test('planner analitico: raffina un ranking precedente anche dopo un cambio di argomento', async () => {
+  const rankingPlan = await planReadQuery({
+    message: 'quali fornitori hanno più servizi in scadenza nel 2027?',
+    allowSemantic: false,
+  })
+  const rankingResult = executeReadQuery({plan: rankingPlan, services, options})
+  const history = [
+    {
+      role: 'assistant',
+      content: 'Classifica fornitori 2027.',
+      data: {...rankingResult, plan: rankingPlan},
+    },
+    {role: 'user', content: 'mostrami i servizi di Zilio Group'},
+    {
+      role: 'assistant',
+      content: 'Ho trovato 2 servizi.',
+      data: {
+        type: 'read-query-result',
+        entity: 'services',
+        operation: 'list',
+        total: 2,
+        shown: 2,
+        offset: 0,
+        limit: 20,
+        hasMore: false,
+        items: [],
+        plan: {
+          type: 'read-query-plan',
+          operation: 'list',
+          entity: 'services',
+          filters: [{field: 'group.name', operator: 'contains', value: 'Zilio Group'}],
+          sort: [{field: 'name', direction: 'asc'}],
+          limit: 20,
+          offset: 0,
+        },
+      },
+    },
+  ]
+
+  const plan = await planReadQuery({
+    message: 'Tra i fornitori del ranking 2027 escludi MisterDomain e confronta i primi due.',
+    history,
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'subscriptions')
+  assert.equal(plan.limit, 2)
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.deepEqual(plan.filters, [
+    {field: 'kind', operator: 'equals', value: 'supplier'},
+    {
+      field: 'endsOn',
+      operator: 'between',
+      value: {
+        start: '2027-01-01T00:00:00.000Z',
+        end: '2027-12-31T23:59:59.999Z',
+      },
+    },
+    {field: 'supplier.name', operator: 'not-equals', value: 'misterdomain'},
+  ])
+})
+
 test('planner analitico: pagina con una quantità naturale scritta in lettere', async () => {
   const actorToken = 'analytical-pagination-token'
   const firstPlan = await planReadQuery({
