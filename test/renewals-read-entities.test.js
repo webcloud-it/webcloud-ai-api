@@ -8,6 +8,7 @@ import {
 } from '../src/modules/facile/renewals/readQueryPlanner.js'
 import {executeReadQuery} from '../src/modules/facile/renewals/readQueryExecutor.js'
 import {buildReadQueryReply} from '../src/modules/facile/renewals/readQueryFormatters.js'
+import {buildAggregateInsights} from '../src/modules/facile/renewals/readQueryInsights.js'
 import {
   canExecuteReadQueryFromCatalog,
   getReadEntityRegistry,
@@ -792,6 +793,34 @@ test('executor analitico: filtra il dataset completo prima di raggruppare e cont
     {group: {'supplier.name': 'MisterDomain'}, metrics: {count: 1}},
   ])
   assert.match(buildReadQueryReply(result), /MisterDomain \| servizi distinti: 1/)
+})
+
+test('insight analitici: calcola ranking, distacco e mediana su tutti i gruppi', () => {
+  const plan = {
+    operation: 'aggregate',
+    entity: 'subscriptions',
+    groupBy: ['supplier.name'],
+    metrics: [{id: 'count', function: 'count-distinct', field: 'service.id'}],
+    sort: [{field: 'count', direction: 'desc'}],
+  }
+  const analysis = buildAggregateInsights({
+    plan,
+    rows: [
+      {group: {'supplier.name': 'Alfa'}, metrics: {count: 10}},
+      {group: {'supplier.name': 'Beta'}, metrics: {count: 7}},
+      {group: {'supplier.name': 'Gamma'}, metrics: {count: 3}},
+    ],
+  })
+  const metric = analysis.metricSummaries[0]
+
+  assert.equal(metric.total, 20)
+  assert.equal(metric.average, 6.67)
+  assert.equal(metric.median, 7)
+  assert.equal(metric.ranking.first.group['supplier.name'], 'Alfa')
+  assert.equal(metric.ranking.second.group['supplier.name'], 'Beta')
+  assert.equal(metric.ranking.gapAbsolute, 3)
+  assert.equal(metric.ranking.gapPercentage, 42.86)
+  assert.equal(metric.ranking.topShare, 50)
 })
 
 

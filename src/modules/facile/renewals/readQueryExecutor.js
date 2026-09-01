@@ -1,5 +1,6 @@
 import {buildReadEntityRecords, getReadEntityRegistry} from './readEntityRegistry.js'
 import {validateReadQueryPlan} from './readQueryContract.js'
+import {buildAggregateInsights} from './readQueryInsights.js'
 
 function normalizeComparable(value) {
   if (value === null || value === undefined) return ''
@@ -542,6 +543,7 @@ export function executeReadQuery({
         metrics: normalizedPlan.metrics || [],
         sourceRecords: filtered.length,
       },
+      analysis: buildAggregateInsights({rows: aggregated, plan: normalizedPlan}),
     }
   }
 

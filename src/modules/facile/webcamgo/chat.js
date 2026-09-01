@@ -2,6 +2,7 @@ import {
   buildWebcamDetailPayload,
   buildLatestOfflinePayload,
   buildWebcamListPayload,
+  buildWebcamAnomalyAnalysisPayload,
   buildWebcamOutagePayload,
   buildWebcamSummaryPayload,
   detectIntent,
@@ -105,6 +106,24 @@ export function handleWebcamgoChat({
       intent,
       source: 'tool-fast',
       reply: formatOutageHistoryReply(payload),
+      data: payload,
+      meta,
+    }
+  }
+
+  if (intent === 'webcam-anomaly-analysis') {
+    const payload = buildWebcamAnomalyAnalysisPayload({
+      webcams,
+      logs: statusLogs,
+      request: resolvedHistoryRequest,
+      now,
+    })
+
+    return {
+      ok: true,
+      intent,
+      source: 'tool-fast',
+      reply: formatAnomalyAnalysisReply(payload),
       data: payload,
       meta,
     }
@@ -530,6 +549,34 @@ function formatOutageHistoryReply(payload = {}) {
   return [
     `Ho trovato ${payload.totale} webcam con interruzioni superiori a ${formatDuration(payload.minimumDurationMs)} nel periodo richiesto.`,
     ...rows,
+  ].join('\n')
+}
+
+function formatAnomalyAnalysisReply(payload = {}) {
+  const summary = payload.summary || {}
+  if (!payload.items?.length) {
+    return summary.minimumOccurrences > 1
+      ? 'Nel periodo richiesto non risultano webcam con anomalie ricorrenti registrate.'
+      : 'Nel periodo richiesto non risultano anomalie registrate sulle webcam.'
+  }
+
+  const rows = payload.items.map((item, index) => {
+    const types = item.affectedTypes?.length ? item.affectedTypes.join(', ') : 'tipo non disponibile'
+    return `${index + 1}. ${item.name} (${item.slug || 'slug assente'}) | ${item.incidentCount} ${item.incidentCount === 1 ? 'episodio' : 'episodi'} | durata complessiva ${formatDuration(item.totalDurationMs)} | massimo ${formatDuration(item.longestIncidentDurationMs)} | aree: ${types}`
+  })
+  const commonFactors = (payload.commonFactors || []).map(factor => {
+    const fleetComparison = factor.lift == null
+      ? ''
+      : `; incidenza ${factor.lift}x rispetto al parco webcam`
+    return `- ${factor.label}: ${factor.value} in ${factor.count}/${factor.webcamCount} webcam (${factor.percentage}%${fleetComparison})`
+  })
+
+  return [
+    `Ho analizzato ${summary.webcamsAnalyzed || 0} webcam e ${summary.logsAnalyzed || 0} variazioni di stato nel periodo richiesto. ${payload.totale} webcam rispettano il criterio, per un totale di ${summary.totalIncidents || 0} episodi distinti.`,
+    ...rows,
+    commonFactors.length
+      ? `Caratteristiche condivise (correlazioni descrittive, non cause dimostrate):\n${commonFactors.join('\n')}`
+      : 'Non emerge una caratteristica condivisa abbastanza frequente da essere segnalata in modo affidabile.',
   ].join('\n')
 }
 

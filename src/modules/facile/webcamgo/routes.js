@@ -77,6 +77,11 @@ export async function chat(req, res) {
       type: historyRequest.statusType,
       since: historyRequest.fetchSince,
     })
+  } else if (historyRequest?.type === 'recurring-anomalies') {
+    statusLogs = await getWebcamStatusLogs({
+      token: req.auth.token,
+      since: historyRequest.fetchSince,
+    })
   } else if (historyRequest?.type === 'latest-offline') {
     const target =
       historyRequest.target ||

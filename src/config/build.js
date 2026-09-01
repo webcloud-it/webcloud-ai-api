@@ -13,6 +13,6 @@ const commit = sanitizeBuildValue(
 )
 
 export const buildInfo = Object.freeze({
-  id: sanitizeBuildValue(process.env.API_BUILD_ID, '2026.08.20-live-validation-v10'),
+  id: sanitizeBuildValue(process.env.API_BUILD_ID, '2026.09.01-grounded-analytics-v1'),
   commit,
 })

@@ -239,6 +239,49 @@ test('filtra lo storico per interruzioni superiori alla durata richiesta', () =>
   assert.equal(result.data.items[0].longestDurationMs, 3.5 * 60 * 60 * 1000)
 })
 
+test('analizza anomalie ricorrenti, unisce gli stati simultanei e trova fattori comuni', () => {
+  const now = new Date('2026-08-12T12:00:00.000Z')
+  const first = webcam('cam-a', 'Gallio Uno', 'gallio-uno', 'Gallio')
+  const second = webcam('cam-b', 'Gallio Due', 'gallio-due', 'Gallio')
+  const occasional = webcam('cam-c', 'Asiago Uno', 'asiago-uno', 'Asiago')
+  first.networkProvider = 'EOLO'
+  second.networkProvider = 'EOLO'
+  occasional.networkProvider = 'TIM'
+  first.hardware = {brand: 'Axis', model: 'M1'}
+  second.hardware = {brand: 'Axis', model: 'M2'}
+  occasional.hardware = {brand: 'Hikvision', model: 'H1'}
+
+  const incident = (webcamId, type, startedAt, endedAt) => [
+    {webcamId, type, status: 'offline', changedOn: startedAt},
+    {webcamId, type, status: 'online', changedOn: endedAt},
+  ]
+  const statusLogs = [
+    ...incident('cam-a', 'stream', '2026-06-01T10:00:00.000Z', '2026-06-01T11:00:00.000Z'),
+    ...incident('cam-a', 'snapshot', '2026-06-01T10:01:00.000Z', '2026-06-01T10:40:00.000Z'),
+    ...incident('cam-a', 'stream', '2026-07-01T10:00:00.000Z', '2026-07-01T12:00:00.000Z'),
+    ...incident('cam-b', 'stream', '2026-06-10T10:00:00.000Z', '2026-06-10T11:00:00.000Z'),
+    ...incident('cam-b', 'stream', '2026-07-10T10:00:00.000Z', '2026-07-10T11:30:00.000Z'),
+    ...incident('cam-c', 'stream', '2026-07-15T10:00:00.000Z', '2026-07-15T11:00:00.000Z'),
+  ]
+
+  const result = handleWebcamgoChat({
+    message: 'Quali webcam hanno avuto anomalie ricorrenti negli ultimi tre mesi e cosa hanno in comune?',
+    webcams: [first, second, occasional],
+    statusLogs,
+    now,
+  })
+
+  assert.equal(result.intent, 'webcam-anomaly-analysis')
+  assert.equal(result.data.totale, 2)
+  assert.deepEqual(result.data.items.map(item => item.id), ['cam-a', 'cam-b'])
+  assert.equal(result.data.items[0].incidentCount, 2)
+  assert.deepEqual(result.data.items[0].affectedTypes, ['snapshot', 'stream'])
+  assert.ok(result.data.commonFactors.some(factor =>
+    factor.field === 'networkProvider' && factor.value === 'EOLO' && factor.count === 2
+  ))
+  assert.match(result.reply, /correlazioni descrittive, non cause dimostrate/i)
+})
+
 test('recupera l’ultimo offline della webcam ricordata dalla conversazione', () => {
   const result = handleWebcamgoChat({
     message: 'ultimo stato offline',

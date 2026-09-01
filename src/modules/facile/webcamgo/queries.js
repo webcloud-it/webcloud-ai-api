@@ -671,14 +671,53 @@ function parseNumber(value = '') {
   return ITALIAN_NUMBERS.get(normalized) || null
 }
 
-function subtractCalendarMonth(date) {
+function subtractCalendarUnits(date, amount, unit) {
   const copy = new Date(date)
-  copy.setMonth(copy.getMonth() - 1)
+
+  if (unit.startsWith('mes')) copy.setMonth(copy.getMonth() - amount)
+  else if (unit.startsWith('ann')) copy.setFullYear(copy.getFullYear() - amount)
+  else if (unit.startsWith('settiman')) copy.setDate(copy.getDate() - amount * 7)
+  else if (unit.startsWith('giorn')) copy.setDate(copy.getDate() - amount)
+  else copy.setHours(copy.getHours() - amount)
+
   return copy
+}
+
+function parseHistorySince(text = '', now = new Date(), fallbackMonths = 1) {
+  const range = text.match(
+    /\bultim[oaie]*\s+(\d+|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|dodici|ventiquattro|trenta)\s+(or[ae]|giorn[oi]|settiman[ae]|mes[ei]|ann[oi])\b/i
+  )
+
+  if (range?.[1] && range?.[2]) {
+    return subtractCalendarUnits(now, parseNumber(range[1]) || 1, range[2])
+  }
+
+  if (/\bultim[oa]\s+settiman[ae]\b/i.test(text)) return subtractCalendarUnits(now, 1, 'settimana')
+  if (/\bultim[oa]\s+mes[ei]\b/i.test(text)) return subtractCalendarUnits(now, 1, 'mese')
+  if (/\bultim[oa]\s+ann[oi]\b/i.test(text)) return subtractCalendarUnits(now, 1, 'anno')
+  if (/\bultim[aei]\s+24\s+or[ae]\b/i.test(text)) return subtractCalendarUnits(now, 24, 'ore')
+
+  return subtractCalendarUnits(now, fallbackMonths, 'mesi')
 }
 
 export function parseWebcamHistoryRequest(message = '', now = new Date()) {
   const text = normalizeSearchText(message)
+
+  const anomalySubject = /\b(?:anomali\w*|problem\w*|interruzion\w*|offline|fuori linea)\b/i.test(text)
+  const historicalAnalysis = /\b(?:ricorrent\w*|ripetut\w*|frequent\w*|piu volte|cosa (?:hanno|c'e|ce) in comune|punti? in comune|ultim\w*\s+(?:\d+|un\w*|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|dodici|ventiquattro|trenta)?\s*(?:ore|giorni|settimane|mesi|anni))\b/i.test(text)
+
+  if (anomalySubject && historicalAnalysis) {
+    const since = parseHistorySince(text, now, 3)
+    const spanMs = Math.max(now.getTime() - since.getTime(), DAY_MS)
+
+    return {
+      type: 'recurring-anomalies',
+      since,
+      fetchSince: new Date(since.getTime() - Math.min(spanMs, 90 * DAY_MS)),
+      minimumOccurrences: /\b(?:ricorrent\w*|ripetut\w*|piu volte)\b/i.test(text) ? 2 : 1,
+      limit: extractLimit(message),
+    }
+  }
 
   if (/\bultim[oa]\b.{0,30}\b(?:stato|evento|volta)?\s*(?:offline|non online|fuori linea)\b/i.test(text)) {
     const explicitTarget = String(message).match(
@@ -703,12 +742,7 @@ export function parseWebcamHistoryRequest(message = '', now = new Date()) {
   const minimumDurationMs = amount * (
     unit.startsWith('minut') ? 60 * 1000 : unit.startsWith('giorn') ? DAY_MS : HOUR_MS
   )
-  let since = subtractCalendarMonth(now)
-
-  const days = text.match(/\bultim[oi]\s+(\d+|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|trenta)\s+giorni\b/i)
-  if (days?.[1]) since = new Date(now.getTime() - parseNumber(days[1]) * DAY_MS)
-  else if (/\bultim[oa]\s+settiman[ae]\b/i.test(text)) since = new Date(now.getTime() - 7 * DAY_MS)
-  else if (/\bultim[aei]\s+24\s+or[ae]\b/i.test(text)) since = new Date(now.getTime() - DAY_MS)
+  const since = parseHistorySince(text, now, 1)
 
   const spanMs = Math.max(now.getTime() - since.getTime(), DAY_MS)
 
@@ -719,6 +753,220 @@ export function parseWebcamHistoryRequest(message = '', now = new Date()) {
     since,
     fetchSince: new Date(since.getTime() - spanMs),
     limit: extractLimit(message),
+  }
+}
+
+function currentStatusForType(webcam = {}, type = '') {
+  if (type === 'snapshot' && !webcam.snapshotEnabled) return null
+  if (type === 'mikrotik' && !webcam.hasMikrotik) return null
+  return webcam.status?.[type] || null
+}
+
+function buildTypeAnomalyIntervals({webcam = {}, logs = [], type = '', sinceMs, nowMs} = {}) {
+  const entries = logs
+    .filter(log => String(log.webcamId) === String(webcam.id) && log.type === type)
+    .filter(log => Number.isFinite(new Date(log.changedOn).getTime()))
+    .sort((left, right) => new Date(left.changedOn) - new Date(right.changedOn))
+  const current = currentStatusForType(webcam, type)
+
+  if (
+    current?.status &&
+    current.changedOn &&
+    !entries.some(log => String(log.changedOn) === String(current.changedOn))
+  ) {
+    entries.push({
+      webcamId: webcam.id,
+      type,
+      status: current.status,
+      changedOn: current.changedOn,
+    })
+    entries.sort((left, right) => new Date(left.changedOn) - new Date(right.changedOn))
+  }
+
+  const intervals = []
+  let openedAt = null
+  let openingStatus = null
+
+  for (const entry of entries) {
+    const changedAt = new Date(entry.changedOn).getTime()
+    const anomalous = isKnownOfflineStatus(entry.status)
+
+    if (anomalous && openedAt === null) {
+      openedAt = changedAt
+      openingStatus = entry.status
+    } else if (!anomalous && openedAt !== null) {
+      const startedAt = Math.max(openedAt, sinceMs)
+      const endedAt = Math.min(changedAt, nowMs)
+      if (endedAt > sinceMs && endedAt > startedAt) {
+        intervals.push({
+          type,
+          status: openingStatus,
+          startedAt,
+          endedAt,
+        })
+      }
+      openedAt = null
+      openingStatus = null
+    }
+  }
+
+  if (openedAt !== null) {
+    const startedAt = Math.max(openedAt, sinceMs)
+    if (nowMs > sinceMs && nowMs > startedAt) {
+      intervals.push({
+        type,
+        status: openingStatus,
+        startedAt,
+        endedAt: nowMs,
+        ongoing: true,
+      })
+    }
+  }
+
+  return intervals
+}
+
+function mergeAnomalyIntervals(intervals = [], proximityMs = 5 * 60 * 1000) {
+  const sorted = [...intervals].sort((first, second) => first.startedAt - second.startedAt)
+  const incidents = []
+
+  for (const interval of sorted) {
+    const current = incidents.at(-1)
+
+    if (current && interval.startedAt <= current.endedAt + proximityMs) {
+      current.endedAt = Math.max(current.endedAt, interval.endedAt)
+      current.ongoing = current.ongoing || interval.ongoing === true
+      current.eventCount += 1
+      current.types = [...new Set([...current.types, interval.type])]
+      continue
+    }
+
+    incidents.push({
+      startedAt: interval.startedAt,
+      endedAt: interval.endedAt,
+      ongoing: interval.ongoing === true,
+      eventCount: 1,
+      types: [interval.type],
+    })
+  }
+
+  return incidents.map(incident => ({
+    startedAt: new Date(incident.startedAt).toISOString(),
+    endedAt: incident.ongoing ? null : new Date(incident.endedAt).toISOString(),
+    durationMs: incident.endedAt - incident.startedAt,
+    eventCount: incident.eventCount,
+    types: incident.types.sort(),
+  }))
+}
+
+function roundPercentage(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100
+}
+
+function buildCommonAnomalyFactors(problemWebcams = [], allWebcams = []) {
+  if (problemWebcams.length < 2 || !allWebcams.length) return []
+
+  const specs = [
+    ['reseller', 'reseller', webcam => webcam.reseller],
+    ['networkProvider', 'provider di rete', webcam => webcam.networkProvider],
+    ['hardwareBrand', 'marca hardware', webcam => webcam.hardware?.brand],
+    ['hardwareModel', 'modello hardware', webcam => webcam.hardware?.model],
+    ['location', 'località', webcam => webcam.location],
+    ['vpn', 'VPN', webcam => webcam.vpn === true ? 'sì' : null],
+    ['mikrotik', 'MikroTik', webcam => webcam.hasMikrotik === true ? 'sì' : null],
+    ['encoding', 'encoding', webcam => webcam.hasEncoding === true ? 'sì' : null],
+  ]
+  const factors = []
+
+  for (const [field, label, getter] of specs) {
+    const problemValues = problemWebcams.map(getter).filter(Boolean)
+    const fleetValues = allWebcams.map(getter).filter(Boolean)
+    const candidates = [...new Set(problemValues)]
+
+    for (const value of candidates) {
+      const count = problemValues.filter(item => item === value).length
+      const fleetCount = fleetValues.filter(item => item === value).length
+      const ratio = count / problemWebcams.length
+      const fleetRatio = fleetCount / allWebcams.length
+      const lift = fleetRatio > 0 ? ratio / fleetRatio : null
+
+      if (count < 2 || ratio < 0.4 || !(ratio >= 0.75 || (lift && lift >= 1.15))) continue
+
+      factors.push({
+        field,
+        label,
+        value,
+        count,
+        webcamCount: problemWebcams.length,
+        percentage: roundPercentage(ratio * 100),
+        fleetCount,
+        fleetWebcamCount: allWebcams.length,
+        fleetPercentage: roundPercentage(fleetRatio * 100),
+        lift: lift == null ? null : roundPercentage(lift),
+      })
+    }
+  }
+
+  return factors
+    .sort((first, second) =>
+      second.percentage - first.percentage || (second.lift || 0) - (first.lift || 0)
+    )
+    .slice(0, 8)
+}
+
+export function buildWebcamAnomalyAnalysisPayload({
+  webcams = [],
+  logs = [],
+  request = {},
+  now = new Date(),
+} = {}) {
+  const sinceMs = new Date(request.since).getTime()
+  const nowMs = new Date(now).getTime()
+  const types = ['stream', 'snapshot', 'connectivity', 'mikrotik']
+  const minimumOccurrences = Math.max(Number(request.minimumOccurrences || 1), 1)
+  const analyzed = []
+
+  for (const webcam of webcams) {
+    const intervals = types.flatMap(type =>
+      buildTypeAnomalyIntervals({webcam, logs, type, sinceMs, nowMs})
+    )
+    const incidents = mergeAnomalyIntervals(intervals)
+    if (incidents.length < minimumOccurrences) continue
+
+    analyzed.push({
+      ...toListItem(webcam),
+      hardware: webcam.hardware,
+      incidentCount: incidents.length,
+      statusEventCount: incidents.reduce((sum, incident) => sum + incident.eventCount, 0),
+      totalDurationMs: incidents.reduce((sum, incident) => sum + incident.durationMs, 0),
+      longestIncidentDurationMs: Math.max(...incidents.map(incident => incident.durationMs)),
+      affectedTypes: [...new Set(incidents.flatMap(incident => incident.types))].sort(),
+      incidents: incidents.slice(-10),
+    })
+  }
+
+  analyzed.sort((first, second) =>
+    second.incidentCount - first.incidentCount ||
+    second.totalDurationMs - first.totalDurationMs ||
+    String(first.name || '').localeCompare(String(second.name || ''), 'it')
+  )
+  const limit = clampLimit(request.limit, DEFAULT_LIMIT)
+
+  return {
+    type: 'webcam-anomaly-analysis',
+    since: new Date(sinceMs).toISOString(),
+    until: new Date(nowMs).toISOString(),
+    summary: {
+      webcamsAnalyzed: webcams.length,
+      logsAnalyzed: logs.length,
+      webcamsWithMatchingAnomalies: analyzed.length,
+      minimumOccurrences,
+      totalIncidents: analyzed.reduce((sum, item) => sum + item.incidentCount, 0),
+    },
+    totale: analyzed.length,
+    shown: Math.min(analyzed.length, limit),
+    items: analyzed.slice(0, limit),
+    commonFactors: buildCommonAnomalyFactors(analyzed, webcams),
   }
 }
 
@@ -900,6 +1148,7 @@ export function detectIntent(message = '', {previousList = null, hasActiveEntity
   if (parseReferenceRequest(message, {hasPreviousList: Boolean(previousList)})) return 'webcam-reference'
   if (historyRequest?.type === 'latest-offline') return 'webcam-latest-offline'
   if (historyRequest?.type === 'outage-duration') return 'webcam-outage-history'
+  if (historyRequest?.type === 'recurring-anomalies') return 'webcam-anomaly-analysis'
 
   if (isOpenEntityRequest(message)) return 'webcam-open'
 

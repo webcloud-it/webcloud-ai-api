@@ -5,6 +5,8 @@ import {createHash} from 'node:crypto'
 const DEFAULT_TIMEOUT_MS = Number(env.webcamgoFetchTimeoutMs || 15000)
 const webcamsCache = new Map()
 const webcamsInFlight = new Map()
+const statusLogsCache = new Map()
+const statusLogsInFlight = new Map()
 
 const WEBCAM_IDENTITY_FIELDS = [
   'id',
@@ -491,22 +493,47 @@ export async function getWebcamStatusLogs({
   if (since) params.set('filter[changed_on][_gte]', new Date(since).toISOString())
   if (statusNot) params.set('filter[status][_neq]', String(statusNot))
 
-  const json = await fetchJson(
-    joinUrl(env.webcamgoDirectusBaseUrl, `/items/webcam_status_logs?${params.toString()}`),
-    {
-      headers: authHeaders(token),
-      timeoutMs: DEFAULT_TIMEOUT_MS,
-    },
-    'Errore recupero storico stati WebcamGo'
-  )
+  const sinceBucket = since
+    ? new Date(since).toISOString().slice(0, 13)
+    : '*'
+  const cacheKey = [
+    credentialCacheKey(token),
+    webcamId || '*',
+    type || '*',
+    sinceBucket,
+    statusNot || '*',
+    limit,
+  ].join(':')
+  const cached = statusLogsCache.get(cacheKey)
+  if (cached && Date.now() - cached.at <= env.webcamgoCacheTtlMs) return cached.items
+  if (statusLogsInFlight.has(cacheKey)) return statusLogsInFlight.get(cacheKey)
 
-  return (Array.isArray(json?.data) ? json.data : []).map(log => ({
-    id: log?.id || null,
-    webcamId: getRelationId(log?.webcam_id),
-    type: log?.type || null,
-    status: log?.status || null,
-    changedOn: log?.changed_on || null,
-  }))
+  const request = fetchJson(
+      joinUrl(env.webcamgoDirectusBaseUrl, `/items/webcam_status_logs?${params.toString()}`),
+      {
+        headers: authHeaders(token),
+        timeoutMs: DEFAULT_TIMEOUT_MS,
+      },
+      'Errore recupero storico stati WebcamGo'
+    )
+    .then(json => (Array.isArray(json?.data) ? json.data : []).map(log => ({
+      id: log?.id || null,
+      webcamId: getRelationId(log?.webcam_id),
+      type: log?.type || null,
+      status: log?.status || null,
+      changedOn: log?.changed_on || null,
+    })))
+    .then(items => {
+      if (statusLogsCache.size >= 100) {
+        statusLogsCache.delete(statusLogsCache.keys().next().value)
+      }
+      statusLogsCache.set(cacheKey, {at: Date.now(), items})
+      return items
+    })
+    .finally(() => statusLogsInFlight.delete(cacheKey))
+
+  statusLogsInFlight.set(cacheKey, request)
+  return request
 }
 
 async function getWebcamControlTarget({token, webcamId} = {}) {

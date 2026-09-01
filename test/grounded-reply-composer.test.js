@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   composeGroundedReply,
   shouldComposeGroundedReply,
+  validateGroundedReply,
 } from '../src/core/presentation/groundedReplyComposer.js'
 
 test('composes a natural reply only from verified read data', async () => {
@@ -86,4 +87,57 @@ test('falls back to the verified deterministic reply if the model is unavailable
   assert.equal(result.reply, original.reply)
   assert.equal(result.source, original.source)
   assert.equal(result.meta.groundedReply, false)
+})
+
+test('rejects a fluent reply when the model introduces an unsupported number', async () => {
+  const original = {
+    ok: true,
+    intent: 'webcam-anomaly-analysis',
+    source: 'tool-fast',
+    reply: 'Ho trovato 2 webcam con 5 episodi.',
+    data: {
+      type: 'webcam-anomaly-analysis',
+      summary: {webcamsWithMatchingAnomalies: 2, totalIncidents: 5},
+      items: [],
+    },
+  }
+  const result = await composeGroundedReply({
+    message: 'analizza le anomalie ricorrenti',
+    result: original,
+    callLlm: async () => 'Ho trovato 2 webcam con 37 episodi.',
+  })
+
+  assert.equal(result.source, 'tool-fast')
+  assert.equal(result.reply, original.reply)
+  assert.equal(result.meta.groundedReplyRejected, 'unsupported-numeric-fact')
+})
+
+test('accepts Italian decimal formatting when the verified value is equivalent', () => {
+  assert.deepEqual(
+    validateGroundedReply({
+      reply: 'Il distacco verificato è 2,5%.',
+      fallback: 'Distacco disponibile.',
+      groundedData: '{"gapPercentage":2.5}',
+    }),
+    {ok: true, reason: null}
+  )
+})
+
+test('validates numbers written in words and rejects unsupported causal conclusions', () => {
+  assert.equal(
+    validateGroundedReply({
+      reply: 'Le webcam coinvolte sono tre.',
+      fallback: 'Ho trovato 2 webcam.',
+      groundedData: '{}',
+    }).reason,
+    'unsupported-numeric-fact'
+  )
+  assert.equal(
+    validateGroundedReply({
+      reply: 'Il problema è causato dal provider EOLO.',
+      fallback: 'EOLO è una caratteristica condivisa.',
+      groundedData: '{"type":"webcam-anomaly-analysis"}',
+    }).reason,
+    'unsupported-causal-claim'
+  )
 })

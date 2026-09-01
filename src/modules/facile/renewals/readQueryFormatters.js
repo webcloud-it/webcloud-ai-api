@@ -313,8 +313,43 @@ function buildAggregateReply(result = {}) {
   const tail = result.hasMore
     ? `\n\nPuoi chiedermi "altri ${result.limit}" per continuare.`
     : ''
+  const insight = formatAggregateInsight(result)
 
-  return `${heading}\n\n${lines.join('\n')}${tail}`
+  return `${heading}\n\n${lines.join('\n')}${insight ? `\n\n${insight}` : ''}${tail}`
+}
+
+function formatAggregateGroup(group = {}, groupBy = []) {
+  const values = groupBy
+    .map(field => group?.[field])
+    .filter(value => value !== null && value !== undefined && value !== '')
+
+  return values.length ? values.map(formatAggregateValue).join(' / ') : 'totale'
+}
+
+function formatAggregateInsight(result = {}) {
+  const summary = result?.analysis?.metricSummaries?.[0]
+  const ranking = summary?.ranking
+  if (!ranking?.first) return ''
+
+  const groupBy = result?.analysis?.groupBy || result?.aggregate?.groupBy || []
+  const directionLabel = ranking.direction === 'asc' ? 'Valore più basso' : 'Primo risultato'
+  const firstLabel = formatAggregateGroup(ranking.first.group, groupBy)
+  const parts = [
+    `Lettura verificata: ${directionLabel} ${firstLabel} con ${formatAggregateValue(ranking.first.value)}`,
+  ]
+
+  if (ranking.second) {
+    const secondLabel = formatAggregateGroup(ranking.second.group, groupBy)
+    const gap = ranking.gapPercentage == null
+      ? formatAggregateValue(ranking.gapAbsolute)
+      : `${formatAggregateValue(ranking.gapAbsolute)} (${formatAggregateValue(ranking.gapPercentage)}%)`
+    parts.push(`secondo ${secondLabel} con ${formatAggregateValue(ranking.second.value)}`)
+    parts.push(`distacco ${gap}`)
+  }
+
+  parts.push(`mediana dei gruppi ${formatAggregateValue(summary.median)}`)
+
+  return `${parts.join(' | ')}.`
 }
 
 export function buildReadQueryReply(result = {}) {
