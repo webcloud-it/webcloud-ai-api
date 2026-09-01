@@ -171,11 +171,26 @@ describe('Intenti espliciti e precedenze', () => {
       ['dont-renew', 'to-transfer', 'expires-in-range', 'customer-or-group']
     )
     assert.equal(findFilter({filters}, 'customer-or-group')?.term, 'Zilio Group')
+    const expiryRange = findFilter({filters}, 'expires-in-range')?.dateRange
+    assertDateParts(expiryRange.start, 2026, 7, 4)
+    assertDateParts(expiryRange.end, 2027, 11, 31)
+    assert.equal(expiryRange.label, 'entro il 2027')
   })
 
   test('interpreta la negazione naturale dei collegamenti Plesk', () => {
     const filters = parseServiceListQuery({
       message: 'Quali domini non sono collegati a Plesk?',
+      settings: SETTINGS,
+      now: NOW,
+    }).filters
+
+    assert.ok(findFilter({filters}, 'no-plesk'))
+    assert.equal(findFilter({filters}, 'has-plesk'), null)
+  })
+
+  test('interpreta senza collegamento Plesk come negazione', () => {
+    const filters = parseServiceListQuery({
+      message: 'Mostrami i servizi senza collegamento Plesk che scadono nel 2027.',
       settings: SETTINGS,
       now: NOW,
     }).filters
@@ -194,6 +209,20 @@ describe('Intenti espliciti e precedenze', () => {
 })
 
 describe('Parsing delle liste per data', () => {
+  test('distingue entro un anno dall intervallo del solo anno', () => {
+    const query = parseServiceListQuery({
+      message: 'servizi con scadenza entro il 2027',
+      settings: SETTINGS,
+      now: NOW,
+    })
+    const range = findFilter(query, 'expires-in-range')
+
+    assert.ok(range)
+    assertDateParts(range.dateRange.start, 2026, 7, 4)
+    assertDateParts(range.dateRange.end, 2027, 11, 31)
+    assert.equal(range.dateRange.label, 'entro il 2027')
+  })
+
   for (const year of [2026, 2027, 2028]) {
     test(`interpreta l'anno intero ${year}`, () => {
       const message = `tutti i servizi che scadono nel ${year}`
@@ -278,6 +307,28 @@ describe('Parsing delle liste per data', () => {
 })
 
 describe('Esecuzione dei filtri sulle liste', () => {
+  test('esclude un cliente o gruppo nominato da una lista operativa', () => {
+    const other = makeService({
+      id: 'altro-gruppo',
+      customerEnd: '2027-10-01T12:00:00',
+      group: 'Altro Gruppo',
+    })
+    const payload = buildServiceListPayload({
+      services: [...SERVICES, other],
+      settings: SETTINGS,
+      message: 'tutti i servizi escludendo Gruppo test',
+      now: NOW,
+    })
+
+    assert.equal(
+      payload.query.filters.some(filter =>
+        filter.kind === 'exclude-customer-or-group' && filter.term === 'test'
+      ),
+      true
+    )
+    assert.deepEqual(payload.items.map(item => item.servizio), ['altro-gruppo.it'])
+  })
+
   test('filtra realmente i servizi con scadenza cliente nel 2027', () => {
     const payload = buildServiceListPayload({
       services: SERVICES,

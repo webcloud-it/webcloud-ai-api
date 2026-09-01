@@ -319,7 +319,7 @@ function mergeAnalyticalFilters(...sources) {
 function extractAnalyticalExclusion(message = '') {
   const text = normalizeText(message)
   const match = text.match(
-    /\b(?:esclud\w*|tranne|eccetto)\s+(.+?)(?=\s+(?:e|ed)\s+(?:confront\w*|mostra\w*|ordina\w*|limita\w*|analizz\w*)\b|[,;.!?]|$)/i
+    /\b(?:esclud\w*|tranne|eccetto)\s+(.+?)(?=\s+(?:e|ed|poi)\s+(?:(?:mi\s+)?(?:dimmi|indicami|spiegami|calcola|confronta|mostra|ordina|limita|analizza|fammi|dammi)\w*|(?:quanto|quali?|chi|cosa)\b)|[,;.!?]|$)/i
   )
 
   return cleanTarget(match?.[1] || '')
@@ -350,13 +350,19 @@ function findRelationalFact(definitions = [], target = null, measure = null) {
 
 function buildRelationalRankingPlan(message = '', previousState = null) {
   const text = normalizeText(message)
-  const direction = /\b(?:piu|maggior\w*|massim\w*|top|prim[ei]\s+(?:\d{1,2}|[a-z]+))\b/i.test(text)
-    ? 'desc'
-    : /\b(?:meno|minor\w*|minim\w*)\b/i.test(text)
-      ? 'asc'
+  const direction = /\b(?:meno|minor\w*|minim\w*)\b/i.test(text)
+    ? 'asc'
+    : /\b(?:piu|maggior\w*|massim\w*|top|prim[ei]\s+(?:\d{1,2}|[a-z]+))\b/i.test(text)
+      ? 'desc'
       : null
+  const groupingMarkerIndex = text.search(
+    /\b(?:per\s+(?:ciascun(?:[oaie])?|ogni)\s+|raggrupp\w*\s+(?:per|in\s+base\s+a)\s+)/i
+  )
+  const asksRelationalGrouping =
+    groupingMarkerIndex >= 0 &&
+    /\b(?:quanti|quante|conteggio|numero|conta|raggrupp\w*)\b/i.test(text)
 
-  if (!direction) return null
+  if (!direction && !asksRelationalGrouping) return null
 
   const definitions = getReadEntityDefinitions()
   const mentions = definitions
@@ -367,8 +373,16 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
       second.mention.termLength - first.mention.termLength
     )
 
-  const target = mentions[0]?.definition || null
-  const measure = mentions.find(item =>
+  const groupingTarget = asksRelationalGrouping
+    ? mentions.find(item => item.mention.index >= groupingMarkerIndex)?.definition || null
+    : null
+  const groupedMeasure = groupingTarget
+    ? [...mentions].reverse().find(item =>
+        item.definition.id !== groupingTarget.id && item.mention.index < groupingMarkerIndex
+      )?.definition || null
+    : null
+  const target = groupingTarget || mentions[0]?.definition || null
+  const measure = groupedMeasure || mentions.find(item =>
     item.definition.id !== target?.id && item.mention.index > mentions[0].mention.index
   )?.definition || null
 
@@ -398,7 +412,7 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
         field: relationalFact.measureRelation.idField,
       }],
       sort: [
-        {field: 'count', direction},
+        {field: 'count', direction: direction || 'desc'},
         {field: dimension, direction: 'asc'},
       ],
       limit: extractAnalyticalLimit(text, target),
@@ -428,7 +442,7 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
     groupBy: [dimension],
     metrics: [{id: 'count', function: 'count', field: null}],
     sort: [
-      {field: 'count', direction},
+      {field: 'count', direction: direction || 'desc'},
       {field: dimension, direction: 'asc'},
     ],
     limit: extractAnalyticalLimit(text, target),
@@ -980,11 +994,12 @@ function parseLimitToken(value = '') {
 
 function extractRequestedLimit(text = '') {
   const match = normalizeText(text).match(
-    /\b(?:primi|prime|mostra|mostrami|elenca|elencami|dammi|top)\s+(\d{1,2}|[a-z]+)\b/i
+    /\b(?:(?:primi|prime|top)\s+(\d{1,2}|[a-z]+)|(?:mostra|mostrami|elenca|elencami|dammi)\s+(?:(?:i|le)\s+)?(?:(?:primi|prime)\s+)?(\d{1,2}|[a-z]+))\b/i
   )
-  if (!match?.[1]) return null
+  const token = match?.[1] || match?.[2]
+  if (!token) return null
 
-  return parseLimitToken(match[1])
+  return parseLimitToken(token)
 }
 
 function extractLimit(text = '') {
@@ -1239,10 +1254,7 @@ function buildDeterministicFollowUpPlan(message = '', previousState = null) {
 
   const year = extractYear(text)
   const requestedLimit = extractRequestedLimit(text)
-  const exclusionMatch = text.match(
-    /\b(?:esclud\w*|tranne|eccetto)\s+(.+?)(?=\s+(?:e|ed)\s+(?:confront\w*|mostra\w*|ordina\w*|limita\w*)\b|[,;.!?]|$)/i
-  )
-  const exclusion = cleanTarget(exclusionMatch?.[1] || '')
+  const exclusion = extractAnalyticalExclusion(text)
   if (!year && !requestedLimit && !exclusion) return null
 
   const definition = getAnalyticalEntityDefinition(previousPlan.entity)

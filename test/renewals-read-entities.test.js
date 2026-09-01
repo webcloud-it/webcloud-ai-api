@@ -732,6 +732,39 @@ test('planner analitico: raffina un ranking precedente anche dopo un cambio di a
   ])
 })
 
+test('planner analitico: separa una esclusione dal comando naturale successivo', async () => {
+  const rankingPlan = await planReadQuery({
+    message: 'Quali fornitori hanno più servizi in scadenza nel 2026?',
+    allowSemantic: false,
+  })
+  const rankingResult = executeReadQuery({plan: rankingPlan, services, options})
+
+  const plan = await planReadQuery({
+    message: 'Tra questi escludi MisterDomain e dimmi quanto distano i primi due.',
+    history: [{
+      role: 'assistant',
+      content: 'Classifica fornitori 2026.',
+      data: {...rankingResult, plan: rankingPlan},
+    }],
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.limit, 2)
+  assert.deepEqual(plan.filters, [
+    {
+      field: 'endsOn',
+      operator: 'between',
+      value: {
+        start: '2026-01-01T00:00:00.000Z',
+        end: '2026-12-31T23:59:59.999Z',
+      },
+    },
+    {field: 'kind', operator: 'equals', value: 'supplier'},
+    {field: 'supplier.name', operator: 'not-equals', value: 'misterdomain'},
+  ])
+})
+
 test('planner analitico: pagina con una quantità naturale scritta in lettere', async () => {
   const actorToken = 'analytical-pagination-token'
   const firstPlan = await planReadQuery({
@@ -809,6 +842,40 @@ test('planner analitico: riusa la stessa capacità per gruppi e servizi', async 
     {field: 'count', direction: 'asc'},
     {field: 'group.name', direction: 'asc'},
   ])
+})
+
+test('planner analitico: il limite primi non inverte una richiesta dei gruppi con meno servizi', async () => {
+  const plan = await planReadQuery({
+    message: 'Quali gruppi hanno meno servizi in scadenza nel 2027? Mostrami i primi cinque.',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.limit, 5)
+  assert.deepEqual(plan.groupBy, ['group.name'])
+  assert.equal(plan.sort[0].direction, 'asc')
+})
+
+test('planner analitico: conta servizi distinti sulla relazione richiesta per ciascun fornitore', async () => {
+  const plan = await planReadQuery({
+    message: 'Quanti servizi scadono nel 2027 per ciascun fornitore?',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'subscriptions')
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.deepEqual(plan.metrics, [
+    {id: 'count', function: 'count-distinct', field: 'service.id'},
+  ])
+  assert.equal(
+    plan.filters.some(filter => filter.field === 'kind' && filter.value === 'supplier'),
+    true
+  )
+  assert.equal(
+    plan.filters.some(filter => filter.field === 'endsOn' && filter.operator === 'between'),
+    true
+  )
 })
 
 test('executor analitico: filtra il dataset completo prima di raggruppare e contare', () => {

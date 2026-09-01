@@ -278,6 +278,7 @@ function extractSearchTerm(message = '') {
   const patterns = [
     /\b(?:cerca|trova|cercami|trovami)\s+(?:la\s+|le\s+)?(?:webcam\s+)?(.+)$/i,
     /\b(?:webcam)\s+(?:di|del|della|a|in)\s+(.+?)(?=\s+(?:sono|risultano|hanno|ha|che|con|senza|offline|online)\b|[?.!,;:]|$)/i,
+    /\b(?:online|offline|ferm[ae]?|blocc[ae]?|guast[ae]?|ko|non\s+funzionant[ei]|monitorat[aei]|non\s+monitorat[aei]|in\s+uso|fuori\s+uso|vpn)\s+(?:a|in|di)\s+(?!(?:quest[oaie]\s+(?:momento|istante|periodo)|tempo\s+reale|corso)\b)(.+?)(?=\s+(?:con|senza|che|e|o|oppure)\b|[?.!,;:]|$)/i,
     /\b(?:webcam)\s+(?:di|del|della|a|in|chiamata|chiamate)\s+(.+)$/i,
     /\b(?:dettagli|dettaglio|scheda|informazioni|info)\s+(?:di|su|della|del)?\s*(.+)$/i,
   ]

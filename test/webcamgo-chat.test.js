@@ -210,6 +210,25 @@ test('combina località e stati alternativi senza includere parole della frase n
   assert.deepEqual(result.data.items.map(item => item.id).sort(), ['cam-4', 'cam-5'])
 })
 
+test('applica la località anche quando segue lo stato richiesto', () => {
+  const gallioOffline = webcam('cam-4', 'Gallio Centro', 'gallio-centro', 'Gallio')
+  gallioOffline.status.overall = 'offline'
+  gallioOffline.status.stream.status = 'offline'
+  const asiagoOffline = webcam('cam-5', 'Asiago Centro', 'asiago-centro', 'Asiago')
+  asiagoOffline.status.overall = 'offline'
+  asiagoOffline.status.stream.status = 'offline'
+
+  const result = handleWebcamgoChat({
+    message: 'Mostrami le webcam offline a Gallio',
+    webcams: [...webcams, gallioOffline, asiagoOffline],
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.equal(result.data.query.term, 'Gallio')
+  assert.deepEqual(result.data.query.filters, ['offline'])
+  assert.deepEqual(result.data.items.map(item => item.id), ['cam-4'])
+})
+
 test('interpreta ferme come anomalie correnti e mostra da quando sono iniziate', () => {
   const offline = webcam('cam-4', 'Gallio Centro', 'gallio-centro', 'Gallio')
   offline.status.overall = 'offline'

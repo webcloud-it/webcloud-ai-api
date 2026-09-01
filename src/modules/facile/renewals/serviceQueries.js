@@ -460,6 +460,18 @@ function extractDateRange(message = '', now = new Date()) {
 
   if (yearOnly?.[1] && hasTemporalContext) {
     const year = Number(yearOnly[1])
+    const isDeadlineYear = new RegExp(
+      `\\b(?:entro|fino|sino)(?:\\s+(?:a|al|alla|il))?\\s+(?:la\\s+fine\\s+del\\s+)?${year}\\b`
+    ).test(text)
+
+    if (isDeadlineYear) {
+      return {
+        type: 'deadline-year',
+        start: startOfDay(now),
+        end: buildYearRange(year).end,
+        label: `entro il ${year}`,
+      }
+    }
 
     return {
       type: 'year',
@@ -878,7 +890,8 @@ function extractCustomerOrGroupTerm(message = '') {
 
   const explicit = text.match(/\b(?:cliente|azienda|gruppo)\b\s+([a-z0-9._@/+ -]{2,})/i)
 
-  if (explicit?.[1]) {
+  const explicitPrefix = explicit?.index == null ? '' : text.slice(0, explicit.index)
+  if (explicit?.[1] && !/\b(?:esclud\w*|tranne|eccetto)\s*$/i.test(explicitPrefix)) {
     return normalizeCustomerOrGroupTerm(explicit[1])
   }
 
@@ -891,7 +904,7 @@ function extractCustomerOrGroupTerm(message = '') {
   }
 
   const terseServicesOf = text.match(
-    /\b(?:servizi|domini)\s+(?!che\b|di\b|con\b|senza\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b|collegat[oi]\b|non\b|marcat[oi]\b|rinnovi?\b|rinnovano\b|scadenze?\b|scade\b|scadono\b|scadra\b|scadranno\b|scadut[oi]\b|hanno\b|ha\b|sono\b|in\b|da\b|auth\b|record\b|fatturazione\b|traffico\b)([a-z0-9._@/+ -]{2,})/i
+    /\b(?:servizi|domini)\s+(?!che\b|di\b|con\b|senza\b|esclud\w*\b|tranne\b|eccetto\b|tipo\b|pian[oi]\b|plan\b|spazio\b|fornitor[ei]\b|provider\b|supplier\b|collegat[oi]\b|non\b|marcat[oi]\b|rinnovi?\b|rinnovano\b|scadenze?\b|scade\b|scadono\b|scadra\b|scadranno\b|scadut[oi]\b|hanno\b|ha\b|sono\b|in\b|da\b|auth\b|record\b|fatturazione\b|traffico\b)([a-z0-9._@/+ -]{2,})/i
   )
 
   if (terseServicesOf?.[1]) {
@@ -915,6 +928,17 @@ function extractCustomerOrGroupTerm(message = '') {
   }
 
   return null
+}
+
+function extractCustomerOrGroupExclusion(message = '') {
+  const match = String(message || '').match(
+    /\b(?:esclud\w*|tranne|eccetto)\s+(?:(?:il|lo|la|i|gli|le)\s+)?(?:(?:cliente|azienda|gruppo)\s+)?(.+?)(?=\s+(?:e|ed|poi)\s+(?:mostra\w*|elenca\w*|dimmi|confront\w*|ordina\w*|calcola\w*)\b|[,;.!?]|$)/i
+  )
+  const term = normalizeCustomerOrGroupTerm(match?.[1] || '')
+
+  if (!term || /\b(?:non\s+rinnovare|da\s+non\s+rinnovare)\b/i.test(term)) return null
+
+  return term
 }
 
 function detectBooleanFilters(message = '') {
@@ -976,7 +1000,7 @@ function detectBooleanFilters(message = '') {
   }
 
   if (
-    /\b(?:senza|non\s+(?:sono\s+)?collegat[oi](?:\s+a)?)\s+plesk\b|\bplesk\s+(?:mancante|assente|non collegato)\b/.test(
+    /\b(?:senza|non\s+(?:sono\s+)?collegat[oi](?:\s+a)?)\s+plesk\b|\bsenza\s+(?:alcun\s+)?(?:collegamento|connessione|associazione)(?:\s+(?:a|con))?\s+plesk\b|\bplesk\s+(?:mancante|assente|non collegato)\b/.test(
       text
     )
   ) {
@@ -1137,6 +1161,8 @@ function filterService(service, filter, {settings, now}) {
       return matchesServiceType(service, filter.term)
     case 'customer-or-group':
       return matchesCustomerOrGroup(service, filter.term)
+    case 'exclude-customer-or-group':
+      return !matchesCustomerOrGroup(service, filter.term)
     case 'supplier':
       return matchesSupplier(service, filter.term)
     case 'status':
@@ -1200,6 +1226,15 @@ function buildFilters({message, settings, now}) {
       kind: 'customer-or-group',
       label: `di cliente/gruppo contenente "${customerOrGroupTerm}"`,
       term: customerOrGroupTerm,
+    })
+  }
+
+  const customerOrGroupExclusion = extractCustomerOrGroupExclusion(message)
+  if (customerOrGroupExclusion) {
+    filters.push({
+      kind: 'exclude-customer-or-group',
+      label: `escludendo cliente/gruppo contenente "${customerOrGroupExclusion}"`,
+      term: customerOrGroupExclusion,
     })
   }
 
