@@ -30,12 +30,16 @@ test('builds WebcamGo metrics and list cards with internal navigation', () => {
 })
 
 test('decorates renewals lists while preserving the original response contract', () => {
-  const original = {ok: true, data: {type: 'critical-services', totale: 1, items: [{servizio: 'example.it', cliente: 'Acme', priorita: 'alta', msg: 'Rinnovo urgente'}]}}
+  const original = {ok: true, data: {type: 'critical-services', totale: 1, items: [{servizio: 'example.it', cliente: 'Acme', priorita: 'alta', msg: 'Rinnovo urgente', scadenza: '2026-12-01', scadenzaFornitore: '2027-01-03'}]}}
   const decorated = attachChatPresentation(original)
 
   assert.equal(decorated.data.items, original.data.items)
   assert.equal(decorated.data.presentation.cards[0].title, 'example.it')
   assert.equal(decorated.data.presentation.cards[0].badge, 'alta')
+  assert.deepEqual(decorated.data.presentation.cards[0].details.at(-1), {
+    label: 'Scadenza fornitore',
+    value: '2027-01-03',
+  })
   assert.equal(decorated.data.actions[0].path, '/crm/renewals/panel')
 })
 

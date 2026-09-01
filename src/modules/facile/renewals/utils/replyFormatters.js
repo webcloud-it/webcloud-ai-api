@@ -399,6 +399,13 @@ function formatServiceListReason(item = {}) {
     return ''
   }
 
+  if (
+    item.scadenzaFornitore &&
+    normalized === `scadenza fornitore ${formatDate(item.scadenzaFornitore)}`.toLowerCase()
+  ) {
+    return ''
+  }
+
   if ((item.spazio?.isFull || item.spazio?.isLow) && normalized.startsWith('spazio ')) {
     return ''
   }

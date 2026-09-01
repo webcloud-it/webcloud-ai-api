@@ -229,7 +229,12 @@ function renewalsPresentation(data) {
     title: text(item.servizio || item.name || item.label || item.dominio || item.id, 'Risultato'),
     subtitle: compact([item.cliente || item.customer, item.gruppo || item.group]).join(' · '),
     badge: text(item.priorita || item.tipo),
-    details: [detail('Dettaglio', item.msg || item.message), detail('Scadenza', item.scadenza || item.end_date)].filter(Boolean),
+    details: [
+      detail('Dettaglio', item.msg || item.message),
+      item.scadenzaFornitore
+        ? detail('Scadenza fornitore', item.scadenzaFornitore)
+        : detail('Scadenza', item.scadenza || item.end_date),
+    ].filter(Boolean),
   })), data.totale ?? data.total)
 }
 
