@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {handleWebcamgoChat} from '../src/modules/facile/webcamgo/chat.js'
+import {parseWebcamHistoryRequest} from '../src/modules/facile/webcamgo/queries.js'
 
 function webcam(id, name, slug, location = 'Asiago') {
   return {
@@ -280,6 +281,37 @@ test('analizza anomalie ricorrenti, unisce gli stati simultanei e trova fattori 
     factor.field === 'networkProvider' && factor.value === 'EOLO' && factor.count === 2
   ))
   assert.match(result.reply, /correlazioni descrittive, non cause dimostrate/i)
+})
+
+test('l’analisi storica limita il fetch al periodo richiesto e usa una sintesi amministrativa', () => {
+  const now = new Date('2026-08-12T12:00:00.000Z')
+  const request = parseWebcamHistoryRequest(
+    'Mostrami le prime cinque webcam con anomalie ricorrenti negli ultimi tre mesi',
+    now
+  )
+
+  assert.equal(request.type, 'recurring-anomalies')
+  assert.equal(request.limit, 5)
+  assert.equal(request.fetchSince.toISOString(), request.since.toISOString())
+})
+
+test('ricostruisce una anomalia iniziata prima della finestra dal primo ritorno online', () => {
+  const now = new Date('2026-08-12T12:00:00.000Z')
+  const affected = webcam('cam-boundary', 'Confine periodo', 'confine-periodo')
+  const result = handleWebcamgoChat({
+    message: 'Quali webcam hanno avuto anomalie ricorrenti negli ultimi tre mesi?',
+    webcams: [affected],
+    statusLogs: [
+      {webcamId: 'cam-boundary', type: 'stream', status: 'online', changedOn: '2026-06-01T03:00:00.000Z'},
+      {webcamId: 'cam-boundary', type: 'stream', status: 'offline', changedOn: '2026-07-01T10:00:00.000Z'},
+      {webcamId: 'cam-boundary', type: 'stream', status: 'online', changedOn: '2026-07-01T11:00:00.000Z'},
+    ],
+    now,
+  })
+
+  assert.equal(result.data.totale, 1)
+  assert.equal(result.data.items[0].incidentCount, 2)
+  assert.equal(result.data.items[0].incidents[0].startedAt, '2026-05-12T12:00:00.000Z')
 })
 
 test('recupera l’ultimo offline della webcam ricordata dalla conversazione', () => {

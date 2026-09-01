@@ -562,20 +562,21 @@ function formatAnomalyAnalysisReply(payload = {}) {
 
   const rows = payload.items.map((item, index) => {
     const types = item.affectedTypes?.length ? item.affectedTypes.join(', ') : 'tipo non disponibile'
-    return `${index + 1}. ${item.name} (${item.slug || 'slug assente'}) | ${item.incidentCount} ${item.incidentCount === 1 ? 'episodio' : 'episodi'} | durata complessiva ${formatDuration(item.totalDurationMs)} | massimo ${formatDuration(item.longestIncidentDurationMs)} | aree: ${types}`
+    return `${index + 1}. ${item.name}: ${item.incidentCount} ${item.incidentCount === 1 ? 'episodio' : 'episodi'}, ${formatDuration(item.totalDurationMs)} complessivi; episodio più lungo ${formatDuration(item.longestIncidentDurationMs)}; aree coinvolte: ${types}.`
   })
   const commonFactors = (payload.commonFactors || []).map(factor => {
     const fleetComparison = factor.lift == null
       ? ''
       : `; incidenza ${factor.lift}x rispetto al parco webcam`
-    return `- ${factor.label}: ${factor.value} in ${factor.count}/${factor.webcamCount} webcam (${factor.percentage}%${fleetComparison})`
+    return `- ${factor.label}: ${factor.value} in ${factor.count}/${factor.webcamCount} webcam (${factor.percentage}%${fleetComparison}).`
   })
 
   return [
-    `Ho analizzato ${summary.webcamsAnalyzed || 0} webcam e ${summary.logsAnalyzed || 0} variazioni di stato nel periodo richiesto. ${payload.totale} webcam rispettano il criterio, per un totale di ${summary.totalIncidents || 0} episodi distinti.`,
+    `Nel periodo richiesto ho ricostruito ${summary.totalIncidents || 0} episodi distinti partendo da ${summary.logsAnalyzed || 0} variazioni di stato su ${summary.webcamsAnalyzed || 0} webcam. Le anomalie ricorrenti interessano ${payload.totale} webcam.`,
+    `Priorità per frequenza (prime ${payload.items.length}):`,
     ...rows,
     commonFactors.length
-      ? `Caratteristiche condivise (correlazioni descrittive, non cause dimostrate):\n${commonFactors.join('\n')}`
+      ? `Elementi comuni da approfondire (correlazioni descrittive, non cause dimostrate):\n${commonFactors.join('\n')}`
       : 'Non emerge una caratteristica condivisa abbastanza frequente da essere segnalata in modo affidabile.',
   ].join('\n')
 }

@@ -6,6 +6,7 @@ import {
 } from '../../../core/entities/entityResolver.js'
 
 const DEFAULT_LIMIT = 20
+const DEFAULT_ANALYSIS_LIMIT = 8
 const MAX_LIMIT = 50
 const HOUR_MS = 60 * 60 * 1000
 const DAY_MS = 24 * HOUR_MS
@@ -122,17 +123,21 @@ function isReservedSearchTerm(value = '') {
   )
 }
 
-function extractLimit(message = '') {
+function extractExplicitLimit(message = '') {
   const text = normalizeSearchText(message)
   const match = text.match(
-    /\b(?:mostrami|mostra|dammi|elenca|elencami|fammi vedere|primi|prime|altri|altre|prossimi|prossime|successivi|successive)\s+(\d{1,2})\b/i
+    /\b(?:mostrami|mostra|dammi|elenca|elencami|fammi vedere|primi|prime|altri|altre|prossimi|prossime|successivi|successive|top)\s+(\d{1,2}|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti)\b/i
   )
 
-  if (match?.[1]) return clampLimit(match[1])
+  if (match?.[1]) return clampLimit(parseNumber(match[1]))
 
   const itemCount = text.match(/\b(\d{1,2})\s+(?:webcam|risultati|voci)\b/i)
 
-  return itemCount?.[1] ? clampLimit(itemCount[1]) : DEFAULT_LIMIT
+  return itemCount?.[1] ? clampLimit(itemCount[1]) : null
+}
+
+function extractLimit(message = '', fallback = DEFAULT_LIMIT) {
+  return extractExplicitLimit(message) || fallback
 }
 
 export function parsePaginationRequest(message = '') {
@@ -662,7 +667,9 @@ export function pickPreviousWebcamTarget(history = []) {
 const ITALIAN_NUMBERS = new Map([
   ['un', 1], ['uno', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4],
   ['cinque', 5], ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10],
-  ['dodici', 12], ['ventiquattro', 24], ['trenta', 30],
+  ['undici', 11], ['dodici', 12], ['tredici', 13], ['quattordici', 14],
+  ['quindici', 15], ['sedici', 16], ['diciassette', 17], ['diciotto', 18],
+  ['diciannove', 19], ['venti', 20], ['ventiquattro', 24], ['trenta', 30],
 ])
 
 function parseNumber(value = '') {
@@ -708,14 +715,13 @@ export function parseWebcamHistoryRequest(message = '', now = new Date()) {
 
   if (anomalySubject && historicalAnalysis) {
     const since = parseHistorySince(text, now, 3)
-    const spanMs = Math.max(now.getTime() - since.getTime(), DAY_MS)
 
     return {
       type: 'recurring-anomalies',
       since,
-      fetchSince: new Date(since.getTime() - Math.min(spanMs, 90 * DAY_MS)),
+      fetchSince: since,
       minimumOccurrences: /\b(?:ricorrent\w*|ripetut\w*|piu volte)\b/i.test(text) ? 2 : 1,
-      limit: extractLimit(message),
+      limit: extractLimit(message, DEFAULT_ANALYSIS_LIMIT),
     }
   }
 
@@ -744,14 +750,12 @@ export function parseWebcamHistoryRequest(message = '', now = new Date()) {
   )
   const since = parseHistorySince(text, now, 1)
 
-  const spanMs = Math.max(now.getTime() - since.getTime(), DAY_MS)
-
   return {
     type: 'outage-duration',
     statusType: 'stream',
     minimumDurationMs,
     since,
-    fetchSince: new Date(since.getTime() - spanMs),
+    fetchSince: since,
     limit: extractLimit(message),
   }
 }
@@ -784,8 +788,16 @@ function buildTypeAnomalyIntervals({webcam = {}, logs = [], type = '', sinceMs, 
   }
 
   const intervals = []
-  let openedAt = null
-  let openingStatus = null
+  const firstEntry = entries[0] || null
+  const firstChangedAt = firstEntry ? new Date(firstEntry.changedOn).getTime() : null
+  let openedAt =
+    firstEntry &&
+    Number.isFinite(firstChangedAt) &&
+    firstChangedAt > sinceMs &&
+    !isKnownOfflineStatus(firstEntry.status)
+      ? sinceMs
+      : null
+  let openingStatus = openedAt === null ? null : 'offline prima del periodo'
 
   for (const entry of entries) {
     const changedAt = new Date(entry.changedOn).getTime()
@@ -925,10 +937,25 @@ export function buildWebcamAnomalyAnalysisPayload({
   const types = ['stream', 'snapshot', 'connectivity', 'mikrotik']
   const minimumOccurrences = Math.max(Number(request.minimumOccurrences || 1), 1)
   const analyzed = []
+  const logsByWebcamAndType = new Map()
+
+  for (const log of logs) {
+    if (!log?.webcamId || !log?.type) continue
+    const key = `${log.webcamId}:${log.type}`
+    const bucket = logsByWebcamAndType.get(key) || []
+    bucket.push(log)
+    logsByWebcamAndType.set(key, bucket)
+  }
 
   for (const webcam of webcams) {
     const intervals = types.flatMap(type =>
-      buildTypeAnomalyIntervals({webcam, logs, type, sinceMs, nowMs})
+      buildTypeAnomalyIntervals({
+        webcam,
+        logs: logsByWebcamAndType.get(`${webcam.id}:${type}`) || [],
+        type,
+        sinceMs,
+        nowMs,
+      })
     )
     const incidents = mergeAnomalyIntervals(intervals)
     if (incidents.length < minimumOccurrences) continue
@@ -988,6 +1015,22 @@ export function buildWebcamOutagePayload({webcams = [], logs = [], request = {},
     const webcamLogs = (logsByWebcam.get(String(webcam.id)) || [])
       .filter(log => Number.isFinite(new Date(log.changedOn).getTime()))
       .sort((left, right) => new Date(left.changedOn) - new Date(right.changedOn))
+
+    const firstLog = webcamLogs[0] || null
+    const firstChangedAt = firstLog ? new Date(firstLog.changedOn).getTime() : null
+    if (
+      firstLog &&
+      Number.isFinite(firstChangedAt) &&
+      firstChangedAt > sinceMs &&
+      !isKnownOfflineStatus(firstLog.status)
+    ) {
+      webcamLogs.unshift({
+        webcamId: webcam.id,
+        type: request.statusType,
+        status: 'offline prima del periodo',
+        changedOn: new Date(sinceMs).toISOString(),
+      })
+    }
 
     if (
       webcam.status?.stream?.status &&
