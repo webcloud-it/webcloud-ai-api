@@ -580,6 +580,60 @@ test('planner analitico: classifica fornitori contando solo i servizi nel period
   ])
 })
 
+test('planner analitico: le richieste di analisi e confronto non perdono relazione e periodo', async () => {
+  const variants = [
+    'quali fornitori hanno più servizi in scadenza nel 2027? Analizza la classifica e confronta i primi due.',
+    'confronta i primi due fornitori per numero di servizi che scadono nel 2027',
+  ]
+
+  for (const message of variants) {
+    const plan = await planReadQuery({message, allowSemantic: false})
+
+    assert.equal(plan.operation, 'aggregate', message)
+    assert.equal(plan.entity, 'subscriptions', message)
+    assert.equal(plan.limit, 2, message)
+    assert.deepEqual(plan.groupBy, ['supplier.name'], message)
+    assert.deepEqual(plan.metrics, [
+      {id: 'count', function: 'count-distinct', field: 'service.id'},
+    ], message)
+    assert.deepEqual(plan.filters, [
+      {
+        field: 'endsOn',
+        operator: 'between',
+        value: {
+          start: '2027-01-01T00:00:00.000Z',
+          end: '2027-12-31T23:59:59.999Z',
+        },
+      },
+      {field: 'kind', operator: 'equals', value: 'supplier'},
+    ], message)
+  }
+})
+
+test('planner analitico: applica esclusioni senza degradare il ranking relazionale', async () => {
+  const plan = await planReadQuery({
+    message: 'quali fornitori hanno più servizi in scadenza nel 2027, escludendo MisterDomain? Confronta i primi due.',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'subscriptions')
+  assert.equal(plan.limit, 2)
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.deepEqual(plan.filters, [
+    {
+      field: 'endsOn',
+      operator: 'between',
+      value: {
+        start: '2027-01-01T00:00:00.000Z',
+        end: '2027-12-31T23:59:59.999Z',
+      },
+    },
+    {field: 'kind', operator: 'equals', value: 'supplier'},
+    {field: 'supplier.name', operator: 'not-equals', value: 'misterdomain'},
+  ])
+})
+
 test('planner analitico: un follow-up cambia anno e limite senza perdere il piano precedente', async () => {
   const actorToken = 'analytical-follow-up-token'
   const firstPlan = await planReadQuery({

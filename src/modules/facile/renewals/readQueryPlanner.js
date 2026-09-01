@@ -316,6 +316,15 @@ function mergeAnalyticalFilters(...sources) {
   })
 }
 
+function extractAnalyticalExclusion(message = '') {
+  const text = normalizeText(message)
+  const match = text.match(
+    /\b(?:esclud\w*|tranne|eccetto)\s+(.+?)(?=\s+(?:e|ed)\s+(?:confront\w*|mostra\w*|ordina\w*|limita\w*|analizz\w*)\b|[,;.!?]|$)/i
+  )
+
+  return cleanTarget(match?.[1] || '')
+}
+
 function findRelationalFact(definitions = [], target = null, measure = null) {
   if (!target || !measure) return null
 
@@ -341,14 +350,13 @@ function findRelationalFact(definitions = [], target = null, measure = null) {
 
 function buildRelationalRankingPlan(message = '', previousState = null) {
   const text = normalizeText(message)
-  const direction = /\b(?:piu|maggior\w*|massim\w*|top)\b/i.test(text)
+  const direction = /\b(?:piu|maggior\w*|massim\w*|top|prim[ei]\s+(?:\d{1,2}|[a-z]+))\b/i.test(text)
     ? 'desc'
     : /\b(?:meno|minor\w*|minim\w*)\b/i.test(text)
       ? 'asc'
       : null
 
   if (!direction) return null
-  if (/\b(?:esclud\w*|tranne|eccetto|confront\w*|rispetto)\b/i.test(text)) return null
 
   const definitions = getReadEntityDefinitions()
   const mentions = definitions
@@ -369,11 +377,13 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
   const relationalFact = findRelationalFact(definitions, target, measure)
   if (relationalFact) {
     const dimension = relationalFact.targetRelation.labelField
+    const exclusion = extractAnalyticalExclusion(text)
     const filters = mergeAnalyticalFilters(
       buildDeterministicFilters(relationalFact.definition.id, text)
         .filter(filter => filter.field !== dimension),
       relationalFact.targetRelation.filters || [],
-      relationalFact.measureRelation.filters || []
+      relationalFact.measureRelation.filters || [],
+      exclusion ? [{field: dimension, operator: 'not-equals', value: exclusion}] : []
     )
 
     return {
@@ -403,8 +413,12 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
   const dimension = findRelationDimension(measure, target)
   if (!dimension) return null
 
-  const filters = buildDeterministicFilters(measure.id, text)
-    .filter(filter => filter.field !== dimension)
+  const exclusion = extractAnalyticalExclusion(text)
+  const filters = mergeAnalyticalFilters(
+    buildDeterministicFilters(measure.id, text)
+      .filter(filter => filter.field !== dimension),
+    exclusion ? [{field: dimension, operator: 'not-equals', value: exclusion}] : []
+  )
 
   return {
     type: 'read-query-plan',
