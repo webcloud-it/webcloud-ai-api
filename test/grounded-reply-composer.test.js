@@ -63,6 +63,19 @@ test('respects an explicit deterministic narration policy', () => {
   assert.equal(shouldComposeGroundedReply({message: 'analizza le anomalie', result}), false)
 })
 
+test('keeps a verified webcam assessment deterministic when requested by the route', () => {
+  const result = {
+    ok: true,
+    intent: 'webcam-detail',
+    source: 'tool-fast',
+    reply: 'Barricata non presenta anomalie correnti.',
+    data: {type: 'webcam-detail', item: {name: 'Barricata'}},
+    meta: {narrationPolicy: 'deterministic'},
+  }
+
+  assert.equal(shouldComposeGroundedReply({message: 'analizza Barricata', result}), false)
+})
+
 test('caps narration latency even when the environment allows a longer timeout', async () => {
   let timeoutMs = null
   await composeGroundedReply({
