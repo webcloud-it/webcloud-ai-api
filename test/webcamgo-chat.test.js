@@ -229,6 +229,40 @@ test('applica la località anche quando segue lo stato richiesto', () => {
   assert.deepEqual(result.data.items.map(item => item.id), ['cam-4'])
 })
 
+test('comprende le negazioni con il verbo essere nei filtri di configurazione', () => {
+  const disabled = webcam('cam-4', 'Disattivata', 'disattivata', 'Gallio')
+  disabled.inUse = false
+  disabled.monitoring.any = false
+  disabled.status.overall = 'offline'
+  const active = webcam('cam-5', 'Attiva', 'attiva', 'Gallio')
+  active.status.overall = 'offline'
+
+  const notInUse = handleWebcamgoChat({
+    message: 'Quali webcam sono offline e non sono in uso?',
+    webcams: [disabled, active],
+  })
+  const unmonitored = handleWebcamgoChat({
+    message: 'Quante webcam non sono monitorate?',
+    webcams: [disabled, active],
+  })
+
+  assert.deepEqual(notInUse.data.query.filters, ['not-in-use', 'offline'])
+  assert.deepEqual(notInUse.data.items.map(item => item.id), ['cam-4'])
+  assert.deepEqual(unmonitored.data.query.filters, ['unmonitored'])
+  assert.deepEqual(unmonitored.data.items.map(item => item.id), ['cam-4'])
+})
+
+test('tratta prime cinque webcam come nuova lista limitata e non come paginazione', () => {
+  const result = handleWebcamgoChat({
+    message: 'Mostrami le prime cinque webcam con lo snapshot non online.',
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.equal(result.data.query.limit, 5)
+  assert.deepEqual(result.data.query.filters, ['snapshot-offline'])
+})
+
 test('interpreta ferme come anomalie correnti e mostra da quando sono iniziate', () => {
   const offline = webcam('cam-4', 'Gallio Centro', 'gallio-centro', 'Gallio')
   offline.status.overall = 'offline'

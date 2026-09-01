@@ -210,13 +210,13 @@ function parseFilters(message = '') {
     filters.push('mikrotik-offline')
   }
 
-  if (/\b(non in uso|fuori uso|disattivate|disattivi)\b/i.test(text)) {
+  if (/\b(non(?:\s+sono)?\s+in uso|fuori uso|disattivate|disattivi)\b/i.test(text)) {
     filters.push('not-in-use')
   } else if (/\b(in uso|attive|attivi)\b/i.test(text)) {
     filters.push('in-use')
   }
 
-  if (/\b(non monitorate|non monitorati|senza monitoraggio)\b/i.test(text)) {
+  if (/\b(non(?:\s+sono)?\s+monitorate|non(?:\s+sono)?\s+monitorati|senza monitoraggio)\b/i.test(text)) {
     filters.push('unmonitored')
   } else if (/\b(monitorate|monitorati|con monitoraggio)\b/i.test(text)) {
     filters.push('monitored')
@@ -1199,7 +1199,11 @@ export function detectIntent(message = '', {previousList = null, hasActiveEntity
     return 'unsupported-action'
   }
 
-  if (parsePaginationRequest(message)) return 'webcam-list-pagination'
+  const pagination = parsePaginationRequest(message)
+  const explicitNewList =
+    parseFilters(message).length > 0 ||
+    /\b(?:webcam|telecamer[ae])\b/i.test(text)
+  if (pagination && (Boolean(previousList) || !explicitNewList)) return 'webcam-list-pagination'
   if (parseReferenceRequest(message, {hasPreviousList: Boolean(previousList)})) return 'webcam-reference'
   if (historyRequest?.type === 'latest-offline') return 'webcam-latest-offline'
   if (historyRequest?.type === 'outage-duration') return 'webcam-outage-history'

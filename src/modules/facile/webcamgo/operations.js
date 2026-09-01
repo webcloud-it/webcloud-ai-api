@@ -52,11 +52,52 @@ function extractDiagnosticTarget(message = '') {
   const quoted = String(message).match(/["“”']([^"“”']{2,})["“”']/)?.[1]
   if (quoted) return quoted.trim()
   return String(message)
-    .replace(/\b(?:fammi|mostrami|esegui|controlla|verifica)?\s*(?:la|le|il|i)?\s*(?:diagnostica|informazioni|info|versione|firmware|seriale|onvif|dispositivo|device)\b/gi, ' ')
+    .replace(/\b(?:fammi|mostrami|esegui|controlla|verifica)?\s*(?:un|una|uno|la|le|il|i)?\s*(?:diagnostica|informazioni|info|versione|firmware|seriale|onvif|dispositivo|device)\b/gi, ' ')
+    .replace(/\b(?:tecnic[aoie]|completa|dettagliata)\b/gi, ' ')
     .replace(/\b(?:della|del|di|su|per|webcam)\b/gi, ' ')
     .replace(/[?.!]+$/g, '')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function extractConnectivityTarget(message = '') {
+  return String(message)
+    .replace(/connettivit[aà]|raggiungibilit[aà]/gi, ' ')
+    .replace(/\b(?:test|verifica|controlla|live|tempo\s+reale|la|della|del|di|su|per|webcam)\b/gi, ' ')
+    .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+}
+
+function extractSnapshotTarget(message = '') {
+  return String(message)
+    .replace(/\b(?:mostra|mostrami|apri|visualizza|fammi|vedere|lo|la|il|uno|una|snapshot|fotogramma|immagine|corrente|della|del|di|su|per|webcam)\b/gi, ' ')
+    .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+}
+
+function extractPresetTarget(message = '') {
+  return String(message)
+    .replace(/\b(?:elenca|mostra|mostrami|quali|leggi|sono|i|gli|le|preset|ptz|disponibili|della|del|di|su|per|webcam)\b/gi, ' ')
+    .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+}
+
+export function extractWebcamOperationTarget(message = '') {
+  const text = String(message || '')
+  const quoted = text.match(/["“”']([^"“”']{2,})["“”']/)?.[1]
+  if (quoted) return quoted.trim()
+
+  if (/\b(test|verifica|controlla)\s+(?:la\s+)?(?:connettivit[aà]|raggiungibilit[aà])/i.test(text)) {
+    return extractConnectivityTarget(text) || null
+  }
+  if (/\b(mostra|mostrami|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(text)) {
+    return extractSnapshotTarget(text) || null
+  }
+  if (/\b(elenca|mostra|mostrami|quali|leggi)\b[\s\S]*\bpreset\b/i.test(text)) {
+    return extractPresetTarget(text) || null
+  }
+  if (/\b(diagnostic[ao]|onvif|firmware|seriale|info(?:rmazioni)?\s+dispositivo|device\s+info)\b/i.test(text)) {
+    return extractDiagnosticTarget(text) || null
+  }
+
+  return null
 }
 
 function resolveTarget(webcams = [], target = '') {
@@ -153,10 +194,7 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
   }
 
   if (/\b(test|verifica|controlla)\s+(?:la\s+)?(?:connettivit[aà]|raggiungibilit[aà])/i.test(String(message || ''))) {
-    const extractedTarget = String(message)
-      .replace(/connettivit[aà]|raggiungibilit[aà]/gi, ' ')
-      .replace(/\b(?:test|verifica|controlla|la|della|del|di|su|per|webcam)\b/gi, ' ')
-      .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+    const extractedTarget = extractConnectivityTarget(message)
     const target = withContextTarget(extractedTarget, context)
     if (!target) return response('clarification', 'Di quale webcam vuoi verificare la connettività live?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)
@@ -165,10 +203,8 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
     return response('webcam-connectivity-live', `${resolved.item.name} ${result.reachable ? 'è raggiungibile' : 'non risponde'} sulla porta ${result.port}.`, {type: 'webcam-connectivity-live', item: result})
   }
 
-  if (/\b(mostra|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(String(message || ''))) {
-    const extractedTarget = String(message)
-      .replace(/\b(?:mostra|apri|visualizza|fammi|vedere|lo|la|il|uno|una|snapshot|fotogramma|immagine|corrente|della|del|di|su|per|webcam)\b/gi, ' ')
-      .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+  if (/\b(mostra|mostrami|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(String(message || ''))) {
+    const extractedTarget = extractSnapshotTarget(message)
     const target = withContextTarget(extractedTarget, context)
     if (!target) return response('clarification', 'Di quale webcam vuoi aprire lo snapshot?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)
@@ -182,10 +218,8 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
     })
   }
 
-  if (/\b(elenca|mostra|quali|leggi)\b[\s\S]*\bpreset\b/i.test(String(message || ''))) {
-    const extractedTarget = String(message)
-      .replace(/\b(?:elenca|mostra|quali|leggi|sono|i|gli|le|preset|disponibili|della|del|di|su|per|webcam)\b/gi, ' ')
-      .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
+  if (/\b(elenca|mostra|mostrami|quali|leggi)\b[\s\S]*\bpreset\b/i.test(String(message || ''))) {
+    const extractedTarget = extractPresetTarget(message)
     const target = withContextTarget(extractedTarget, context)
     if (!target) return response('clarification', 'Di quale webcam vuoi leggere i preset?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)

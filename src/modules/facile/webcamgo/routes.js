@@ -10,7 +10,7 @@ import {
   pickPreviousWebcamTarget,
 } from './queries.js'
 import {getWebcams, getWebcamStatusLogs} from './service.js'
-import {handleWebcamgoOperation} from './operations.js'
+import {extractWebcamOperationTarget, handleWebcamgoOperation} from './operations.js'
 import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
 import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
@@ -66,11 +66,12 @@ export async function chat(req, res) {
   const preliminaryDetailTarget = /\b(?:dettagli?|scheda|informazioni|info|stat[oi]|situazione|come\s+sta|approfondisci|analizza|controlla|verifica)\b/i.test(normalizedMessage)
     ? extractDetailTarget(normalizedMessage)
     : null
+  const preliminaryOperationTarget = extractWebcamOperationTarget(normalizedMessage)
   const webcams = await getWebcams({
     token: req.auth.token,
     profile: identityOnly ? 'identity' : 'full',
     includeDowntime,
-    searchTerm: preliminaryListQuery?.term || preliminaryDetailTarget || null,
+    searchTerm: preliminaryOperationTarget || preliminaryListQuery?.term || preliminaryDetailTarget || null,
   })
   const historyRequest = parseWebcamHistoryRequest(message)
   let statusLogs = []

@@ -128,6 +128,16 @@ test('snapshot response exposes only a safe public action', async () => {
   assert.equal(result.data.actions[0].url.includes('pass='), false)
 })
 
+test('natural snapshot wording keeps only the webcam name as target', async () => {
+  const result = await handleWebcamgoOperation({
+    message: 'Mostrami lo snapshot della webcam Piazza Centrale.',
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-snapshot')
+  assert.equal(result.data.target.id, 'cam-1')
+})
+
 test('preset listing resolves a webcam and returns sanitized preset metadata', async () => {
   const result = await handleWebcamgoOperation({
     message: 'Mostra i preset della webcam piazza-centrale',
@@ -144,6 +154,38 @@ test('preset listing resolves a webcam and returns sanitized preset metadata', a
   assert.match(result.reply, /Home/)
   assert.match(result.reply, /Montagna/)
   assert.equal(JSON.stringify(result).includes('directus-token'), false)
+})
+
+test('preset PTZ and live connectivity qualifiers do not contaminate the target', async () => {
+  const presets = await handleWebcamgoOperation({
+    message: 'Quali preset PTZ sono disponibili per Piazza Centrale?',
+    webcams,
+    executePresets: async () => ({presets: []}),
+  })
+  const connectivity = await handleWebcamgoOperation({
+    message: 'Controlla la connettività live di Piazza Centrale.',
+    webcams,
+    executeConnectivity: async () => ({reachable: true, port: 443}),
+  })
+
+  assert.equal(presets.intent, 'webcam-presets')
+  assert.equal(connectivity.intent, 'webcam-connectivity-live')
+})
+
+test('diagnostica tecnica mantiene il nome della webcam come target', async () => {
+  const result = await handleWebcamgoOperation({
+    message: 'Fammi una diagnostica tecnica della webcam Piazza Centrale.',
+    webcams,
+    executeInspect: async () => ({
+      modelNumber: 'IPC-42',
+      firmwareVersion: '1.2.3',
+      serialNumber: 'SERIAL-1',
+      onvifVersion: '2.6',
+    }),
+  })
+
+  assert.equal(result.intent, 'webcam-device-info')
+  assert.match(result.reply, /Piazza Centrale/)
 })
 
 test('preset listing explains when the webcam does not support PTZ', async () => {
