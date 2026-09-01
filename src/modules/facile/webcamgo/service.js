@@ -595,7 +595,7 @@ async function callControlApi(path, body, errorMessage) {
     {
       method: 'POST',
       headers,
-      timeoutMs: 20000,
+      timeoutMs: env.webcamgoControlTimeoutMs,
       body: JSON.stringify(body),
     },
     errorMessage

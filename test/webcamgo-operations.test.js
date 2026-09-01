@@ -128,6 +128,15 @@ test('snapshot response exposes only a safe public action', async () => {
   assert.equal(result.data.actions[0].url.includes('pass='), false)
 })
 
+test('una lista di snapshot non online non viene confusa con la visualizzazione singola', async () => {
+  const result = await handleWebcamgoOperation({
+    message: 'Mostrami le prime cinque webcam con lo snapshot non online.',
+    webcams,
+  })
+
+  assert.equal(result, null)
+})
+
 test('natural snapshot wording keeps only the webcam name as target', async () => {
   const result = await handleWebcamgoOperation({
     message: 'Mostrami lo snapshot della webcam Piazza Centrale.',
@@ -201,6 +210,29 @@ test('preset listing explains when the webcam does not support PTZ', async () =>
   assert.equal(result.intent, 'webcam-presets-unsupported')
   assert.match(result.reply, /non supporta i controlli PTZ/)
   assert.equal(result.reply.includes('SOAP'), false)
+})
+
+test('diagnostiche indisponibili restituiscono errori rapidi e specifici del dominio', async () => {
+  const presets = await handleWebcamgoOperation({
+    message: 'Quali preset PTZ sono disponibili per Piazza Centrale?',
+    webcams,
+    executePresets: async () => { throw new Error('timeout interno') },
+  })
+  const connectivity = await handleWebcamgoOperation({
+    message: 'Controlla la connettività live di Piazza Centrale.',
+    webcams,
+    executeConnectivity: async () => { throw new Error('timeout interno') },
+  })
+  const diagnostic = await handleWebcamgoOperation({
+    message: 'Fammi una diagnostica tecnica della webcam Piazza Centrale.',
+    webcams,
+    executeInspect: async () => { throw new Error('timeout interno') },
+  })
+
+  assert.equal(presets.intent, 'webcam-presets-unavailable')
+  assert.equal(connectivity.intent, 'webcam-connectivity-unavailable')
+  assert.equal(diagnostic.intent, 'webcam-device-info-unavailable')
+  assert.equal(JSON.stringify([presets, connectivity, diagnostic]).includes('timeout interno'), false)
 })
 
 test('moving to a webcam preset requires confirmation and keeps the token server-side', async () => {

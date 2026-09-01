@@ -52,6 +52,7 @@ export const env = {
   webcamgoCacheTtlMs: Math.max(0, Number(process.env.WEBCAMGO_CACHE_TTL_MS || 20000)),
   webcamgoControlApiBaseUrl: process.env.WEBCAMGO_CONTROL_API_BASE_URL,
   webcamgoControlApiKey: process.env.WEBCAMGO_CONTROL_API_KEY,
+  webcamgoControlTimeoutMs: Math.max(1000, Number(process.env.WEBCAMGO_CONTROL_TIMEOUT_MS || 8000)),
 
   sendInItalyApiBaseUrl:
     process.env.SENDINITALY_API_BASE_URL ||

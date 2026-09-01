@@ -79,6 +79,16 @@ function extractPresetTarget(message = '') {
     .replace(/[?.!]+$/g, '').replace(/\s+/g, ' ').trim()
 }
 
+function isSnapshotOperationRequest(message = '') {
+  const text = String(message || '')
+  const asksToDisplay = /\b(mostra|mostrami|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(text)
+  const asksForAList =
+    /\b(?:quali|elenca|elencami|lista|prime?|primi|top)\b/i.test(text) ||
+    /\b(?:webcam|telecamer[ae])\b[\s\S]*\b(?:snapshot|fotogramm[ai]|immagin[ei])\b[\s\S]*\b(?:offline|non\s+online|bloccat[oi]|ferm[oi]|congelat[oi])\b/i.test(text)
+
+  return asksToDisplay && !asksForAList
+}
+
 export function extractWebcamOperationTarget(message = '') {
   const text = String(message || '')
   const quoted = text.match(/["“”']([^"“”']{2,})["“”']/)?.[1]
@@ -87,7 +97,7 @@ export function extractWebcamOperationTarget(message = '') {
   if (/\b(test|verifica|controlla)\s+(?:la\s+)?(?:connettivit[aà]|raggiungibilit[aà])/i.test(text)) {
     return extractConnectivityTarget(text) || null
   }
-  if (/\b(mostra|mostrami|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(text)) {
+  if (isSnapshotOperationRequest(text)) {
     return extractSnapshotTarget(text) || null
   }
   if (/\b(elenca|mostra|mostrami|quali|leggi)\b[\s\S]*\bpreset\b/i.test(text)) {
@@ -199,11 +209,16 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
     if (!target) return response('clarification', 'Di quale webcam vuoi verificare la connettività live?', {type: 'clarification', reason: 'missing-webcam-target'})
     const resolved = resolveTarget(webcams, target)
     if (resolved.status !== 'resolved') return response('clarification', `Non riesco a identificare una sola webcam per “${target}”. Indica nome o slug esatto.`, {type: 'clarification', reason: `webcam-${resolved.status}`})
-    const result = await executeConnectivity({token, webcamId: resolved.item.id})
+    let result
+    try {
+      result = await executeConnectivity({token, webcamId: resolved.item.id})
+    } catch (_) {
+      return response('webcam-connectivity-unavailable', `Non sono riuscito a completare il controllo live di ${resolved.item.name} entro il tempo previsto. Puoi riprovare tra poco; lo stato memorizzato resta consultabile dalla scheda webcam.`, {type: 'webcam-connectivity-unavailable', target: {id: resolved.item.id, name: resolved.item.name}})
+    }
     return response('webcam-connectivity-live', `${resolved.item.name} ${result.reachable ? 'è raggiungibile' : 'non risponde'} sulla porta ${result.port}.`, {type: 'webcam-connectivity-live', item: result})
   }
 
-  if (/\b(mostra|mostrami|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(String(message || ''))) {
+  if (isSnapshotOperationRequest(message)) {
     const extractedTarget = extractSnapshotTarget(message)
     const target = withContextTarget(extractedTarget, context)
     if (!target) return response('clarification', 'Di quale webcam vuoi aprire lo snapshot?', {type: 'clarification', reason: 'missing-webcam-target'})
@@ -235,7 +250,7 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
           target: {id: resolved.item.id, name: resolved.item.name, slug: resolved.item.slug || null},
         })
       }
-      throw error
+      return response('webcam-presets-unavailable', `Non sono riuscito a leggere i preset di ${resolved.item.name} entro il tempo previsto. Puoi riprovare tra poco.`, {type: 'webcam-presets-unavailable', target: {id: resolved.item.id, name: resolved.item.name}})
     }
     const lines = result.presets.length
       ? result.presets.map((item, index) => `${index + 1}. ${item.name || `Preset ${item.token}`} (token ${item.token})`)
@@ -251,7 +266,12 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
       const options = resolved.items?.map((item, index) => `${index + 1}. ${item.name} (${item.slug || 'senza slug'})`) || []
       return response('clarification', resolved.status === 'ambiguous' ? `Ho trovato più webcam:\n${options.join('\n')}\nIndica nome o slug esatto.` : `Non ho trovato una webcam corrispondente a “${target}”.`, {type: 'clarification', reason: `webcam-${resolved.status}`})
     }
-    const result = await executeInspect({token, webcamId: resolved.item.id})
+    let result
+    try {
+      result = await executeInspect({token, webcamId: resolved.item.id})
+    } catch (_) {
+      return response('webcam-device-info-unavailable', `Non sono riuscito a completare la diagnostica ONVIF di ${resolved.item.name} entro il tempo previsto. Puoi riprovare tra poco.`, {type: 'webcam-device-info-unavailable', target: {id: resolved.item.id, name: resolved.item.name}})
+    }
     const lines = [
       `Diagnostica ONVIF di ${resolved.item.name}:`,
       `- modello: ${result.modelNumber || 'non disponibile'}`,
