@@ -127,8 +127,13 @@ export function isAnalyticalReadQueryRequest(message = '') {
   const text = normalizeText(message)
   if (!text) return false
 
+  const analyticalText = text.replace(
+    /\b(?:piu|meno)\s+di\s+(?:un[oa]?|\d+)\s+(?:minut[oi]|or[ae]|giorn[oi]|settiman[ae]|mes[ei]|ann[oi])\b/gi,
+    ' '
+  )
+
   return (
-    ANALYTICAL_READ_PATTERN.test(text) ||
+    ANALYTICAL_READ_PATTERN.test(analyticalText) ||
     /\b(?:quanti|quante|conteggio|numero)\b[\s\S]{0,80}\bper\b/i.test(text) ||
     /\bper\b[\s\S]{0,80}\b(?:quanti|quante|conteggio|numero)\b/i.test(text)
   )
@@ -1195,7 +1200,7 @@ function buildDeterministicFilters(entityId, message = '') {
     }
 
     const supplier = extractNamedAfter(text, [
-      /\b(?:con|del|della|di)\s+(?:fornitore\s+)?(.+?)(?=\s+(?:che|nel|in scadenza|scadono)\b|$)/i,
+      /\b(?:con|del|della|di)\s+(?:il\s+)?fornitore\s+(.+?)(?=\s+(?:che|nel|in scadenza|scadono)\b|$)/i,
       /\bfornitore\s+(.+)$/i,
     ])
     if (supplier && !/^(?:cliente|fornitore|supplier|provider)$/i.test(supplier)) {

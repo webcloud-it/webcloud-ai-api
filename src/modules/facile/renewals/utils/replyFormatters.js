@@ -324,7 +324,11 @@ function formatServiceListItem(item, {detailed = false} = {}) {
     parts.push(`piano ${item.piano}`)
   }
 
-  if (item.scadenzaScaduta) {
+  const isSupplierExpiryResult = /\bscadenza fornitore\b/i.test(String(item.motivo || ''))
+
+  if (isSupplierExpiryResult && item.scadenzaFornitore) {
+    parts.push(`scadenza fornitore ${formatDate(item.scadenzaFornitore)}`)
+  } else if (item.scadenzaScaduta) {
     parts.push(`scaduto il ${formatDate(item.scadenzaScaduta)}`)
   } else if (item.scadenzaFormattata) {
     parts.push(`scadenza ${item.scadenzaFormattata}`)

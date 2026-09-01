@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   checkAnalyticalReadPlannerReadiness,
+  isAnalyticalReadQueryRequest,
   planReadQuery,
   getPreviousReadQueryState,
 } from '../src/modules/facile/renewals/readQueryPlanner.js'
@@ -842,6 +843,26 @@ test('planner analitico: riusa la stessa capacità per gruppi e servizi', async 
     {field: 'count', direction: 'asc'},
     {field: 'group.name', direction: 'asc'},
   ])
+})
+
+test('planner analitico: con più servizi non diventa il nome di un fornitore', async () => {
+  const plan = await planReadQuery({
+    message: 'Mostrami i tre gruppi con più servizi in scadenza nel 2027.',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'subscriptions')
+  assert.deepEqual(plan.groupBy, ['group.name'])
+  assert.equal(plan.limit, 3)
+  assert.equal(plan.filters.some(filter => filter.field === 'supplier.name'), false)
+})
+
+test('planner analitico: una durata minima resta un filtro semplice', () => {
+  assert.equal(
+    isAnalyticalReadQueryRequest('Quali servizi sono scaduti da più di un mese?'),
+    false
+  )
 })
 
 test('planner analitico: il limite primi non inverte una richiesta dei gruppi con meno servizi', async () => {

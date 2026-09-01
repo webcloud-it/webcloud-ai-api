@@ -370,6 +370,11 @@ describe('Esecuzione dei filtri sulle liste', () => {
       payload.items.map(item => item.servizio).sort(),
       ['fornitore-2027.it', 'scade-2027.it']
     )
+    assert.deepEqual(
+      payload.items.map(item => item.scadenzaFornitore).sort(),
+      ['2027-04-01', '2027-08-01']
+    )
+    assert.equal(payload.items.every(item => /scadenza fornitore/i.test(item.motivo)), true)
   })
 })
 

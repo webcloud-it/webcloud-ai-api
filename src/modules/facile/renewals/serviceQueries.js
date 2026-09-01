@@ -1317,6 +1317,10 @@ function buildReason(service, filters, settings, now) {
   const space = getServiceSpaceInfo(service, settings?.renewals_low_thresholds || [])
   const nextCustomerExpiry = getNextCustomerExpiry(service, now)
   const expiredCustomerExpiry = getExpiredCustomerExpiry(service, now)
+  const supplierExpiryFilter = filters.find(filter => filter.kind === 'supplier-expires-in-range')
+  const matchingSupplierExpiry = supplierExpiryFilter
+    ? getSupplierSubscriptionDates(service).find(date => isWithin(date, supplierExpiryFilter.dateRange)) || null
+    : null
   const parts = []
 
   for (const filter of filters) {
@@ -1333,6 +1337,8 @@ function buildReason(service, filters, settings, now) {
       parts.push(`scaduto il ${formatDate(expiredCustomerExpiry)}`)
     } else if (filter.kind === 'expires-in-range')
       parts.push(`scadenza nel periodo ${filter.dateRange.label}`)
+    else if (filter.kind === 'supplier-expires-in-range' && matchingSupplierExpiry)
+      parts.push(`scadenza fornitore ${formatDate(matchingSupplierExpiry)}`)
     else if (filter.kind === 'no-auto-renew') parts.push('senza rinnovo automatico')
     else if (filter.kind === 'no-plesk-sync') parts.push('piani Plesk non sincronizzati')
     else if (filter.kind === 'plesk-sync') parts.push('piani Plesk sincronizzati')
@@ -1347,7 +1353,11 @@ function buildServiceItem(service, {filters, settings, now}) {
   const space = getServiceSpaceInfo(service, settings?.renewals_low_thresholds || [])
   const nextCustomerExpiry = getNextCustomerExpiry(service, now)
   const expiredCustomerExpiry = getExpiredCustomerExpiry(service, now)
-  const supplierExpiry = getSupplierSubscriptionDates(service)[0] || null
+  const supplierDates = getSupplierSubscriptionDates(service)
+  const supplierExpiryFilter = filters.find(filter => filter.kind === 'supplier-expires-in-range')
+  const supplierExpiry = supplierExpiryFilter
+    ? supplierDates.find(date => isWithin(date, supplierExpiryFilter.dateRange)) || null
+    : supplierDates[0] || null
   const planFilter = filters.find(filter => filter.kind === 'plan')
   const matchedPlans = planFilter?.term ? getMatchingPlans(service, planFilter.term) : []
   const customerPlans = getCustomerPlanRefs(service)
