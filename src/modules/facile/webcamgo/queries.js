@@ -95,6 +95,17 @@ function cleanTerm(value = '') {
 function cleanWebcamTarget(value = '') {
   let target = cleanTerm(value)
 
+  target = target
+    .replace(
+      /^(?:(?:lo|la|il|un|una)\s+)?(?:stato|situazione|dettagli?|informazioni|scheda)\s+(?:(?:di|del|della|su|sulla)\s+)?/i,
+      ''
+    )
+    .replace(
+      /\s+(?:e|ed|poi)\s+(?:dimmi|spiegami|indicami|segnalami|valuta|verifica|controlla|fammi sapere)\b[\s\S]*$/i,
+      ''
+    )
+    .trim()
+
   const prefix = /^(?:(?:di|del|della|su|sulla|per)\s+)?(?:(?:questa|quella|la|il|una)\s+)?(?:webcam|telecamera)\s*/i
   for (let pass = 0; pass < 3; pass += 1) {
     const next = target.replace(prefix, '').trim()

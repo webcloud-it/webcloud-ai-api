@@ -489,6 +489,17 @@ function formatDetailReply(payload = {}) {
     .filter(([key, value]) => key !== 'any' && value)
     .map(([key]) => key)
   const hardware = [item.hardware?.brand, item.hardware?.model].filter(Boolean).join(' ')
+  const activeAnomalies = [
+    ['stream', item.status?.stream],
+    ['snapshot', item.snapshotEnabled ? item.status?.snapshot : null],
+    ['connettività', item.status?.connectivity],
+    ['MikroTik', item.hasMikrotik ? item.status?.mikrotik : null],
+  ]
+    .filter(([, value]) => isKnownOperationalAnomaly(value?.status))
+    .map(([label, value]) => `${label} ${value.status}`)
+  const assessment = activeAnomalies.length
+    ? `Valutazione operativa: richiedono controllo ${activeAnomalies.join(', ')}.`
+    : 'Valutazione operativa: non emergono anomalie correnti dagli stati disponibili.'
 
   return [
     `${item.name || 'Webcam'} (${item.slug || 'slug assente'})`,
@@ -511,9 +522,15 @@ function formatDetailReply(payload = {}) {
       : item.downtime?.configured
         ? `Downtime configurati: ${item.downtime.enabledCount || 0} attivi`
         : 'Downtime programmati: nessuno',
+    assessment,
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+function isKnownOperationalAnomaly(status = '') {
+  const normalized = String(status || '').toLowerCase()
+  return Boolean(normalized) && !['online', 'na', 'n/a', 'unknown', 'sconosciuto'].includes(normalized)
 }
 
 function formatSchedule(schedule = {}) {

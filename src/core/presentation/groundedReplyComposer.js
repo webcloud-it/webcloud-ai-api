@@ -171,6 +171,7 @@ export function validateGroundedReply({reply = '', fallback = '', groundedData =
 
 export function shouldComposeGroundedReply({message = '', result = {}} = {}) {
   if (!env.groundedRepliesEnabled || result?.ok !== true || !result?.data) return false
+  if (result.meta?.narrationPolicy === 'deterministic') return false
   if (!SAFE_SOURCES.has(result.source)) return false
   if (UNSAFE_INTENTS.test(String(result.intent || ''))) return false
   if (UNSAFE_DATA_TYPES.test(String(result.data?.type || ''))) return false
@@ -191,7 +192,7 @@ export async function composeGroundedReply({
 
   try {
     const reply = await callLlm({
-      timeoutMs: env.groundedReplyTimeoutMs,
+      timeoutMs: Math.min(env.groundedReplyTimeoutMs, 5000),
       options: {temperature: 0.1, num_predict: 100},
       messages: [
         {

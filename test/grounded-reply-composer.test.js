@@ -50,6 +50,39 @@ test('never sends navigation or operational actions to the narrator', async () =
   assert.equal(shouldComposeGroundedReply({message: 'apri Barricata', result: action}), false)
 })
 
+test('respects an explicit deterministic narration policy', () => {
+  const result = {
+    ok: true,
+    intent: 'webcam-anomaly-analysis',
+    source: 'tool-fast',
+    reply: 'Sintesi verificata.',
+    data: {type: 'webcam-anomaly-analysis'},
+    meta: {narrationPolicy: 'deterministic'},
+  }
+
+  assert.equal(shouldComposeGroundedReply({message: 'analizza le anomalie', result}), false)
+})
+
+test('caps narration latency even when the environment allows a longer timeout', async () => {
+  let timeoutMs = null
+  await composeGroundedReply({
+    message: 'analizza lo stato della webcam Barricata',
+    result: {
+      ok: true,
+      intent: 'webcam-detail',
+      source: 'tool-fast',
+      reply: 'Barricata è online.',
+      data: {type: 'webcam-detail', item: {name: 'Barricata'}},
+    },
+    callLlm: async request => {
+      timeoutMs = request.timeoutMs
+      return 'Barricata è online.'
+    },
+  })
+
+  assert.ok(timeoutMs <= 5000)
+})
+
 test('keeps simple read lists deterministic to avoid unnecessary latency', () => {
   const result = {
     ok: true,

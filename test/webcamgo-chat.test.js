@@ -132,6 +132,19 @@ test('interpreta gli stati di una webcam come dettaglio e ripulisce il nome enti
   assert.match(result.reply, /Snapshot: online/)
 })
 
+test('separa il nome webcam dalle clausole narrative successive', () => {
+  const result = handleWebcamgoChat({
+    message: 'Analizza lo stato della webcam Le Melette e dimmi se c’è qualcosa da controllare.',
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-detail')
+  assert.equal(result.data.item.id, 'cam-1')
+  assert.match(result.reply, /Le Melette/i)
+  assert.match(result.reply, /Valutazione operativa/i)
+  assert.doesNotMatch(result.reply, /Non ho trovato/i)
+})
+
 test('usa la webcam della pagina per richieste implicite e follow-up tecnici', () => {
   const context = {activeEntity: {type: 'webcam', slug: 'asiago-piazza-carli'}}
 

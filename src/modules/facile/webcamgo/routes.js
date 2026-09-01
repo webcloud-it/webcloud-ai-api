@@ -123,6 +123,8 @@ export async function chat(req, res) {
       ...result,
       meta: {
         ...(result.meta || {}),
+        narrationPolicy:
+          result.intent === 'webcam-anomaly-analysis' ? 'deterministic' : result.meta?.narrationPolicy,
         webcamsCount: webcams.length,
         timings: {
           dataLoadMs,
