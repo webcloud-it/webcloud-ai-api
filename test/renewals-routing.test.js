@@ -157,6 +157,24 @@ describe('Intenti espliciti e precedenze', () => {
     assert.equal(pickExplicitChatIntent('info su webcloud.it'), 'service-detail')
   })
 
+  test('feedback regression: una scadenza con mese è una lista, non un riepilogo', () => {
+    for (const message of [
+      'che scadenze ci sono a settembre?',
+      'quali domini scadono a settembre?',
+      'quali servizi scadranno a ottobre?',
+    ]) {
+      assert.equal(pickExplicitChatIntent(message), 'service-list', message)
+
+      const query = parseServiceListQuery({message, settings: SETTINGS, now: NOW})
+      assert.ok(findFilter(query, 'expires-in-range'), message)
+    }
+
+    assert.notEqual(
+      pickExplicitChatIntent('qual è la scadenza del servizio example.it nel 2027?'),
+      'service-list'
+    )
+  })
+
   test('preserva tutti i vincoli di una lista composta', () => {
     const message =
       'Mostrami quali servizi di Zilio Group con scadenza entro il 2027 sono marchiati come non rinnovare e da trasferire contemporaneamente.'

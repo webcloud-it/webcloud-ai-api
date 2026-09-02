@@ -5,7 +5,11 @@ import {
   getAvailableModuleIds,
   getCapabilityCatalog,
 } from '../src/core/capabilities/catalog.js'
-import {planGlobalChat, resolveGlobalChatPlan} from '../src/core/orchestrator/globalChat.js'
+import {
+  planGlobalChat,
+  resolveGlobalChatPlan,
+  validateSemanticModuleSelection,
+} from '../src/core/orchestrator/globalChat.js'
 import {contextualizeRenewalsMessage, getContextScope} from '../src/core/context/pageContext.js'
 
 const credentials = {crm: 'crm-token', webcamgo: 'webcamgo-token'}
@@ -131,6 +135,49 @@ test('global planner routes an explicit renewals request from WebcamGo', () => {
   assert.equal(plan.type, 'module')
   assert.equal(plan.moduleId, 'facile.renewals')
   assert.equal(plan.source, 'message')
+})
+
+test('feedback regression: domini che scadono non ereditano WebcamGo dalla cronologia', async () => {
+  const message = 'quali domini scadono a settembre?'
+  const context = {section: 'webcamgo', path: '/webcamgo/webcams/barricata'}
+  const history = [{
+    role: 'assistant',
+    content: 'Ho trovato 19 webcam.',
+    meta: {moduleId: 'facile.webcamgo'},
+    data: {type: 'webcam-list'},
+  }]
+
+  const deterministic = planGlobalChat({message, context, history, credentials})
+  assert.equal(deterministic.moduleId, 'facile.renewals')
+  assert.equal(deterministic.source, 'message')
+
+  let modelCalls = 0
+  const resolved = await resolveGlobalChatPlan(
+    {message, context, history, credentials},
+    async () => {
+      modelCalls += 1
+      return {mode: 'tool', moduleId: 'facile.webcamgo', confidence: 0.99, secondaryModuleIds: []}
+    }
+  )
+
+  assert.equal(resolved.moduleId, 'facile.renewals')
+  assert.equal(modelCalls, 0)
+})
+
+test('semantic routing cannot contradict one strong message domain', async () => {
+  const validation = validateSemanticModuleSelection(
+    'quali domini scadranno nel 2027?',
+    {
+      mode: 'tool',
+      moduleId: 'facile.webcamgo',
+      secondaryModuleIds: [],
+    }
+  )
+
+  assert.deepEqual(validation, {
+    valid: false,
+    requiredModuleId: 'facile.renewals',
+  })
 })
 
 test('global planner routes storage-full services to renewals despite WebcamGo history', () => {

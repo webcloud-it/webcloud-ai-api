@@ -171,10 +171,27 @@ function isOperationalServiceListQuery(text = '') {
   )
 }
 
+function hasExplicitExpiryPeriod(text = '') {
+  const isPluralOrGeneral =
+    /\b(?:scadenze|servizi|domini)\b/i.test(text) ||
+    /\bscad(?:ono|ranno|ut[ei])\b/i.test(text) ||
+    /\b(?:cosa|che cosa)\s+scad(?:e|r[aà])\b/i.test(text)
+
+  return (
+    isPluralOrGeneral &&
+    /\b(?:scadenz\w*|scad(?:e|ono|r[aà]|ranno|ut[oaie])|in scadenza)\b/i.test(text) &&
+    /\b(?:gen(?:naio)?|feb(?:braio)?|mar(?:zo)?|apr(?:ile)?|mag(?:gio)?|giu(?:gno)?|lug(?:lio)?|ago(?:sto)?|set(?:tembre)?|ott(?:obre)?|nov(?:embre)?|dic(?:embre)?|20\d{2}|entro|prossim[oi]|quest[oa])\b/i.test(text)
+  )
+}
+
 export function pickExplicitChatIntent(message = '', scope = {}) {
   const text = normalizeText(message)
 
   if (isDontRenewInclusionQuery(text) && isOperationalServiceListQuery(text)) {
+    return 'service-list'
+  }
+
+  if (hasExplicitExpiryPeriod(text)) {
     return 'service-list'
   }
 

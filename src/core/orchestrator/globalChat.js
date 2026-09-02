@@ -67,8 +67,8 @@ const DOMAIN_PATTERNS = {
     /\b(?:ultimo|recente)\b.{0,32}\b(?:evento|stato|periodo)\b.{0,24}\boffline\b/,
   ],
   'facile.renewals': [
-    /\brinnov/,
-    /\bscadenz/,
+    /\brinnov\w*/,
+    /\b(?:scadenz\w*|scad(?:e|ono|r[aà]|ranno|ut[oaie]))\b/,
     /\bservizi?\b/,
     /\bgrupp[oi]\b/,
     /\bfornitor/,
@@ -175,7 +175,7 @@ const LOCAL_ENTITY_REQUEST = /\b(?:dettagli?|informazioni?|info|scheda|stat[oi]|
 
 const STRONG_DOMAIN_PATTERNS = {
   'facile.webcamgo': /\b(?:webcamgo|webcam|telecamer[ae]|snapshot|stream|offline|ptz|mikrotik)\b/i,
-  'facile.renewals': /\b(?:rinnov|scadenz|fornitor|piani?|add[- ]?on|componenti\s+aggiuntiv[ei]|plesk|fattur|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b|\bservizi?\b.{0,64}\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b|\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b.{0,64}\bservizi?\b/i,
+  'facile.renewals': /\b(?:rinnov\w*|scadenz\w*|scad(?:e|ono|r[aà]|ranno|ut[oaie])|fornitor\w*|piani?|add[- ]?on|componenti\s+aggiuntiv[ei]|plesk|fattur\w*|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b|\bservizi?\b.{0,64}\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b|\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b.{0,64}\bservizi?\b/i,
   'facile.sendinitaly': /\b(?:send\s*in\s*italy|newsletter|campagn[ae]|postal|mittent[ei])\b/i,
   'facile.businesshours': /\b(?:orari|apertura|aperture|chiusura|chiusure|apre|chiude)\b|\bminisit[oi]\b.{0,40}\b(?:apert\w*|chius\w*)\b/i,
   'facile.asiago': /\b(?:cms|event[oi]|manifestazion[ei]|minisit[oi]|contenut[oi]|articol[oi]|bollettino|listini?|redirects?)\b/i,
@@ -188,6 +188,20 @@ function moduleFromStrongDomain(message = '') {
     .map(([moduleId]) => moduleId)
 
   return matches.length === 1 ? matches[0] : null
+}
+
+export function validateSemanticModuleSelection(message = '', semantic = null) {
+  if (semantic?.mode !== 'tool' || !semantic.moduleId) {
+    return {valid: true, requiredModuleId: null}
+  }
+
+  const requiredModuleId = moduleFromStrongDomain(message)
+  const selectedModuleIds = [semantic.moduleId, ...(semantic.secondaryModuleIds || [])]
+
+  return {
+    valid: !requiredModuleId || selectedModuleIds.includes(requiredModuleId),
+    requiredModuleId,
+  }
 }
 
 function moduleFromActiveEntityRequest(message = '', context = {}) {
@@ -212,7 +226,7 @@ function isContextualModuleFastPath(message = '', plan = {}) {
 
   const patterns = {
     'facile.webcamgo': /\b(?:webcam|telecamer[ae]|stream|snapshot|router|mikrotik|connettivit[aà]|offline|fuori\s+linea|ptz|preset)\b/i,
-    'facile.renewals': /\b(?:servizi?|domini?|rinnov|scadenz|piani?|fornitor|plesk|fattur|non\s+rinnovare|trasferire|spazio|quota|disco|esaurit\w*|satur\w*)\b/i,
+    'facile.renewals': /\b(?:servizi?|domini?|rinnov\w*|scadenz\w*|scad(?:e|ono|r[aà]|ranno|ut[oaie])|piani?|fornitor\w*|plesk|fattur\w*|non\s+rinnovare|trasferire|spazio|quota|disco|esaurit\w*|satur\w*)\b/i,
   }
 
   return patterns[plan.moduleId]?.test(String(message || '')) === true
@@ -346,6 +360,16 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
     }
 
     if (semantic?.mode === 'tool' && semantic.confidence >= 0.72) {
+      const semanticValidation = validateSemanticModuleSelection(options.message, semantic)
+
+      if (!semanticValidation.valid) {
+        return {
+          type: 'module',
+          moduleId: semanticValidation.requiredModuleId,
+          source: 'message-validation',
+        }
+      }
+
       if (!semantic.available) {
         return {type: 'unavailable', moduleId: semantic.moduleId, availableModuleIds, source: 'semantic', semantic}
       }
