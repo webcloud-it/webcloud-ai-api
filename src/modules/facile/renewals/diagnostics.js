@@ -260,8 +260,14 @@ function isSubscriptionExpiryListRequest(message = '') {
       normalized
     )
   const hasPluralExpiry = /\b(?:scadono|scadranno|scaduti|scadute)\b/i.test(normalized)
+  const hasGeneralExpiryQuestion =
+    /\b(?:cosa|che cosa|quali cose)\s+scad(?:e|ono|r[aà]|ranno)\b/i.test(normalized) ||
+    /\b(?:che|quali)\s+scadenze\b/i.test(normalized)
   const hasRangeOrOperationalWindow =
     /\b(?:nel|nell['’]?anno|entro|tra|fra|dal|dall['’]?|al|fino al)\s+(?:20\d{2}|\d{1,2}[/-]\d{1,2}[/-]20\d{2})\b/i.test(
+      normalized
+    ) ||
+    /\b(?:a|in|nel|di)\s+(?:gennaio|febbraio|marzo|aprile|maggio|giugno|luglio|agosto|settembre|ottobre|novembre|dicembre)(?:\s+20\d{2})?\b/i.test(
       normalized
     ) ||
     /\b(?:in scadenza|scadenza imminente|scadenze imminenti|rinnovi imminenti)\b/i.test(
@@ -270,7 +276,8 @@ function isSubscriptionExpiryListRequest(message = '') {
 
   return (
     (hasPluralEntity && (hasListVerb || hasPluralExpiry || hasRangeOrOperationalWindow)) ||
-    (hasListVerb && (hasPluralExpiry || hasRangeOrOperationalWindow))
+    (hasListVerb && (hasPluralExpiry || hasRangeOrOperationalWindow)) ||
+    (hasGeneralExpiryQuestion && hasRangeOrOperationalWindow)
   )
 }
 

@@ -162,6 +162,7 @@ describe('Intenti espliciti e precedenze', () => {
       'che scadenze ci sono a settembre?',
       'quali domini scadono a settembre?',
       'quali servizi scadranno a ottobre?',
+      'cosa scade a novembre?',
     ]) {
       assert.equal(pickExplicitChatIntent(message), 'service-list', message)
 
@@ -509,6 +510,16 @@ describe('Diagnostiche e separazione lista/singolo servizio', () => {
       parseServiceSubscriptionExpiryRequest('tutti i servizi che scadono nel 2027'),
       null
     )
+  })
+
+  test('non interpreta un mese come nome servizio nelle domande generali', () => {
+    for (const message of [
+      'cosa scade a novembre?',
+      'che cosa scadrà a dicembre?',
+      'quali scadenze ci sono a settembre?',
+    ]) {
+      assert.equal(parseServiceSubscriptionExpiryRequest(message), null, message)
+    }
   })
 
   test('non sottrae al planner una richiesta generica di lista', () => {
