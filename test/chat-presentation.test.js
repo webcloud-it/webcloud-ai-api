@@ -43,6 +43,28 @@ test('decorates renewals lists while preserving the original response contract',
   assert.equal(decorated.data.actions[0].path, '/crm/renewals/panel')
 })
 
+test('shows the expiry that actually matches a renewals list filter', () => {
+  const customerExpiry = buildChatPresentation({
+    type: 'service-list',
+    query: {filters: [{kind: 'expires-in-range'}]},
+    items: [{servizio: 'example.it', scadenza: '2026-09-20', scadenzaFornitore: '2026-09-30'}],
+  })
+  assert.deepEqual(customerExpiry.cards[0].details.at(-1), {
+    label: 'Scadenza',
+    value: '2026-09-20',
+  })
+
+  const supplierExpiry = buildChatPresentation({
+    type: 'service-list',
+    query: {filters: [{kind: 'supplier-expires-in-range'}]},
+    items: [{servizio: 'example.it', scadenza: '2026-09-20', scadenzaFornitore: '2026-09-30'}],
+  })
+  assert.deepEqual(supplierExpiry.cards[0].details.at(-1), {
+    label: 'Scadenza fornitore',
+    value: '2026-09-30',
+  })
+})
+
 test('does not decorate unknown payloads', () => {
   const original = {ok: true, data: {type: 'custom', password: 'do-not-render'}}
   assert.equal(attachChatPresentation(original), original)

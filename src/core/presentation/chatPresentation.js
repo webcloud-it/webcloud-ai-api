@@ -224,6 +224,14 @@ function asiagoPresentation(data) {
 
 function renewalsPresentation(data) {
   if (!RENEWALS_LIST_TYPES.has(data.type) || !Array.isArray(data.items)) return null
+  const filterKinds = new Set(
+    (Array.isArray(data.query?.filters) ? data.query.filters : [])
+      .map(filter => filter?.kind)
+      .filter(Boolean)
+  )
+  const serviceListUsesSupplierExpiry =
+    data.type === 'service-list' && filterKinds.has('supplier-expires-in-range')
+
   return list('Risultati CRM e rinnovi', data.items.map((item, index) => ({
     id: text(item.id || `${data.type}-${index + 1}`),
     title: text(item.servizio || item.name || item.label || item.dominio || item.id, 'Risultato'),
@@ -231,9 +239,15 @@ function renewalsPresentation(data) {
     badge: text(item.priorita || item.tipo),
     details: [
       detail('Dettaglio', item.msg || item.message),
-      item.scadenzaFornitore
-        ? detail('Scadenza fornitore', item.scadenzaFornitore)
-        : detail('Scadenza', item.scadenza || item.end_date),
+      serviceListUsesSupplierExpiry
+        ? detail('Scadenza fornitore', item.scadenzaFornitore) ||
+          detail('Scadenza', item.scadenza || item.end_date)
+        : data.type === 'service-list'
+          ? detail('Scadenza', item.scadenza || item.end_date) ||
+            detail('Scadenza fornitore', item.scadenzaFornitore)
+          : item.scadenzaFornitore
+            ? detail('Scadenza fornitore', item.scadenzaFornitore)
+            : detail('Scadenza', item.scadenza || item.end_date),
     ].filter(Boolean),
   })), data.totale ?? data.total)
 }
