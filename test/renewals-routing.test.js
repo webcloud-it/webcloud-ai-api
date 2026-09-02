@@ -163,6 +163,7 @@ describe('Intenti espliciti e precedenze', () => {
       'quali domini scadono a settembre?',
       'quali servizi scadranno a ottobre?',
       'cosa scade a novembre?',
+      'che cosa scadrà a dicembre?',
     ]) {
       assert.equal(pickExplicitChatIntent(message), 'service-list', message)
 

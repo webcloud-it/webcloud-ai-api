@@ -243,7 +243,7 @@ function isHistoryContinuationFastPath(message = '', plan = {}) {
 
 export function planGlobalChat({message = '', context = {}, history = [], credentials = {}} = {}) {
   const availableModuleIds = getAvailableModuleIds({credentials})
-  const text = normalizeText(message)
+  const text = normalizeSearchText(message)
 
   const unsupportedDomain = UNSUPPORTED_DOMAINS.find(domain => domain.pattern.test(text))
 

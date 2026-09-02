@@ -162,6 +162,15 @@ test('feedback regression: domini che scadono non ereditano WebcamGo dalla crono
 
   assert.equal(resolved.moduleId, 'facile.renewals')
   assert.equal(modelCalls, 0)
+
+  const accentedFuture = planGlobalChat({
+    message: 'che cosa scadrà a dicembre?',
+    context,
+    history,
+    credentials,
+  })
+  assert.equal(accentedFuture.moduleId, 'facile.renewals')
+  assert.equal(accentedFuture.source, 'message')
 })
 
 test('semantic routing cannot contradict one strong message domain', async () => {

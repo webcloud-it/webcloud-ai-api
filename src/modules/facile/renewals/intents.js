@@ -1,4 +1,4 @@
-import {matchesText, normalizeText} from '../../../utils/text.js'
+import {matchesText, normalizeSearchText, normalizeText} from '../../../utils/text.js'
 import {isMonthExpression} from './utils/dateExpressions.js'
 
 export {matchesText, normalizeText} from '../../../utils/text.js'
@@ -172,15 +172,16 @@ function isOperationalServiceListQuery(text = '') {
 }
 
 function hasExplicitExpiryPeriod(text = '') {
+  const normalized = normalizeSearchText(text)
   const isPluralOrGeneral =
-    /\b(?:scadenze|servizi|domini)\b/i.test(text) ||
-    /\bscad(?:ono|ranno|ut[ei])\b/i.test(text) ||
-    /\b(?:cosa|che cosa)\s+scad(?:e|r[aà])\b/i.test(text)
+    /\b(?:scadenze|servizi|domini)\b/i.test(normalized) ||
+    /\bscad(?:ono|ranno|ut[ei])\b/i.test(normalized) ||
+    /\b(?:cosa|che cosa)\s+scad(?:e|ra)\b/i.test(normalized)
 
   return (
     isPluralOrGeneral &&
-    /\b(?:scadenz\w*|scad(?:e|ono|r[aà]|ranno|ut[oaie])|in scadenza)\b/i.test(text) &&
-    /\b(?:gen(?:naio)?|feb(?:braio)?|mar(?:zo)?|apr(?:ile)?|mag(?:gio)?|giu(?:gno)?|lug(?:lio)?|ago(?:sto)?|set(?:tembre)?|ott(?:obre)?|nov(?:embre)?|dic(?:embre)?|20\d{2}|entro|prossim[oi]|quest[oa])\b/i.test(text)
+    /\b(?:scadenz\w*|scad(?:e|ono|ra|ranno|ut[oaie])|in scadenza)\b/i.test(normalized) &&
+    /\b(?:gen(?:naio)?|feb(?:braio)?|mar(?:zo)?|apr(?:ile)?|mag(?:gio)?|giu(?:gno)?|lug(?:lio)?|ago(?:sto)?|set(?:tembre)?|ott(?:obre)?|nov(?:embre)?|dic(?:embre)?|20\d{2}|entro|prossim[oi]|quest[oa])\b/i.test(normalized)
   )
 }
 
