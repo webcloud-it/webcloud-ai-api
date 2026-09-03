@@ -113,3 +113,49 @@ export async function getUserDnsStatus({token, userId, domain} = {}) {
     'Errore verifica DNS Send in Italy'
   )
 }
+
+export async function getSupportTickets({
+  token,
+  page = 1,
+  perPage = 25,
+  customerId = '',
+  state = '',
+  search = '',
+} = {}) {
+  requireConfiguration()
+  requireToken(token)
+
+  return fetchJson(
+    joinUrl(
+      env.sendInItalyApiBaseUrl,
+      withQuery('/facile/support/tickets', {
+        page,
+        per_page: perPage,
+        customer_id: customerId,
+        state,
+        search,
+      })
+    ),
+    {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
+    'Errore recupero ticket assistenza Send in Italy'
+  )
+}
+
+export async function getSupportTicket({token, ticketId} = {}) {
+  requireConfiguration()
+  requireToken(token)
+  if (!ticketId) {
+    const error = new Error('Ticket assistenza mancante')
+    error.statusCode = 400
+    throw error
+  }
+
+  return fetchJson(
+    joinUrl(
+      env.sendInItalyApiBaseUrl,
+      `/facile/support/tickets/${encodeURIComponent(String(ticketId))}`
+    ),
+    {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
+    'Errore recupero dettaglio ticket assistenza Send in Italy'
+  )
+}

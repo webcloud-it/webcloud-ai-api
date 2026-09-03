@@ -19,7 +19,7 @@ export const env = {
 
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434',
   ollamaApiKey: process.env.OLLAMA_API_KEY || null,
-  ollamaChatModel: process.env.OLLAMA_CHAT_MODEL || 'qwen3.5:0.8b',
+  ollamaChatModel: process.env.OLLAMA_CHAT_MODEL || 'qwen3.5:9b',
   ollamaTimeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS || 45000),
   ollamaRouterTimeoutMs: Number(process.env.OLLAMA_ROUTER_TIMEOUT_MS || 15000),
   ollamaReadPlannerTimeoutMs: Number(process.env.OLLAMA_READ_PLANNER_TIMEOUT_MS || 12000),

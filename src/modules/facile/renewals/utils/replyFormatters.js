@@ -182,6 +182,10 @@ function buildFastServiceListReply(payload) {
   const items = payload?.items || []
   const label = payload?.query?.label || 'servizi'
 
+  if (payload?.query?.countOnly === true) {
+    return `Ho trovato ${payload?.totale ?? 0} ${label}.`
+  }
+
   if (!items.length) {
     if (payload?.query?.requestedMore || payload?.query?.requestedPrevious) {
       return 'Non ci sono risultati da mostrare per questa pagina.'

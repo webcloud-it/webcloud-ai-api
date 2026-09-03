@@ -16,7 +16,7 @@ Il file `deploy/compose.ollama.yml` documenta lo stack completo. In EasyPanel è
 preferibile creare gli stessi tre workload:
 
 - servizio persistente `ollama` dall'immagine ufficiale `ollama/ollama`;
-- job una tantum `ollama pull qwen3:8b` dopo l'avvio o dopo il cambio modello;
+- job una tantum `ollama pull qwen3.5:9b` dopo l'avvio o dopo il cambio modello;
 - servizio applicativo costruito dal `Dockerfile` del repository.
 
 Il volume `/root/.ollama` deve essere persistente. La porta `11434` deve restare
@@ -24,7 +24,7 @@ interna alla rete EasyPanel. Solo la porta HTTPS dell'AI API va pubblicata.
 
 ## Modello della prima release
 
-Il modello predefinito è `qwen3:8b` Q4_K_M, distribuito con licenza Apache 2.0.
+Il modello operativo attualmente configurato è `qwen3.5:9b`.
 Il download Ollama è circa 5,2 GB. È una scelta adeguata per routing semantico,
 estrazione di intenti e generazione di bozze in italiano senza servizi a
 pagamento.
@@ -38,7 +38,7 @@ Documentazione ufficiale:
 
 - https://docs.ollama.com/docker
 - https://docs.ollama.com/api/authentication
-- https://ollama.com/library/qwen3:8b
+- https://ollama.com/library/qwen3.5:9b
 
 ## Variabili richieste
 
@@ -48,7 +48,7 @@ PORT=3000
 CORS_ORIGIN=https://facile.webcloud.it
 
 OLLAMA_BASE_URL=http://ollama:11434
-OLLAMA_CHAT_MODEL=qwen3:8b
+OLLAMA_CHAT_MODEL=qwen3.5:9b
 OLLAMA_REQUIRED=true
 OLLAMA_TIMEOUT_MS=45000
 OLLAMA_ROUTER_TIMEOUT_MS=15000
@@ -82,7 +82,7 @@ privata; è prevista soltanto per provider remoti compatibili.
 Ordine di rilascio:
 
 1. avviare Ollama e montare il volume persistente;
-2. eseguire `ollama pull qwen3:8b`;
+2. eseguire `ollama pull qwen3.5:9b`;
 3. pubblicare l'AI API con `OLLAMA_REQUIRED=true`;
 4. verificare `/health` e `/ready`;
 5. pubblicare widget e integrazione Facile;

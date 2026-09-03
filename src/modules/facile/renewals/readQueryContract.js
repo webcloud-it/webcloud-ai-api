@@ -27,6 +27,7 @@ export const DEFAULT_READ_QUERY_LIMIT = 20
 export const MAX_READ_QUERY_LIMIT = 50
 export const MAX_READ_QUERY_GROUP_BY_FIELDS = 2
 export const MAX_READ_QUERY_METRICS = 4
+export const MAX_READ_QUERY_HAVING_FILTERS = 4
 
 function clampInteger(value, fallback, {min = 0, max = Number.MAX_SAFE_INTEGER} = {}) {
   const number = Number.parseInt(String(value ?? ''), 10)
@@ -260,6 +261,28 @@ export function validateReadQueryPlan(plan = {}, registry) {
     }
   }
 
+  const metricFields = new Set(metrics.map(metric => metric.id))
+  const rawHaving = operation === 'aggregate' && Array.isArray(plan?.having) ? plan.having : []
+  const having = rawHaving
+    .map(filter => normalizeFilter(filter, metricFields))
+    .filter(Boolean)
+
+  if (operation === 'aggregate' && rawHaving.length > MAX_READ_QUERY_HAVING_FILTERS) {
+    return {
+      ok: false,
+      reason: 'too-many-having-filters',
+      message: `Sono consentiti al massimo ${MAX_READ_QUERY_HAVING_FILTERS} filtri sui risultati aggregati.`,
+    }
+  }
+
+  if (operation === 'aggregate' && having.length !== rawHaving.length) {
+    return {
+      ok: false,
+      reason: 'invalid-having-filter',
+      message: 'La query contiene almeno un filtro aggregato non autorizzato.',
+    }
+  }
+
   const aggregateSortFields = new Set([
     ...groupBy,
     ...metrics.map(metric => metric.id),
@@ -303,6 +326,7 @@ export function validateReadQueryPlan(plan = {}, registry) {
       sort: normalizedSort,
       groupBy,
       metrics,
+      having,
       limit,
       offset,
       include: Array.isArray(plan?.include)
@@ -350,6 +374,14 @@ export function mergeReadQueryPlans(previousPlan = null, patch = {}) {
           ? patch.metrics
           : sameAggregateMode
             ? previousPlan.metrics || []
+            : []
+        : [],
+    having:
+      operation === 'aggregate'
+        ? patch.having?.length
+          ? patch.having
+          : sameAggregateMode
+            ? previousPlan.having || []
             : []
         : [],
     offset: patch.offset ?? 0,

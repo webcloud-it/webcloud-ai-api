@@ -5,6 +5,7 @@ const SAFE_SOURCES = new Set(['tool-fast', 'tool-semantic'])
 const UNSAFE_INTENTS = /(?:action|open|navigate|clarification|confirmation|mutation|preview|draft|execute)/i
 const UNSAFE_DATA_TYPES = /(?:action|navigation|clarification|confirmation|mutation|preview|draft)/i
 const NARRATIVE_REQUEST = /\b(?:spieg|analizz|confront|valut|riassum|perch[eé]|come mai|cosa significa|dimmi|parlami)\b/i
+const SIMPLE_VERIFIED_COMPARISON = /^\s*confront\w*\s+(?:(?:i|le|gli)\s+)?(?:prim[ei]\s+)?(?:due|2)(?:\s+risultati?)?[?.!]*\s*$/i
 const DETAIL_INTENTS = new Set([
   'webcam-detail',
   'webcam-status',
@@ -175,6 +176,12 @@ export function shouldComposeGroundedReply({message = '', result = {}} = {}) {
   if (!SAFE_SOURCES.has(result.source)) return false
   if (UNSAFE_INTENTS.test(String(result.intent || ''))) return false
   if (UNSAFE_DATA_TYPES.test(String(result.data?.type || ''))) return false
+
+  if (
+    result.data?.type === 'read-query-result' &&
+    result.data?.operation === 'aggregate' &&
+    SIMPLE_VERIFIED_COMPARISON.test(String(message || ''))
+  ) return false
 
   if (DETAIL_INTENTS.has(result.intent)) return true
   return NARRATIVE_REQUEST.test(String(message || ''))

@@ -114,6 +114,21 @@ test('keeps simple read lists deterministic to avoid unnecessary latency', () =>
   )
 })
 
+test('keeps a simple verified ranking comparison deterministic', () => {
+  const result = {
+    ok: true,
+    intent: 'read-query',
+    source: 'tool-fast',
+    reply: 'Primo MisterDomain con 74, secondo Aruba con 50, distacco 24.',
+    data: {type: 'read-query-result', operation: 'aggregate', items: []},
+  }
+
+  assert.equal(
+    shouldComposeGroundedReply({message: 'Confronta i primi due.', result}),
+    false
+  )
+})
+
 test('falls back to the verified deterministic reply if the model is unavailable', async () => {
   const original = {
     ok: true,

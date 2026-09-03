@@ -64,6 +64,9 @@ function makeService({
   customerEnd,
   supplierEnd = null,
   dontRenew = false,
+  toTransfer = false,
+  diskUsed = 0,
+  diskQuota = 0,
   customer = `Cliente ${id}`,
   group = 'Gruppo test',
   supplier = 'Register',
@@ -91,12 +94,19 @@ function makeService({
     dontRenew,
     autoRenew: false,
     toRenew: false,
+    toTransfer,
     customer: {
       id: `customer-${id}`,
       name: customer,
       group: {id: 'group-test', name: group},
     },
     domains_id: {id: `domain-${id}`, name: `${id}.it`},
+    pleskDomain: diskQuota
+      ? {
+          id: `plesk-${id}`,
+          statsDiskUsage: {totalSize: diskUsed, quota: diskQuota},
+        }
+      : null,
     subscriptions: [
       {
         id: `customer-subscription-${id}`,
@@ -426,6 +436,78 @@ describe('Planner delle liste', () => {
       }),
       null
     )
+  })
+})
+
+describe('Regressioni sulle richieste naturali composte', () => {
+  test('applica un limite scritto in lettere senza planner semantico', () => {
+    const query = parseServiceListQuery({
+      message: 'Mostrami i primi cinque servizi in scadenza a ottobre.',
+      settings: SETTINGS,
+      now: NOW,
+    })
+
+    assert.equal(query.limit, 5)
+    assert.equal(query.requestedLimit, true)
+  })
+
+  test('una domanda di conteggio non produce una lista superflua', () => {
+    const payload = buildServiceListPayload({
+      services: SERVICES,
+      settings: SETTINGS,
+      message: 'Conta soltanto i servizi che scadono nel 2027, senza elencarli.',
+      now: NOW,
+    })
+
+    assert.equal(payload.query.countOnly, true)
+    assert.equal(payload.totale, 1)
+    assert.deepEqual(payload.items, [])
+    assert.equal(payload.hasMore, false)
+  })
+
+  test('separa scadenze cliente e fornitore espresse nella stessa frase', () => {
+    const query = parseServiceListQuery({
+      message: 'Quali servizi hanno scadenza fornitore nel 2027 ma scadenza cliente nel 2026?',
+      settings: SETTINGS,
+      now: NOW,
+    })
+
+    assert.equal(findFilter(query, 'supplier'), null)
+    assertDateParts(findFilter(query, 'supplier-expires-in-range').dateRange.start, 2027, 0, 1)
+    assertDateParts(findFilter(query, 'expires-in-range').dateRange.start, 2026, 0, 1)
+  })
+
+  test('interpreta oppure come disgiunzione tra flag operativi', () => {
+    const payload = buildServiceListPayload({
+      services: [
+        makeService({id: 'non-rinnovo', customerEnd: '2027-05-01T12:00:00', dontRenew: true}),
+        makeService({id: 'trasferimento', customerEnd: '2027-06-01T12:00:00', toTransfer: true}),
+        makeService({id: 'normale', customerEnd: '2027-07-01T12:00:00'}),
+      ],
+      settings: SETTINGS,
+      message: 'servizi non rinnovare oppure da trasferire',
+      now: NOW,
+    })
+
+    assert.deepEqual(
+      payload.items.map(item => item.servizio).sort(),
+      ['non-rinnovo.it', 'trasferimento.it']
+    )
+  })
+
+  test('applica una soglia percentuale allo spazio utilizzato', () => {
+    const payload = buildServiceListPayload({
+      services: [
+        makeService({id: 'pieno', customerEnd: '2027-05-01T12:00:00', diskUsed: 95, diskQuota: 100}),
+        makeService({id: 'basso', customerEnd: '2027-06-01T12:00:00', diskUsed: 40, diskQuota: 100}),
+      ],
+      settings: SETTINGS,
+      message: 'Mostra i servizi con spazio utilizzato oltre il 90%.',
+      now: NOW,
+    })
+
+    assert.deepEqual(payload.items.map(item => item.servizio), ['pieno.it'])
+    assert.equal(findFilter(payload.query, 'space-usage-gte')?.threshold, 90)
   })
 })
 

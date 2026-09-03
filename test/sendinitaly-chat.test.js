@@ -11,6 +11,8 @@ function mockServices(overrides = {}) {
     getUserDnsStatus: async () => ({data: {}}),
     getCampaigns: async () => ({data: [], meta: {total: 0}}),
     getCampaignStats: async () => ({data: {}}),
+    getSupportTickets: async () => ({data: [], meta: {total: 0}}),
+    getSupportTicket: async () => ({data: {}}),
     ...overrides,
   }
 }
@@ -132,4 +134,81 @@ test('checks a named sender DNS user without requiring an entity keyword', async
 
   assert.equal(result.data.scope, undefined)
   assert.equal(result.data.user.companyName, 'Acme')
+})
+
+test('lists support tickets scoped by the active Facile customer', async () => {
+  let query
+  const result = await handleSendInItalyChat({
+    message: 'Mostrami i ticket aperti',
+    token: 'token',
+    context: {scope: {customerId: 'u1'}},
+    services: mockServices({
+      getSupportTickets: async options => {
+        query = options
+        return {
+          data: [
+            {
+              id: 42,
+              number: '42001',
+              title: 'Dominio non verificato',
+              state: 'open',
+              customer_id: 'u1',
+              customer: {company_name: 'Acme'},
+              clickup_task_id: 'task-7',
+            },
+          ],
+          meta: {total: 1},
+        }
+      },
+    }),
+  })
+
+  assert.equal(result.intent, 'sendinitaly-support-tickets')
+  assert.equal(query.customerId, 'u1')
+  assert.equal(query.state, 'open')
+  assert.equal(result.data.items[0].clickupLinked, true)
+  assert.deepEqual(result.data.actions[0].query, {customer_id: 'u1'})
+})
+
+test('resolves a named customer before reading its support tickets', async () => {
+  let customerId
+  const result = await handleSendInItalyChat({
+    message: 'Quali ticket di assistenza ha il cliente Acme?',
+    token: 'token',
+    services: mockServices({
+      getUsers: async ({search}) => {
+        assert.equal(search, 'Acme')
+        return {data: [{id: 'u1', company_name: 'Acme'}]}
+      },
+      getSupportTickets: async options => {
+        customerId = options.customerId
+        return {data: [], meta: {total: 0}}
+      },
+    }),
+  })
+
+  assert.equal(result.intent, 'sendinitaly-support-tickets')
+  assert.equal(customerId, 'u1')
+  assert.match(result.reply, /Acme/)
+})
+
+test('does not reuse a CRM page customer id as a Send in Italy customer id', async () => {
+  let customerId
+  await handleSendInItalyChat({
+    message: 'Mostrami i ticket Send in Italy',
+    token: 'token',
+    context: {
+      activeModuleId: 'facile.renewals',
+      section: 'crm.renewals',
+      scope: {customerId: 'crm-customer-1'},
+    },
+    services: mockServices({
+      getSupportTickets: async options => {
+        customerId = options.customerId
+        return {data: [], meta: {total: 0}}
+      },
+    }),
+  })
+
+  assert.equal(customerId, '')
 })

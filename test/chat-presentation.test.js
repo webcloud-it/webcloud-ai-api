@@ -16,6 +16,30 @@ test('builds navigable Send in Italy user cards without copying raw fields', () 
   assert.equal(JSON.stringify(presentation).includes('never-copy'), false)
 })
 
+test('builds sanitized Send in Italy support cards with customer navigation', () => {
+  const presentation = buildChatPresentation({
+    type: 'sendinitaly-support-tickets',
+    meta: {total: 1},
+    items: [
+      {
+        id: 42,
+        number: '42001',
+        title: 'Problema dominio',
+        state: 'open',
+        customerId: 'customer-1',
+        customerName: 'Acme',
+        clickupLinked: true,
+        upstreamToken: 'never-copy',
+      },
+    ],
+  })
+
+  assert.equal(presentation.kind, 'list')
+  assert.equal(presentation.cards[0].title, '#42001 Problema dominio')
+  assert.deepEqual(presentation.cards[0].action.query, {customer_id: 'customer-1'})
+  assert.equal(JSON.stringify(presentation).includes('never-copy'), false)
+})
+
 test('builds WebcamGo metrics and list cards with internal navigation', () => {
   const metrics = buildChatPresentation({type: 'webcam-summary', summary: {total: 10, online: 8, offline: 2}})
   assert.equal(metrics.kind, 'metrics')

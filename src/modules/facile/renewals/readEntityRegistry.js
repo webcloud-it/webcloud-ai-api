@@ -579,12 +579,24 @@ function buildSubscriptions({services = []} = {}) {
   const out = []
 
   for (const service of services) {
+    const usedSpace = Number(service?.pleskDomain?.statsDiskUsage?.totalSize || 0)
+    const spaceQuota = Number(service?.pleskDomain?.statsDiskUsage?.quota || 0)
+    const spacePercent = spaceQuota > 0 ? (usedSpace / spaceQuota) * 100 : null
+
     for (const sub of flattenAllSubscriptions(service)) {
       out.push({
         id: sub?.id || stableKey(service?.id, sub?.plan?.name, sub?.startsOn, sub?.endsOn),
         name: `${service?.name || 'Servizio'} · ${sub?.plan?.name || 'sottoscrizione'}`,
         kind: sub?.isSupplier === true ? 'supplier' : 'customer',
         service: {id: service?.id || null, name: service?.name || null},
+        domain: service?.domains_id
+          ? {id: service.domains_id.id || null, name: service.domains_id.name || null}
+          : null,
+        serviceHasPlesk: Boolean(service?.pleskDomain?.id),
+        serviceSpacePercent: spacePercent,
+        serviceSpaceFull: spacePercent !== null && spacePercent >= 100,
+        serviceDontRenew: service?.dontRenew === true,
+        serviceToTransfer: Boolean(service?.toTransfer),
         customer: service?.customer
           ? {id: service.customer.id || null, name: service.customer.name || null}
           : null,
@@ -1173,6 +1185,13 @@ const definitions = [
       kind: {type: 'string'},
       'service.id': {type: 'string', label: 'ID servizio', aggregateLabel: 'servizi distinti', aliases: ['id servizio', 'service id']},
       'service.name': {type: 'string', label: 'servizio', aliases: ['servizio', 'servizi']},
+      'domain.id': {type: 'string', label: 'ID dominio', aggregateLabel: 'domini distinti', aliases: ['id dominio', 'domain id']},
+      'domain.name': {type: 'string', label: 'dominio', aliases: ['dominio', 'domini', 'domain']},
+      serviceHasPlesk: {type: 'boolean', label: 'collegamento Plesk', aliases: ['collegato a Plesk', 'Plesk']},
+      serviceSpacePercent: {type: 'number', label: 'spazio utilizzato percentuale', aliases: ['spazio utilizzato', 'percentuale spazio', 'uso disco']},
+      serviceSpaceFull: {type: 'boolean', label: 'spazio esaurito', aliases: ['spazio esaurito', 'spazio pieno', 'disco pieno']},
+      serviceDontRenew: {type: 'boolean', label: 'non rinnovare', aliases: ['non rinnovare']},
+      serviceToTransfer: {type: 'boolean', label: 'da trasferire', aliases: ['da trasferire', 'trasferimento']},
       'customer.id': {type: 'string', label: 'ID cliente', aggregateLabel: 'clienti distinti', aliases: ['id cliente', 'customer id']},
       'customer.name': {type: 'string', label: 'cliente', aliases: ['cliente', 'clienti', 'azienda', 'aziende']},
       'group.id': {type: 'string', label: 'ID gruppo', aggregateLabel: 'gruppi distinti', aliases: ['id gruppo', 'group id']},
@@ -1192,6 +1211,7 @@ const definitions = [
       timeField: 'endsOn',
       relations: {
         services: {idField: 'service.id', labelField: 'service.name'},
+        domains: {idField: 'domain.id', labelField: 'domain.name'},
         providers: {
           idField: 'supplier.id',
           labelField: 'supplier.name',

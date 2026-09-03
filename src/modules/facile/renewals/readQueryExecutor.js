@@ -346,7 +346,15 @@ function aggregateRecords(records = [], plan = {}, fields = {}) {
         computeMetric(bucket.records, metric, fields),
       ])
     ),
-  }))
+  })).filter(row =>
+    (plan.having || []).every(filter =>
+      matchesFilter(
+        {value: row.metrics?.[filter.field]},
+        {...filter, field: 'value'},
+        {type: 'number'}
+      )
+    )
+  )
 
   return sortAggregateRows(rows, plan.sort || [], plan, fields)
 }

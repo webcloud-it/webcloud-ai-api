@@ -36,6 +36,31 @@ function list(title, cards, total = cards.length) {
 
 function sendInItalyPresentation(data) {
   const items = Array.isArray(data.data) ? data.data : []
+  if (data.type === 'sendinitaly-support-tickets' && Array.isArray(data.items)) {
+    return list(
+      'Ticket assistenza Send in Italy',
+      data.items.map(ticket => ({
+        id: text(ticket.id),
+        title: text(`#${ticket.number || ticket.id} ${ticket.title}`, 'Ticket'),
+        subtitle: text(ticket.customerName),
+        badge: text(ticket.state),
+        details: [
+          detail('Categoria', ticket.category),
+          detail('CRM', ticket.crmCustomerId),
+          detail('Sviluppo', ticket.clickupLinked ? 'ClickUp collegato' : null),
+          detail('Aggiornato', String(ticket.updatedAt || '').slice(0, 16).replace('T', ' ')),
+        ].filter(Boolean),
+        action: {
+          id: 'navigate',
+          label: 'Apri assistenza',
+          path: '/sendinitaly/support',
+          query: ticket.customerId ? {customer_id: text(ticket.customerId)} : {},
+        },
+      })),
+      data.meta?.total
+    )
+  }
+
   if (data.type === 'sendinitaly-campaigns') {
     return list('Campagne Send in Italy', items.map(item => ({
       id: text(item.id),

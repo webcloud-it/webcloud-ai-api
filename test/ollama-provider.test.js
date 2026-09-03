@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {callOllamaChat, checkOllamaReadiness} from '../src/core/providers/ollamaProvider.js'
+import {env} from '../src/config/env.js'
 
 test('chat usa il modello operativo senza thinking e lo mantiene caricato', async () => {
   let requestBody = null
@@ -19,7 +20,7 @@ test('chat usa il modello operativo senza thinking e lo mantiene caricato', asyn
   })
 
   assert.equal(content, 'risposta')
-  assert.equal(requestBody.model, 'qwen3.5:0.8b')
+  assert.equal(requestBody.model, env.ollamaChatModel)
   assert.equal(requestBody.think, false)
   assert.equal(requestBody.keep_alive, '10m')
 })

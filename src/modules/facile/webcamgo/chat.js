@@ -401,6 +401,10 @@ function formatListReply(payload = {}) {
   const offset = Number(payload.query?.offset || 0)
   const label = payload.query?.label || 'webcam'
 
+  if (payload.query?.countOnly === true) {
+    return `Ho trovato ${total} ${label}.`
+  }
+
   if (!total) {
     return `Non ho trovato ${label}.`
   }

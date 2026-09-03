@@ -90,6 +90,23 @@ const READ_QUERY_PLAN_OUTPUT_SCHEMA = Object.freeze({
         required: ['id', 'function', 'field'],
       },
     },
+    having: {
+      type: 'array',
+      maxItems: 4,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          field: {type: 'string'},
+          operator: {
+            type: 'string',
+            enum: ['equals', 'not-equals', 'in', 'between', 'gte', 'lte'],
+          },
+          value: {},
+        },
+        required: ['field', 'operator', 'value'],
+      },
+    },
     sort: {
       type: 'array',
       maxItems: 3,
@@ -113,6 +130,7 @@ const READ_QUERY_PLAN_OUTPUT_SCHEMA = Object.freeze({
     'filters',
     'groupBy',
     'metrics',
+    'having',
     'sort',
     'limit',
     'offset',
@@ -127,13 +145,21 @@ export function isAnalyticalReadQueryRequest(message = '') {
   const text = normalizeText(message)
   if (!text) return false
 
-  const analyticalText = text.replace(
-    /\b(?:piu|meno)\s+di\s+(?:un[oa]?|\d+)\s+(?:minut[oi]|or[ae]|giorn[oi]|settiman[ae]|mes[ei]|ann[oi])\b/gi,
-    ' '
-  )
+  const analyticalText = text
+    .replace(
+      /\b(?:piu|meno)\s+di\s+(?:un[oa]?|\d+)\s+(?:minut[oi]|or[ae]|giorn[oi]|settiman[ae]|mes[ei]|ann[oi])\b/gi,
+      ' '
+    )
+    .replace(
+      /\b(?:(?:i|le)\s+)?prim[ei]\s+(?:\d{1,2}|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)\b/gi,
+      ' '
+    )
 
   return (
     ANALYTICAL_READ_PATTERN.test(analyticalText) ||
+    Boolean(extractAggregateThreshold(text)) ||
+    /\bsia\s+(?:nel\s+)?20\d{2}\s+sia\s+(?:nel\s+)?20\d{2}\b/i.test(text) ||
+    /\b(?:quanti|quante|conteggio|numero)\b[\s\S]{0,100}\b(?:scad\w*|scadenz\w*|plesk|spazio|prezzo|rinnov\w*|trasfer\w*)\b/i.test(text) ||
     /\b(?:quanti|quante|conteggio|numero)\b[\s\S]{0,80}\bper\b/i.test(text) ||
     /\bper\b[\s\S]{0,80}\b(?:quanti|quante|conteggio|numero)\b/i.test(text)
   )
@@ -253,8 +279,14 @@ function extractAnalyticalLimit(message = '', definition = null) {
     : []
 
   for (const term of entityTerms) {
-    const match = text.match(new RegExp(`\\b(\\d{1,2})\\s+${escapeRegExp(term)}\\b`, 'i'))
-    if (match?.[1]) return Math.min(Math.max(Number(match[1]), 1), 50)
+    const match = text.match(
+      new RegExp(
+        `\\b(?:i|le|gli)?\\s*(\\d{1,2}|uno|un|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti)\\s+${escapeRegExp(term)}\\b`,
+        'i'
+      )
+    )
+    const parsed = parseLimitToken(match?.[1])
+    if (parsed) return parsed
   }
 
   return DEFAULT_READ_QUERY_LIMIT
@@ -330,6 +362,39 @@ function extractAnalyticalExclusion(message = '') {
   return cleanTarget(match?.[1] || '')
 }
 
+function extractAggregateThreshold(message = '') {
+  const text = normalizeText(message)
+  const match = text.match(
+    /\b(almeno|minimo|non\s+meno\s+di|al\s+massimo|massimo|non\s+piu\s+di)\s+(\d{1,4}|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti)\s+(?:servizi|sottoscrizioni|domini|piani|clienti|fornitori|gruppi)\b/i
+  )
+  const value = parseLimitToken(match?.[2]) || Number.parseInt(match?.[2] || '', 10)
+  if (!match || !Number.isFinite(value)) return null
+  return {
+    operator: /massimo|piu/i.test(match[1]) ? 'lte' : 'gte',
+    value,
+  }
+}
+
+function extractRequiredYears(message = '') {
+  const text = normalizeText(message)
+  const years = [...text.matchAll(/\b20\d{2}\b/g)].map(match => Number(match[0]))
+  const unique = [...new Set(years)]
+  return /\bsia\b[\s\S]{0,50}\bsia\b/i.test(text) && unique.length >= 2
+    ? unique
+    : []
+}
+
+function extractNamedComparisonValues(message = '') {
+  const text = normalizeText(message)
+  const match = text.match(/\bconfront\w*\s+(.+?)(?=\s+(?:per|in\s+base\s+a|sul|sulla|rispetto)\b|[?.!,;:]|$)/i)
+  if (!match?.[1]) return []
+  const values = match[1]
+    .split(/\s+(?:e|ed|con|vs|contro)\s+|\s*,\s*/i)
+    .map(cleanTarget)
+    .filter(value => value && !/^(?:i|le|gli|primi|prime|due|tre)$/i.test(value))
+  return values.length >= 2 && values.length <= 6 ? [...new Set(values)] : []
+}
+
 function findRelationalFact(definitions = [], target = null, measure = null) {
   if (!target || !measure) return null
 
@@ -353,8 +418,51 @@ function findRelationalFact(definitions = [], target = null, measure = null) {
     .sort((first, second) => second.score - first.score)[0] || null
 }
 
+function buildRelationalCountPlan(message = '', previousState = null) {
+  const text = normalizeText(message)
+  if (!/\b(?:quanti|quante|conteggio|numero)\b/i.test(text)) return null
+  if (/\b(?:confront\w*|piu|meno|maggior\w*|minor\w*|top|raggrupp\w*|per\s+(?:ciascun\w*|ogni))\b/i.test(text)) {
+    return null
+  }
+
+  const target = detectPrimaryEntity(text)
+  if (!target) return null
+  const fact = getReadEntityDefinitions().find(definition => {
+    const relation = definition.analytics?.relations?.[target.id]
+    return relation?.idField && definition.fields?.[relation.idField]
+  })
+  const relation = fact?.analytics?.relations?.[target.id]
+  if (!fact || !relation) return null
+
+  const filters = mergeAnalyticalFilters(
+    buildDeterministicFilters(fact.id, text),
+    relation.filters || []
+  )
+  if (!filters.length) return null
+
+  return {
+    type: 'read-query-plan',
+    operation: 'aggregate',
+    entity: fact.id,
+    filters,
+    groupBy: [],
+    metrics: [{id: 'count', function: 'count-distinct', field: relation.idField}],
+    having: [],
+    sort: [{field: 'count', direction: 'desc'}],
+    limit: 1,
+    offset: 0,
+    confidence: 1,
+    source: 'deterministic-analytical',
+    sourceMessage: message,
+    previousPlan: previousState?.plan || null,
+  }
+}
+
 function buildRelationalRankingPlan(message = '', previousState = null) {
   const text = normalizeText(message)
+  const aggregateThreshold = extractAggregateThreshold(text)
+  const namedComparisonValues = extractNamedComparisonValues(text)
+  const requiredYears = extractRequiredYears(text)
   const direction = /\b(?:meno|minor\w*|minim\w*)\b/i.test(text)
     ? 'asc'
     : /\b(?:piu|maggior\w*|massim\w*|top|prim[ei]\s+(?:\d{1,2}|[a-z]+))\b/i.test(text)
@@ -367,7 +475,7 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
     groupingMarkerIndex >= 0 &&
     /\b(?:quanti|quante|conteggio|numero|conta|raggrupp\w*)\b/i.test(text)
 
-  if (!direction && !asksRelationalGrouping) return null
+  if (!direction && !asksRelationalGrouping && !aggregateThreshold && !namedComparisonValues.length && !requiredYears.length) return null
 
   const definitions = getReadEntityDefinitions()
   const mentions = definitions
@@ -402,8 +510,25 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
         .filter(filter => filter.field !== dimension),
       relationalFact.targetRelation.filters || [],
       relationalFact.measureRelation.filters || [],
-      exclusion ? [{field: dimension, operator: 'not-equals', value: exclusion}] : []
+      exclusion ? [{field: dimension, operator: 'not-equals', value: exclusion}] : [],
+      namedComparisonValues.length
+        ? [{field: dimension, operator: 'in', value: namedComparisonValues}]
+        : []
     )
+
+    const metrics = [{
+      id: 'count',
+      function: 'count-distinct',
+      field: relationalFact.measureRelation.idField,
+    }]
+    const having = aggregateThreshold
+      ? [{field: 'count', operator: aggregateThreshold.operator, value: aggregateThreshold.value}]
+      : []
+
+    if (requiredYears.length) {
+      metrics.push({id: 'yearCount', function: 'count-distinct', field: 'expiryYear'})
+      having.push({field: 'yearCount', operator: 'gte', value: requiredYears.length})
+    }
 
     return {
       type: 'read-query-plan',
@@ -411,16 +536,15 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
       entity: relationalFact.definition.id,
       filters,
       groupBy: [dimension],
-      metrics: [{
-        id: 'count',
-        function: 'count-distinct',
-        field: relationalFact.measureRelation.idField,
-      }],
+      metrics,
+      having,
       sort: [
         {field: 'count', direction: direction || 'desc'},
         {field: dimension, direction: 'asc'},
       ],
-      limit: extractAnalyticalLimit(text, target),
+      limit: namedComparisonValues.length
+        ? namedComparisonValues.length
+        : extractAnalyticalLimit(text, target),
       offset: 0,
       confidence: 1,
       source: 'deterministic-analytical',
@@ -446,6 +570,9 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
     filters,
     groupBy: [dimension],
     metrics: [{id: 'count', function: 'count', field: null}],
+    having: aggregateThreshold
+      ? [{field: 'count', operator: aggregateThreshold.operator, value: aggregateThreshold.value}]
+      : [],
     sort: [
       {field: 'count', direction: direction || 'desc'},
       {field: dimension, direction: 'asc'},
@@ -462,6 +589,9 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
 function buildDeterministicAnalyticalPlan(message = '', previousState = null) {
   const text = normalizeText(message)
   if (!text || !isAnalyticalReadQueryRequest(text)) return null
+
+  const relationalCountPlan = buildRelationalCountPlan(message, previousState)
+  if (relationalCountPlan) return relationalCountPlan
 
   const relationalRankingPlan = buildRelationalRankingPlan(message, previousState)
   if (relationalRankingPlan) return relationalRankingPlan
@@ -635,6 +765,10 @@ function normalizeSemanticPlan(rawPlan = {}) {
         : normalizeSemanticField(entity, metric?.field),
   }))
   const metricIds = new Set(metrics.map(metric => metric.id))
+  const having = (Array.isArray(rawPlan.having) ? rawPlan.having : []).map(filter => ({
+    ...filter,
+    field: String(filter?.field || '').trim(),
+  }))
 
   const sort = (Array.isArray(rawPlan.sort) ? rawPlan.sort : []).map(entry => {
     const rawField = String(entry?.field || '').trim()
@@ -662,6 +796,7 @@ function normalizeSemanticPlan(rawPlan = {}) {
     filters,
     groupBy,
     metrics,
+    having,
     sort,
   }
 }
@@ -1155,6 +1290,14 @@ function buildDeterministicFilters(entityId, message = '') {
     } else if (/\bpiani base\b|\bpiano base\b/i.test(text)) {
       filters.push({field: 'plan.kind', operator: 'equals', value: 'base'})
     }
+
+    if (
+      /\b(?:senza|privi?\s+di)\s+(?:un\s+)?prezz[oi]\b|\bnon\s+(?:hanno|ha|hanno\s+un|ha\s+un)\s+prezz[oi]\b|\bprezz[oi]\s+(?:mancante|mancanti|assente|assenti|non configurat[oi])\b/i.test(
+        text
+      )
+    ) {
+      filters.push({field: 'price', operator: 'not-exists', value: null})
+    }
   }
 
   if (entityId === 'resources') {
@@ -1203,15 +1346,39 @@ function buildDeterministicFilters(entityId, message = '') {
       /\b(?:con|del|della|di)\s+(?:il\s+)?fornitore\s+(.+?)(?=\s+(?:che|nel|in scadenza|scadono)\b|$)/i,
       /\bfornitore\s+(.+)$/i,
     ])
-    if (supplier && !/^(?:cliente|fornitore|supplier|provider)$/i.test(supplier)) {
+    if (supplier && !/^(?:cliente|fornitore|supplier|provider|hanno|ha|che|sia)$/i.test(supplier)) {
       filters.push({field: 'supplier.name', operator: 'contains', value: supplier})
     }
 
     const plan = extractNamedAfter(text, [/\b(?:con|del)\s+piano\s+(.+)$/i])
     if (plan) filters.push({field: 'plan.name', operator: 'contains', value: plan})
 
-    if (year) {
+    const requiredYears = extractRequiredYears(text)
+    if (requiredYears.length) {
+      filters.push({field: 'expiryYear', operator: 'in', value: requiredYears})
+    } else if (year) {
       filters.push({field: 'endsOn', operator: 'between', value: yearRange(year)})
+    }
+
+    if (/\b(?:spazio|disco)\s+(?:esaurit[oa]|pien[oa])\b/i.test(text)) {
+      filters.push({field: 'serviceSpaceFull', operator: 'truthy', value: null})
+    }
+    const spaceThreshold = text.match(/\b(?:spazio|disco)[\s\S]{0,35}\b(?:oltre|piu\s+di|superiore\s+(?:a|al)|almeno)\s+(\d{1,3}(?:[.,]\d+)?)\s*%/i)
+    if (spaceThreshold?.[1]) {
+      filters.push({
+        field: 'serviceSpacePercent',
+        operator: 'gte',
+        value: Number(spaceThreshold[1].replace(',', '.')),
+      })
+    }
+    if (/\bnon\s+(?:sono\s+)?collegat[oi]\s+(?:a\s+)?plesk\b|\bsenza plesk\b/i.test(text)) {
+      filters.push({field: 'serviceHasPlesk', operator: 'falsey', value: null})
+    }
+    if (/\bnon rinnovare\b/i.test(text)) {
+      filters.push({field: 'serviceDontRenew', operator: 'truthy', value: null})
+    }
+    if (/\bda trasferire\b|\btrasferimento\b/i.test(text)) {
+      filters.push({field: 'serviceToTransfer', operator: 'truthy', value: null})
     }
   }
 
@@ -1469,6 +1636,7 @@ async function buildSemanticPlan({message, previousState, callLlm}) {
     'Le entità possono già contenere metriche derivate. Per esempio, se una entità espone un campo come numero servizi o numero piani, usalo direttamente invece di ricontare i record dell’entità.',
     'Non aggregare una entità per il suo stesso nome per contare gli elementi collegati: usa una metrica derivata disponibile oppure aggrega l’entità che rappresenta davvero gli elementi da contare.',
     'Per aggregate puoi usare groupBy con al massimo 2 campi e metrics con al massimo 4 metriche.',
+    'Per imporre soglie sui risultati aggregati usa having riferendoti all’id di una metrica, per esempio count >= 5. Non trasformare una soglia aggregata in limit.',
     'Funzioni metriche consentite: count, count-distinct, sum, avg, min, max.',
     'count non richiede field; count-distinct richiede un field; sum e avg richiedono campi number/number-array; min e max richiedono campi number/number-array/date.',
     'Nelle query aggregate sort può riferirsi soltanto a un campo di groupBy oppure all’id di una metrica.',
@@ -1484,7 +1652,7 @@ async function buildSemanticPlan({message, previousState, callLlm}) {
     entities: registrySummary,
     outputInstructions: [
       'Compila tutti i campi richiesti dallo schema strutturato.',
-      'Usa array vuoti per filters, groupBy, metrics e sort quando non servono.',
+      'Usa array vuoti per filters, groupBy, metrics, having e sort quando non servono.',
       'Per operation=unknown usa entity=null e gli array vuoti.',
     ],
     outputSchema: READ_QUERY_PLAN_OUTPUT_SCHEMA,

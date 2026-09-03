@@ -434,6 +434,11 @@ export function parsePleskAuditRequest(message = '') {
   const hasPlesk = /\bplesk\b/i.test(normalized)
   const hasAuditRequest = PLESK_AUDIT_REQUEST_PATTERN.test(normalized)
   const hasStrongFilter = PLESK_AUDIT_STRONG_FILTER_PATTERN.test(normalized)
+  const isReadAggregation =
+    /\b(?:quanti|quante|conteggio|numero)\b/i.test(normalized) &&
+    /\b(?:scad\w*|scadenz\w*|nel\s+20\d{2})\b/i.test(normalized)
+
+  if (isReadAggregation) return null
 
   if (!(hasPlesk && hasAuditRequest) && !hasStrongFilter) {
     return null

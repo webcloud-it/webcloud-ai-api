@@ -5,6 +5,14 @@ import {getClientSubscriptions, getServiceSpaceInfo} from './snapshots.js'
 const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 50
 
+const ITALIAN_LIMITS = new Map([
+  ['uno', 1], ['un', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4],
+  ['cinque', 5], ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10],
+  ['undici', 11], ['dodici', 12], ['tredici', 13], ['quattordici', 14],
+  ['quindici', 15], ['sedici', 16], ['diciassette', 17], ['diciotto', 18],
+  ['diciannove', 19], ['venti', 20],
+])
+
 const MONTHS = [
   {index: 0, names: ['gennaio', 'gen']},
   {index: 1, names: ['febbraio', 'feb']},
@@ -103,6 +111,13 @@ function clampLimit(value, fallback = DEFAULT_LIMIT) {
   return Math.min(Math.max(n, 1), MAX_LIMIT)
 }
 
+function parseLimitToken(value = '') {
+  const token = normalizeSearchText(value)
+  if (!token) return null
+  const parsed = /^\d+$/.test(token) ? Number(token) : ITALIAN_LIMITS.get(token)
+  return Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), MAX_LIMIT) : null
+}
+
 function isReservedBareServiceTerm(value = '') {
   const text = normalizeSearchText(value)
   if (!text) return true
@@ -191,6 +206,7 @@ function isTemporalOrOperationalTerm(value = '') {
   return (
     isOnlyYear ||
     isOnlyMonth ||
+    /^(?:nel|nell|in|entro|tra|fra|dal|dall|al)\b/.test(text) ||
     /\b(?:scadenza|scadenze|scade|scadono|scadra|scadranno|rinnovo|rinnovi|imminente|imminenti|servizio|servizi|dominio|domini)\b/.test(
       text
     )
@@ -199,11 +215,12 @@ function isTemporalOrOperationalTerm(value = '') {
 
 function extractLimit(message = '') {
   const text = normalizeSearchText(message)
+  const amount = '(\\d{1,2}|uno|un|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|undici|dodici|tredici|quattordici|quindici|sedici|diciassette|diciotto|diciannove|venti)'
 
   const morePatterns = [
-    /\b(?:mostramene|dammene|elencamene)\s+(?:altr[ei]\s+)?(\d{1,2})\b/i,
-    /\b(?:altr[ei]|successiv[ei]|prossim[ei]|seguent[ei])\s+(\d{1,2})\b/i,
-    /\b(?:mostra|mostrami|dammi|elenca|elencami)\s+(?:i\s+)?(?:successiv[ei]|prossim[ei]|altr[ei])\s+(\d{1,2})\b/i,
+    new RegExp(`\\b(?:mostramene|dammene|elencamene)\\s+(?:altr[ei]\\s+)?${amount}\\b`, 'i'),
+    new RegExp(`\\b(?:altr[ei]|successiv[ei]|prossim[ei]|seguent[ei])\\s+${amount}\\b`, 'i'),
+    new RegExp(`\\b(?:mostra|mostrami|dammi|elenca|elencami)\\s+(?:i\\s+)?(?:successiv[ei]|prossim[ei]|altr[ei])\\s+${amount}\\b`, 'i'),
   ]
 
   for (const pattern of morePatterns) {
@@ -211,7 +228,7 @@ function extractLimit(message = '') {
 
     if (match?.[1]) {
       return {
-        limit: clampLimit(match[1]),
+        limit: parseLimitToken(match[1]) || DEFAULT_LIMIT,
         offset: DEFAULT_LIMIT,
         requestedLimit: true,
         requestedAll: false,
@@ -221,15 +238,15 @@ function extractLimit(message = '') {
   }
 
   const patterns = [
-    /(?:fammi|dammi|mostrami|mostramene|elencami|voglio|solo|soltanto|al massimo|massimo|primi|prime|i primi|le prime)\s+(\d{1,2})\b/i,
-    /\b(\d{1,2})\s+(?:esempi|servizi|risultati|voci)\b/i,
+    new RegExp(`(?:fammi|dammi|mostrami|mostramene|elencami|voglio|solo|soltanto|al massimo|massimo|primi|prime|i primi|le prime)\\s+${amount}\\b`, 'i'),
+    new RegExp(`\\b${amount}\\s+(?:esempi|servizi|risultati|voci)\\b`, 'i'),
   ]
 
   for (const pattern of patterns) {
     const match = text.match(pattern)
     if (match?.[1]) {
       return {
-        limit: clampLimit(match[1]),
+        limit: parseLimitToken(match[1]) || DEFAULT_LIMIT,
         offset: 0,
         requestedLimit: true,
         requestedAll: false,
@@ -255,6 +272,12 @@ function extractLimit(message = '') {
     requestedAll: false,
     requestedMore: false,
   }
+}
+
+function isCountOnlyRequest(message = '') {
+  return /\b(?:quanti|quante|conta|conteggio|numero totale)\b/i.test(
+    normalizeSearchText(message)
+  )
 }
 
 function restoreDateRange(dateRange = null) {
@@ -737,6 +760,11 @@ function shouldIncludeDontRenew({message = '', filters = [], requestedAll = fals
   const dontRenewMode = getDontRenewInclusionMode(message)
 
   if (hasFilter(filters, 'dont-renew')) return true
+  if (
+    filters.some(filter =>
+      filter.kind === 'operational-flags-any' && filter.flags?.includes('dont-renew')
+    )
+  ) return true
   if (dontRenewMode === true) return true
   if (dontRenewMode === false) return false
   if (!isOperationalQuery(filters)) return true
@@ -941,9 +969,63 @@ function extractCustomerOrGroupExclusion(message = '') {
   return term
 }
 
+function detectAlternativeOperationalFlags(message = '') {
+  const text = normalizeSearchText(message)
+  const definitions = [
+    {kind: 'dont-renew', pattern: /\b(?:da\s+)?non\s+rinnovare\b/g},
+    {kind: 'to-renew', pattern: /\bda\s+rinnovare\b/g},
+    {kind: 'to-transfer', pattern: /\bda\s+(?:trasferire|migrare|spostare)\b/g},
+  ]
+  const mentions = definitions
+    .flatMap(definition => [...text.matchAll(definition.pattern)].map(match => ({
+      kind: definition.kind,
+      index: match.index,
+      end: match.index + match[0].length,
+    })))
+    .sort((first, second) => first.index - second.index)
+
+  for (let index = 0; index < mentions.length - 1; index += 1) {
+    const first = mentions[index]
+    const second = mentions[index + 1]
+    const connector = text.slice(first.end, second.index)
+
+    if (/\b(?:o|oppure)\b/.test(connector)) {
+      return [...new Set([first.kind, second.kind])]
+    }
+  }
+
+  return []
+}
+
+function detectSpaceUsageThreshold(message = '') {
+  const text = normalizeSearchText(message)
+  if (!/\b(?:spazio|quota|disco)\b/.test(text)) return null
+
+  const match = text.match(
+    /\b(?:oltre|piu\s+di|superiore\s+(?:a|al)|almeno)\s+(?:(?:il|lo|la)\s+)?(\d{1,3}(?:[.,]\d+)?)\s*%/
+  )
+  const threshold = Number(String(match?.[1] || '').replace(',', '.'))
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) return null
+
+  return {
+    kind: 'space-usage-gte',
+    label: `con spazio utilizzato almeno al ${threshold}%`,
+    threshold,
+  }
+}
+
 function detectBooleanFilters(message = '') {
   const text = normalizeSearchText(message)
   const filters = []
+  const alternativeFlags = detectAlternativeOperationalFlags(message)
+
+  if (alternativeFlags.length > 1) {
+    filters.push({
+      kind: 'operational-flags-any',
+      label: 'marcati con almeno uno dei flag richiesti',
+      flags: alternativeFlags,
+    })
+  }
 
   if (
     /\bspazio\b.{0,40}\b(esaurito|pieno|finito|satur[oa])\b|\bquota\b.{0,40}\b(esaurita|piena)\b|\b(esaurit[oa]|pien[oa]|finit[oa]|satur[oa])\b.{0,40}\b(spazio|quota|disco)\b/.test(
@@ -961,17 +1043,25 @@ function detectBooleanFilters(message = '') {
 
   if (
     /\bda non rinnovare\b|\bnon rinnovare\b|\bnon rinnovo\b/.test(text) &&
+    !alternativeFlags.includes('dont-renew') &&
     !hasExplicitDontRenewInclusion(message) &&
     !hasExplicitDontRenewExclusion(message)
   ) {
     filters.push({kind: 'dont-renew', label: 'marcati NON RINNOVARE'})
   }
 
-  if (/\bda rinnovare\b|\bto[_ -]?renew\b/.test(text) && !/\bnon rinnovare\b/.test(text)) {
+  if (
+    /\bda rinnovare\b|\bto[_ -]?renew\b/.test(text) &&
+    !alternativeFlags.includes('to-renew') &&
+    !/\bnon rinnovare\b/.test(text)
+  ) {
     filters.push({kind: 'to-renew', label: 'marcati DA RINNOVARE'})
   }
 
-  if (/\bda trasferire\b|\bda migrare\b|\bda spostare\b|\bto[_ -]?transfer\b/.test(text)) {
+  if (
+    /\bda trasferire\b|\bda migrare\b|\bda spostare\b|\bto[_ -]?transfer\b/.test(text) &&
+    !alternativeFlags.includes('to-transfer')
+  ) {
     filters.push({kind: 'to-transfer', label: 'marcati DA TRASFERIRE'})
   }
 
@@ -1043,6 +1133,9 @@ function detectBooleanFilters(message = '') {
     filters.push({kind: 'has-traffic', label: 'con traffico rilevato'})
   }
 
+  const spaceUsageThreshold = detectSpaceUsageThreshold(message)
+  if (spaceUsageThreshold) filters.push(spaceUsageThreshold)
+
   return filters
 }
 
@@ -1089,6 +1182,31 @@ function detectExpiryFilters(message = '', dateRange = null) {
   return filters
 }
 
+function detectScopedExpiryFilters(message = '') {
+  const text = normalizeSearchText(message)
+  const supplierYear = Number(
+    text.match(/\bscadenz[ae]\s+(?:del\s+)?(?:fornitore|supplier|provider)\b.{0,30}?\b(20\d{2})\b/)?.[1]
+  )
+  const customerYear = Number(
+    text.match(/\bscadenz[ae]\s+(?:del\s+)?cliente\b.{0,30}?\b(20\d{2})\b/)?.[1]
+  )
+
+  if (!Number.isFinite(supplierYear) || !Number.isFinite(customerYear)) return []
+
+  return [
+    {
+      kind: 'supplier-expires-in-range',
+      label: `con scadenza fornitore nel ${supplierYear}`,
+      dateRange: {...buildYearRange(supplierYear), label: `nel ${supplierYear}`},
+    },
+    {
+      kind: 'expires-in-range',
+      label: `con scadenza cliente nel ${customerYear}`,
+      dateRange: {...buildYearRange(customerYear), label: `nel ${customerYear}`},
+    },
+  ]
+}
+
 function filterService(service, filter, {settings, now}) {
   const analysisPeriod = Number(settings?.analysis_period ?? 30)
   const limitDate = new Date(now.getTime() + analysisPeriod * 864e5)
@@ -1101,6 +1219,15 @@ function filterService(service, filter, {settings, now}) {
       return space.isFull
     case 'space-low':
       return space.isLow && !space.isFull
+    case 'space-usage-gte':
+      return space.quota > 0 && space.percent >= Number(filter.threshold)
+    case 'operational-flags-any':
+      return (filter.flags || []).some(kind => {
+        if (kind === 'dont-renew') return isDontRenewService(service)
+        if (kind === 'to-renew') return service?.toRenew === true || service?.to_renew === true
+        if (kind === 'to-transfer') return Boolean(service?.toTransfer || service?.to_transfer)
+        return false
+      })
     case 'dont-renew':
       return isDontRenewService(service)
     case 'to-renew':
@@ -1174,7 +1301,13 @@ function filterService(service, filter, {settings, now}) {
 
 function buildFilters({message, settings, now}) {
   const dateRange = extractDateRange(message, now)
-  const filters = [...detectBooleanFilters(message), ...detectExpiryFilters(message, dateRange)]
+  const scopedExpiryFilters = detectScopedExpiryFilters(message)
+  const filters = [
+    ...detectBooleanFilters(message),
+    ...(scopedExpiryFilters.length
+      ? scopedExpiryFilters
+      : detectExpiryFilters(message, dateRange)),
+  ]
   const text = normalizeSearchText(message)
 
   const planTerm = extractPlanTerm(message)
@@ -1184,14 +1317,17 @@ function buildFilters({message, settings, now}) {
 
   const supplierTerm = extractSupplierTerm(message)
   if (/\b(fornitor[ei]|supplier|provider)\b/i.test(message)) {
-    filters.push({
-      kind: 'supplier',
-      label: supplierTerm ? `con fornitore contenente "${supplierTerm}"` : 'con fornitore',
-      term: supplierTerm,
-    })
+    if (supplierTerm || !isExplicitSupplierExpiryRequest(message)) {
+      filters.push({
+        kind: 'supplier',
+        label: supplierTerm ? `con fornitore contenente "${supplierTerm}"` : 'con fornitore',
+        term: supplierTerm,
+      })
+    }
   }
 
   if (
+    !scopedExpiryFilters.length &&
     dateRange &&
     /\b(fornitor[ei]|supplier|provider)\b/i.test(message) &&
     /\b(scadenza|scadenze|scade|scadono|scadra|scadranno)\b/.test(text)
@@ -1277,7 +1413,7 @@ function getPriority(service, filters, settings, now) {
   const nextCustomerExpiry = getNextCustomerExpiry(service, now)
   const expiredCustomerExpiry = getExpiredCustomerExpiry(service, now)
 
-  if (hasFilter(filters, 'space-full') && space.isFull) {
+  if (hasFilter(filters, 'space-full', 'space-usage-gte') && (space.isFull || space.percent > 0)) {
     return 'alta'
   }
 
@@ -1302,6 +1438,7 @@ function getPriority(service, filters, settings, now) {
       'dont-renew',
       'to-renew',
       'to-transfer',
+      'operational-flags-any',
       'no-plesk-sync',
       'missing-price',
       'billing'
@@ -1329,6 +1466,10 @@ function buildReason(service, filters, settings, now) {
     if (filter.kind === 'space-full') parts.push(`spazio esaurito (${space.percent.toFixed(1)}%)`)
     else if (filter.kind === 'space-low')
       parts.push(`spazio in esaurimento (${space.percent.toFixed(1)}%)`)
+    else if (filter.kind === 'space-usage-gte')
+      parts.push(`spazio utilizzato ${space.percent.toFixed(1)}%`)
+    else if (filter.kind === 'operational-flags-any')
+      parts.push('corrisponde ad almeno uno dei flag richiesti')
     else if (filter.kind === 'expiring' && nextCustomerExpiry)
       parts.push(`scadenza ${formatDate(nextCustomerExpiry)}`)
     else if (filter.kind === 'expired' && expiredCustomerExpiry)
@@ -1497,7 +1638,7 @@ function groupServiceListItems(items = []) {
 
 function sortServices(services, filters, settings, now) {
   return [...services].sort((a, b) => {
-    if (hasFilter(filters, 'space-full', 'space-low', 'has-traffic')) {
+    if (hasFilter(filters, 'space-full', 'space-low', 'space-usage-gte', 'has-traffic')) {
       const sa = getServiceSpaceInfo(a, settings?.renewals_low_thresholds || [])
       const sb = getServiceSpaceInfo(b, settings?.renewals_low_thresholds || [])
 
@@ -1634,6 +1775,7 @@ export function parseServiceListQuery({
 
   const limitInfo = extractLimit(pagination ? message : paginationMessage || message)
   const filters = buildFilters({message, settings, now})
+  const countOnly = !pagination && isCountOnlyRequest(message)
 
   if (pagination) {
     return {
@@ -1647,6 +1789,7 @@ export function parseServiceListQuery({
       requestedMore: pagination.direction === 'next',
       requestedPrevious: pagination.direction === 'previous',
       requestedFirst: pagination.direction === 'first',
+      countOnly: false,
       sourceMessage: compactText(message),
     }
   }
@@ -1662,6 +1805,7 @@ export function parseServiceListQuery({
     requestedMore: limitInfo.requestedMore,
     requestedPrevious: false,
     requestedFirst: false,
+    countOnly,
     sourceMessage: compactText(message),
   }
 }
@@ -1718,8 +1862,10 @@ export function buildServiceListPayload({
     buildServiceItem(service, {filters: query.filters, settings, now})
   )
   const groupedItems = groupServiceListItems(rawItems)
-  const items = groupedItems.slice(query.offset, query.offset + query.limit)
-  const hasMore = groupedItems.length > query.offset + items.length
+  const items = query.countOnly
+    ? []
+    : groupedItems.slice(query.offset, query.offset + query.limit)
+  const hasMore = query.countOnly ? false : groupedItems.length > query.offset + items.length
   const previousOffset = query.offset > 0 ? Math.max(query.offset - query.limit, 0) : null
   const nextOffset = hasMore ? query.offset + items.length : null
   const emptySuggestion =
@@ -1761,6 +1907,8 @@ export function buildServiceListPayload({
         kind: filter.kind,
         label: filter.label,
         term: filter.term || null,
+        threshold: Number.isFinite(Number(filter.threshold)) ? Number(filter.threshold) : null,
+        flags: Array.isArray(filter.flags) ? [...filter.flags] : null,
         dateRange: filter.dateRange
           ? {
               label: filter.dateRange.label,
@@ -1776,6 +1924,7 @@ export function buildServiceListPayload({
       requestedMore: query.requestedMore,
       requestedPrevious: query.requestedPrevious,
       requestedFirst: query.requestedFirst === true,
+      countOnly: query.countOnly === true,
       sourceMessage: query.sourceMessage,
     },
     totale: matched.length,

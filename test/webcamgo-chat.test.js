@@ -166,6 +166,16 @@ test('usa la webcam aperta invece di interpretare i campi richiesti come nome', 
   assert.equal(result.data.item.id, 'cam-1')
 })
 
+test('estrae il nome dopo una lista di stati tecnici', () => {
+  const result = handleWebcamgoChat({
+    message: 'Qual è lo stato di stream, snapshot e router della webcam Asiago Piazza Carli?',
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-detail')
+  assert.equal(result.data.item.id, 'cam-2')
+})
+
 test('apre la webcam corrente con un pronome', () => {
   const result = handleWebcamgoChat({
     message: 'aprila',
@@ -249,7 +259,25 @@ test('comprende le negazioni con il verbo essere nei filtri di configurazione', 
   assert.deepEqual(notInUse.data.query.filters, ['not-in-use', 'offline'])
   assert.deepEqual(notInUse.data.items.map(item => item.id), ['cam-4'])
   assert.deepEqual(unmonitored.data.query.filters, ['unmonitored'])
-  assert.deepEqual(unmonitored.data.items.map(item => item.id), ['cam-4'])
+  assert.equal(unmonitored.data.query.countOnly, true)
+  assert.equal(unmonitored.data.totale, 1)
+  assert.deepEqual(unmonitored.data.items, [])
+})
+
+test('combina VPN presente e MikroTik assente senza perdere la negazione', () => {
+  const vpnOnly = webcam('cam-vpn', 'VPN senza router', 'vpn-senza-router')
+  vpnOnly.vpn = true
+  const vpnAndRouter = webcam('cam-router', 'VPN con router', 'vpn-con-router')
+  vpnAndRouter.vpn = true
+  vpnAndRouter.hasMikrotik = true
+
+  const result = handleWebcamgoChat({
+    message: 'Quali webcam hanno la VPN ma non MikroTik?',
+    webcams: [vpnOnly, vpnAndRouter],
+  })
+
+  assert.deepEqual(result.data.query.filters, ['vpn', 'no-mikrotik'])
+  assert.deepEqual(result.data.items.map(item => item.id), ['cam-vpn'])
 })
 
 test('tratta prime cinque webcam come nuova lista limitata e non come paginazione', () => {
@@ -261,6 +289,44 @@ test('tratta prime cinque webcam come nuova lista limitata e non come paginazion
   assert.equal(result.intent, 'webcam-list')
   assert.equal(result.data.query.limit, 5)
   assert.deepEqual(result.data.query.filters, ['snapshot-offline'])
+})
+
+test('una nuova lista con primi cinque sostituisce la lista precedente', () => {
+  const history = [{
+    role: 'assistant',
+    data: {
+      type: 'webcam-list',
+      query: {filters: ['unmonitored'], filterMode: 'all', limit: 20, offset: 0},
+      items: [],
+      shown: 0,
+      hasMore: false,
+    },
+  }]
+  const result = handleWebcamgoChat({
+    message: 'Mostrami le prime cinque webcam con snapshot non online.',
+    webcams,
+    history,
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.deepEqual(result.data.query.filters, ['snapshot-offline'])
+  assert.equal(result.data.query.limit, 5)
+})
+
+test('le domande di conteggio non vengono forzate sul dettaglio della webcam aperta', () => {
+  const scheduled = webcam('cam-scheduled', 'Con downtime', 'con-downtime')
+  scheduled.downtime = {configured: true, enabledCount: 1, active: false, activeSchedule: null}
+  const result = handleWebcamgoChat({
+    message: 'Quante webcam hanno un downtime programmato?',
+    webcams: [...webcams, scheduled],
+    context: {activeEntity: {type: 'webcam', id: 'cam-1', slug: 'le-melette'}},
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.equal(result.data.query.countOnly, true)
+  assert.equal(result.data.totale, 1)
+  assert.deepEqual(result.data.items, [])
+  assert.match(result.reply, /Ho trovato 1 webcam/)
 })
 
 test('interpreta ferme come anomalie correnti e mostra da quando sono iniziate', () => {
@@ -304,6 +370,18 @@ test('filtra lo storico per interruzioni superiori alla durata richiesta', () =>
   assert.equal(result.data.totale, 1)
   assert.equal(result.data.items[0].id, 'cam-1')
   assert.equal(result.data.items[0].longestDurationMs, 3.5 * 60 * 60 * 1000)
+})
+
+test('la durata esplicita ha precedenza sul generico periodo storico', () => {
+  const now = new Date('2026-08-12T12:00:00.000Z')
+  const request = parseWebcamHistoryRequest(
+    'Quali webcam sono state offline per più di 2 ore negli ultimi 30 giorni?',
+    now
+  )
+
+  assert.equal(request.type, 'outage-duration')
+  assert.equal(request.minimumDurationMs, 2 * 60 * 60 * 1000)
+  assert.equal(request.since.toISOString(), '2026-07-13T12:00:00.000Z')
 })
 
 test('analizza anomalie ricorrenti, unisce gli stati simultanei e trova fattori comuni', () => {

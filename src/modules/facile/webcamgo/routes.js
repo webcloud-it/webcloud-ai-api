@@ -60,7 +60,7 @@ export async function chat(req, res) {
     /\b(?:webcam|telecamera)\b/i.test(normalizedMessage) &&
     !/\b(?:snapshot|fotogramma|immagine|preset|ptz|riavvia|reboot|diagnostica|connettivit[aà]|stato|stream|router|mikrotik)\b/i.test(normalizedMessage)
   const includeDowntime = /\b(?:downtime|spegniment[oi]|pianificazion[ei]|riepilogo|riassunto|panoramica|stato generale)\b/i.test(normalizedMessage)
-  const preliminaryListQuery = /\b(?:quali|elenca|elencami|lista|mostra|mostrami)\b/i.test(normalizedMessage)
+  const preliminaryListQuery = /\b(?:quali|quante|quanti|conta|conteggio|elenca|elencami|lista|mostra|mostrami)\b/i.test(normalizedMessage)
     ? parseListQuery(normalizedMessage)
     : null
   const preliminaryDetailTarget = /\b(?:dettagli?|scheda|informazioni|info|stat[oi]|situazione|come\s+sta|approfondisci|analizza|controlla|verifica)\b/i.test(normalizedMessage)

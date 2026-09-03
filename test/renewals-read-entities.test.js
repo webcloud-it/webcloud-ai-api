@@ -877,6 +877,24 @@ test('planner analitico: il limite primi non inverte una richiesta dei gruppi co
   assert.equal(plan.sort[0].direction, 'asc')
 })
 
+test('planner analitico: comprende il limite naturale prima del nome entità', async () => {
+  const plan = await planReadQuery({
+    message: 'Quali sono i cinque fornitori con più servizi?',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.limit, 5)
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+})
+
+test('planner: una semplice lista limitata di servizi resta sul fast path', () => {
+  assert.equal(
+    isAnalyticalReadQueryRequest('Mostrami i primi cinque servizi in scadenza a ottobre.'),
+    false
+  )
+})
+
 test('planner analitico: conta servizi distinti sulla relazione richiesta per ciascun fornitore', async () => {
   const plan = await planReadQuery({
     message: 'Quanti servizi scadono nel 2027 per ciascun fornitore?',
@@ -1004,6 +1022,18 @@ test('planner: prezzi degli add-on nel listino', async () => {
   assert.deepEqual(plan.filters, [
     {field: 'priceListVersion.version', operator: 'equals', value: 2026},
     {field: 'plan.kind', operator: 'equals', value: 'addon'},
+  ])
+})
+
+test('planner: piani senza prezzo applica realmente il filtro al catalogo', async () => {
+  const plan = await planReadQuery({
+    message: 'Quali piani non hanno un prezzo configurato?',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'plan-prices')
+  assert.deepEqual(plan.filters, [
+    {field: 'price', operator: 'not-exists', value: null},
   ])
 })
 

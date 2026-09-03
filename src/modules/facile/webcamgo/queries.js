@@ -51,7 +51,9 @@ const FILTER_LABELS = {
   'in-use': 'webcam in uso',
   'not-in-use': 'webcam non in uso',
   vpn: 'webcam VPN',
+  'no-vpn': 'webcam senza VPN',
   mikrotik: 'webcam con MikroTik',
+  'no-mikrotik': 'webcam senza MikroTik',
   reseller: 'webcam reseller',
   encoding: 'webcam con encoding',
   monitored: 'webcam monitorate',
@@ -234,10 +236,22 @@ function parseFilters(message = '') {
 
   if (/\breseller\b/i.test(text)) filters.push('reseller')
   if (/\bencoding\b/i.test(text)) filters.push('encoding')
-  if (/\b(vpn)\b/i.test(text)) filters.push('vpn')
-  if (/\bmikrotik\b/i.test(text) && !filters.includes('mikrotik-offline')) filters.push('mikrotik')
+  if (/\b(?:senza|non\s+(?:hanno|ha|con|usano|usa)?)\s*(?:la\s+)?vpn\b/i.test(text)) {
+    filters.push('no-vpn')
+  } else if (/\bvpn\b/i.test(text)) {
+    filters.push('vpn')
+  }
 
-  if (/\b(snapshot abilitato|snapshot abilitate|con snapshot)\b/i.test(text)) {
+  if (/\b(?:senza|non\s+(?:hanno|ha|con|usano|usa)?)\s*(?:il\s+)?mikrotik\b/i.test(text)) {
+    filters.push('no-mikrotik')
+  } else if (/\bmikrotik\b/i.test(text) && !filters.includes('mikrotik-offline')) {
+    filters.push('mikrotik')
+  }
+
+  if (
+    /\b(snapshot abilitato|snapshot abilitate|con snapshot)\b/i.test(text) &&
+    !filters.includes('snapshot-offline')
+  ) {
     filters.push('snapshot')
   }
 
@@ -352,6 +366,9 @@ export function parseListQuery(message = '', previousQuery = null, pagination = 
     includeStatusSince: /\b(?:da\s+quando|da\s+quanto(?:\s+tempo)?)\b/i.test(
       normalizeSearchText(message)
     ),
+    countOnly: /\b(?:quante|quanti|conta|conteggio|numero totale)\b/i.test(
+      normalizeSearchText(message)
+    ),
     limit,
     offset: 0,
     sourceMessage: String(message || '').trim(),
@@ -384,8 +401,12 @@ function matchesFilters(webcam, filters = [], filterMode = 'all') {
         return !webcam.inUse
       case 'vpn':
         return webcam.vpn
+      case 'no-vpn':
+        return !webcam.vpn
       case 'mikrotik':
         return webcam.hasMikrotik
+      case 'no-mikrotik':
+        return !webcam.hasMikrotik
       case 'reseller':
         return Boolean(webcam.reseller)
       case 'encoding':
@@ -465,7 +486,7 @@ export function buildWebcamListPayload({webcams = [], query = {}} = {}) {
 
   const offset = Math.max(Number(query.offset || 0), 0)
   const limit = clampLimit(query.limit, DEFAULT_LIMIT)
-  const page = filtered.slice(offset, offset + limit)
+  const page = query.countOnly ? [] : filtered.slice(offset, offset + limit)
   const shown = page.length
 
   return {
@@ -478,7 +499,7 @@ export function buildWebcamListPayload({webcams = [], query = {}} = {}) {
     },
     totale: filtered.length,
     shown,
-    hasMore: offset + shown < filtered.length,
+    hasMore: query.countOnly ? false : offset + shown < filtered.length,
     nextOffset: offset + shown,
     previousOffset: offset > 0 ? Math.max(offset - limit, 0) : null,
     items: page.map((webcam, index) => ({
@@ -721,6 +742,30 @@ function parseHistorySince(text = '', now = new Date(), fallbackMonths = 1) {
 
 export function parseWebcamHistoryRequest(message = '', now = new Date()) {
   const text = normalizeSearchText(message)
+  const duration = text.match(
+    /\b(?:piu di|oltre|almeno)\s+(\d+|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|dodici|ventiquattro|trenta)\s*(minut[oi]|or[ae]|giorn[oi])\b/i
+  )
+
+  if (duration && /\b(?:offline|non online|fuori linea)\b/i.test(text)) {
+    const amount = parseNumber(duration[1])
+    const unit = duration[2]
+
+    if (amount) {
+      const minimumDurationMs = amount * (
+        unit.startsWith('minut') ? 60 * 1000 : unit.startsWith('giorn') ? DAY_MS : HOUR_MS
+      )
+      const since = parseHistorySince(text, now, 1)
+
+      return {
+        type: 'outage-duration',
+        statusType: 'stream',
+        minimumDurationMs,
+        since,
+        fetchSince: since,
+        limit: extractLimit(message),
+      }
+    }
+  }
 
   const anomalySubject = /\b(?:anomali\w*|problem\w*|interruzion\w*|offline|fuori linea)\b/i.test(text)
   const historicalAnalysis = /\b(?:ricorrent\w*|ripetut\w*|frequent\w*|piu volte|cosa (?:hanno|c'e|ce) in comune|punti? in comune|ultim\w*\s+(?:\d+|un\w*|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|dodici|ventiquattro|trenta)?\s*(?:ore|giorni|settimane|mesi|anni))\b/i.test(text)
@@ -748,28 +793,7 @@ export function parseWebcamHistoryRequest(message = '', now = new Date()) {
     }
   }
 
-  const duration = text.match(
-    /\b(?:piu di|oltre|almeno)\s+(\d+|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|dodici|ventiquattro|trenta)\s*(minut[oi]|or[ae]|giorn[oi])\b/i
-  )
-  if (!duration || !/\b(?:offline|non online|fuori linea)\b/i.test(text)) return null
-
-  const amount = parseNumber(duration[1])
-  const unit = duration[2]
-  if (!amount) return null
-
-  const minimumDurationMs = amount * (
-    unit.startsWith('minut') ? 60 * 1000 : unit.startsWith('giorn') ? DAY_MS : HOUR_MS
-  )
-  const since = parseHistorySince(text, now, 1)
-
-  return {
-    type: 'outage-duration',
-    statusType: 'stream',
-    minimumDurationMs,
-    since,
-    fetchSince: since,
-    limit: extractLimit(message),
-  }
+  return null
 }
 
 function currentStatusForType(webcam = {}, type = '') {
@@ -1179,8 +1203,8 @@ export function extractDetailTarget(message = '') {
   )
 
   return (
-    cleanWebcamTarget(match?.[1]) ||
     cleanWebcamTarget(statusSubject?.[1]) ||
+    cleanWebcamTarget(match?.[1]) ||
     cleanWebcamTarget(extractEntityTarget(message)) ||
     null
   )
@@ -1203,7 +1227,7 @@ export function detectIntent(message = '', {previousList = null, hasActiveEntity
   const explicitNewList =
     parseFilters(message).length > 0 ||
     /\b(?:webcam|telecamer[ae])\b/i.test(text)
-  if (pagination && (Boolean(previousList) || !explicitNewList)) return 'webcam-list-pagination'
+  if (pagination && !explicitNewList) return 'webcam-list-pagination'
   if (parseReferenceRequest(message, {hasPreviousList: Boolean(previousList)})) return 'webcam-reference'
   if (historyRequest?.type === 'latest-offline') return 'webcam-latest-offline'
   if (historyRequest?.type === 'outage-duration') return 'webcam-outage-history'
@@ -1214,7 +1238,7 @@ export function detectIntent(message = '', {previousList = null, hasActiveEntity
   if (
     hasActiveEntity &&
     /\b(?:stream|snapshot|connettivit[aà]|router|mikrotik|vpn|encoding|hardware|monitoraggio|downtime)\b/i.test(text) &&
-    !/\b(?:quali|elenca|elencami|lista|tutte|tutti|le\s+webcam|webcam\s+(?:con|che))\b/i.test(text)
+    !/\b(?:quali|quante|quanti|conta|conteggio|elenca|elencami|lista|tutte|tutti|le\s+webcam|webcam\s+(?:con|che))\b/i.test(text)
   ) {
     return 'webcam-detail'
   }

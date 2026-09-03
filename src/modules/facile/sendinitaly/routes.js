@@ -33,11 +33,14 @@ export async function chat(req, res) {
   if (message.length < 2) throw httpError(400, 'message obbligatorio, minimo 2 caratteri')
 
   const startedAt = Date.now()
-  const result = await handleSendInItalyChat({message, token: req.auth.token})
+  const result = await handleSendInItalyChat({
+    message,
+    token: req.auth.token,
+    context: req.body?.context || {},
+  })
 
   res.json({
     ...result,
     meta: {...result.meta, timings: {totalMs: Date.now() - startedAt}},
   })
 }
-

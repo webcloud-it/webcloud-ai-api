@@ -3,7 +3,8 @@ import {callOllamaJson} from '../providers/ollamaProvider.js'
 const MODULES = {
   'facile.renewals': 'CRM, clienti, gruppi, servizi, domini, piani, fornitori, Plesk, fatture, scadenze e rinnovi',
   'facile.webcamgo': 'webcam, stream, snapshot, router, connettività, MikroTik, PTZ, preset, diagnostica, monitoraggio e downtime',
-  'facile.sendinitaly': 'utenti, campagne, newsletter, invii, mittenti, piani e statistiche Send in Italy',
+  'facile.sendinitaly':
+    'utenti, campagne, newsletter, invii, mittenti, piani, statistiche e ticket assistenza Send in Italy',
   'facile.businesshours': 'orari, aperture e chiusure dei minisiti',
   'facile.asiago': 'eventi, contenuti, articoli, minisiti, bollettino neve, listini e redirect di Asiago.it',
   'facile.webcloud': 'asset WAM, cache Cloudflare, festività, assenze, automazioni e stato operativo del chatbot',

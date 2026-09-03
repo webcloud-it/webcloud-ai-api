@@ -83,6 +83,18 @@ const CAPABILITIES = [
     description: 'Campagne, stato degli invii, statistiche, utenti, piani e utilizzo della piattaforma.',
   },
   {
+    id: 'facile.sendinitaly.support.read',
+    version: 1,
+    moduleId: 'facile.sendinitaly',
+    domain: 'sendinitaly',
+    credential: 'specialk',
+    mode: 'read',
+    risk: 'low',
+    title: 'Consultazione assistenza Send in Italy',
+    description:
+      'Elenca e filtra i ticket Zammad, con contesto cliente CRM e stato escalation ClickUp, senza esporre credenziali helpdesk.',
+  },
+  {
     id: 'facile.asiago.read',
     version: 1,
     moduleId: 'facile.asiago',

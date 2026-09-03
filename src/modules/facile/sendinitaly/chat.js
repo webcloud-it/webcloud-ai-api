@@ -4,7 +4,15 @@ import {
   isOpenEntityRequest,
   resolveNamedEntity,
 } from '../../../core/entities/entityResolver.js'
-import {getCampaigns, getCampaignStats, getUser, getUserDnsStatus, getUserPlans, getUsers} from './service.js'
+import {
+  getCampaigns,
+  getCampaignStats,
+  getSupportTickets,
+  getUser,
+  getUserDnsStatus,
+  getUserPlans,
+  getUsers,
+} from './service.js'
 
 function extractQuotedValue(message = '') {
   return String(message).match(/["“”']([^"“”']{2,80})["“”']/)?.[1]?.trim() || ''
@@ -45,6 +53,66 @@ function extractDnsUserTarget(message = '') {
     .trim()
 
   return text
+}
+
+function parseSupportState(text = '') {
+  if (/chius|risolt|complet/.test(text)) return 'closed'
+  if (/in attesa|pending/.test(text)) return 'pending'
+  if (/nuov/.test(text)) return 'new'
+  if (/apert|attiv|da gestire/.test(text)) return 'open'
+  return ''
+}
+
+function extractSupportUserTarget(message = '') {
+  const quoted = extractQuotedValue(message)
+  if (quoted) return quoted
+
+  return String(message)
+    .replace(/\b(?:ticket|assistenza|supporto|richiest[ae])\b/gi, ' ')
+    .replace(/\b(?:apert[oi]?|chius[oi]?|nuov[oi]?|pending|in attesa|attiv[oi]?)\b/gi, ' ')
+    .replace(/\b(?:mostra|elenca|cerca|trova|vedere|fammi vedere|quali|ha|hanno|il|lo|la|i|gli|le|del|della|di|per)\b/gi, ' ')
+    .replace(/\b(?:client[ei]?|utent[ei]?|azienda|account)\b/gi, ' ')
+    .replace(/\b(?:su|di)\s+send\s*in\s*italy\b/gi, ' ')
+    .replace(/[?.!,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function sanitizeSupportTicket(ticket = {}) {
+  const scalar = value => {
+    if (value == null) return null
+    if (typeof value === 'object') return value.name || value.label || value.id || null
+    return String(value)
+  }
+
+  return {
+    id: ticket.id || null,
+    number: ticket.number || null,
+    title: ticket.title || 'Ticket senza titolo',
+    state: scalar(ticket.state),
+    category: scalar(ticket.category),
+    customerId: ticket.customer_id || null,
+    customerName: ticket.customer?.company_name || ticket.customer?.email || null,
+    crmCustomerId: ticket.crm_customer_id || null,
+    clickupLinked: Boolean(ticket.clickup_task_id),
+    updatedAt: ticket.updated_at || null,
+  }
+}
+
+function formatSupportTickets(payload = {}) {
+  const items = (Array.isArray(payload.data) ? payload.data : []).map(sanitizeSupportTicket)
+  const total = Number(payload.meta?.total ?? items.length)
+
+  if (!items.length) return {items, reply: 'Non ho trovato ticket di assistenza corrispondenti.'}
+
+  const lines = items.slice(0, 20).map((ticket, index) => {
+    const customer = ticket.customerName ? ` — ${ticket.customerName}` : ''
+    const state = ticket.state ? ` [${ticket.state}]` : ''
+    const clickup = ticket.clickupLinked ? ' — ClickUp collegato' : ''
+    return `${index + 1}. #${ticket.number || ticket.id} ${ticket.title}${customer}${state}${clickup}`
+  })
+
+  return {items, reply: [`Ho trovato ${total} ticket di assistenza.`, ...lines].join('\n')}
 }
 
 async function resolveUser({target, token, services}) {
@@ -209,7 +277,20 @@ function formatStats(payload = {}, mode) {
   ].join('\n')
 }
 
-export async function handleSendInItalyChat({message, token, services = {getCampaigns, getCampaignStats, getUsers, getUserPlans, getUser, getUserDnsStatus}} = {}) {
+export async function handleSendInItalyChat({
+  message,
+  token,
+  context = {},
+  services = {
+    getCampaigns,
+    getCampaignStats,
+    getUsers,
+    getUserPlans,
+    getUser,
+    getUserDnsStatus,
+    getSupportTickets,
+  },
+} = {}) {
   const text = normalizeText(message)
   const search = extractQuotedValue(message)
 
@@ -290,13 +371,83 @@ export async function handleSendInItalyChat({message, token, services = {getCamp
     return {ok: true, intent: 'sendinitaly-dns-status', source: 'tool-fast', reply, data: {type: 'sendinitaly-dns-status', scope: 'all-users', items, actions: [{id: 'navigate', label: 'Apri utenti', path: '/sendinitaly/users'}]}, meta: {moduleId: 'facile.sendinitaly'}}
   }
 
-  if (/\b(dettaglio|scheda|situazione|stato)\b/.test(text) && /\b(utent[ei]?|account|azienda|cliente)\b/.test(text)) {
+  if (
+    /\b(dettaglio|scheda|situazione|stato)\b/.test(text) &&
+    /\b(utent[ei]?|account|azienda|cliente)\b/.test(text) &&
+    !/\b(ticket|assistenza|supporto)\b/.test(text)
+  ) {
     const target = extractUserTarget(message)
     const resolution = await resolveUser({target, token, services})
     if (resolution.status !== 'resolved') return {ok: true, intent: 'clarification', source: 'tool-fast', reply: userClarification(resolution, target), data: {type: 'clarification', reason: `sendinitaly-user-${resolution.status}`}, meta: {moduleId: 'facile.sendinitaly'}}
     const payload = await services.getUser({token, userId: resolution.item.id})
     const user = sanitizeUserDetail(payload?.data || {})
     return {ok: true, intent: 'sendinitaly-user-detail', source: 'tool-fast', reply: formatUserDetail(user), data: {type: 'sendinitaly-user-detail', user, actions: [{id: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(String(user.id))}`}]}, meta: {moduleId: 'facile.sendinitaly'}}
+  }
+
+  if (/\b(ticket|assistenza|supporto)\b/.test(text)) {
+    const state = parseSupportState(text)
+    const hasModuleContext = Boolean(context?.activeModuleId || context?.section)
+    const isSendInItalyContext =
+      !hasModuleContext ||
+      context?.activeModuleId === 'facile.sendinitaly' ||
+      String(context?.section || '').startsWith('sendinitaly')
+    let customerId = isSendInItalyContext
+      ? context?.scope?.customerId || context?.customerId || ''
+      : ''
+    let customer = null
+    const namesCustomer = /\b(client[ei]?|utent[ei]?|azienda|account)\b/.test(text)
+
+    if (!customerId && namesCustomer) {
+      const target = extractSupportUserTarget(message)
+      const resolution = await resolveUser({target, token, services})
+      if (resolution.status !== 'resolved') {
+        return {
+          ok: true,
+          intent: 'clarification',
+          source: 'tool-fast',
+          reply: userClarification(resolution, target),
+          data: {type: 'clarification', reason: `sendinitaly-user-${resolution.status}`},
+          meta: {moduleId: 'facile.sendinitaly'},
+        }
+      }
+      customer = resolution.item
+      customerId = resolution.item.id
+    }
+
+    const search = !customerId && !namesCustomer ? extractQuotedValue(message) : ''
+    const payload = await services.getSupportTickets({
+      token,
+      customerId,
+      state,
+      search,
+      perPage: 25,
+    })
+    const formatted = formatSupportTickets(payload)
+    const query = customerId ? {customer_id: String(customerId)} : {}
+
+    return {
+      ok: true,
+      intent: 'sendinitaly-support-tickets',
+      source: 'tool-fast',
+      reply: customer?.company_name
+        ? `Ticket di ${customer.company_name}.\n${formatted.reply}`
+        : formatted.reply,
+      data: {
+        type: 'sendinitaly-support-tickets',
+        items: formatted.items,
+        meta: payload.meta || {total: formatted.items.length},
+        query: {customerId: customerId || null, state: state || null, search: search || null},
+        actions: [
+          {
+            id: 'navigate',
+            label: 'Apri assistenza',
+            path: '/sendinitaly/support',
+            query,
+          },
+        ],
+      },
+      meta: {moduleId: 'facile.sendinitaly'},
+    }
   }
 
   if (/statistic|performance|apert|click|consegn|bounce|invii/.test(text)) {
