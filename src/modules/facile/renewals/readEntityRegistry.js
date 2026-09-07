@@ -1210,39 +1210,22 @@ const definitions = [
       grain: 'subscription',
       timeField: 'endsOn',
       relations: {
-        services: {
-          idField: 'service.id',
-          labelField: 'service.name',
-          filters: [{field: 'service.id', operator: 'exists'}],
-        },
-        domains: {
-          idField: 'domain.id',
-          labelField: 'domain.name',
-          filters: [{field: 'domain.id', operator: 'exists'}],
-        },
+        services: {idField: 'service.id', labelField: 'service.name'},
+        domains: {idField: 'domain.id', labelField: 'domain.name'},
         providers: {
           idField: 'supplier.id',
           labelField: 'supplier.name',
-          filters: [
-            {field: 'kind', operator: 'equals', value: 'supplier'},
-            {field: 'supplier.name', operator: 'exists'},
-          ],
+          filters: [{field: 'kind', operator: 'equals', value: 'supplier'}],
         },
         customers: {
           idField: 'customer.id',
           labelField: 'customer.name',
-          filters: [
-            {field: 'kind', operator: 'equals', value: 'customer'},
-            {field: 'customer.name', operator: 'exists'},
-          ],
+          filters: [{field: 'kind', operator: 'equals', value: 'customer'}],
         },
         groups: {
           idField: 'group.id',
           labelField: 'group.name',
-          filters: [
-            {field: 'kind', operator: 'equals', value: 'customer'},
-            {field: 'group.name', operator: 'exists'},
-          ],
+          filters: [{field: 'kind', operator: 'equals', value: 'customer'}],
         },
         plans: {idField: 'plan.id', labelField: 'plan.name'},
       },

@@ -347,6 +347,10 @@ function aggregateRecords(records = [], plan = {}, fields = {}) {
       ])
     ),
   })).filter(row =>
+    (plan.groupBy || []).every(field => {
+      const value = row.group?.[field]
+      return value !== null && value !== undefined && value !== ''
+    }) &&
     (plan.having || []).every(filter =>
       matchesFilter(
         {value: row.metrics?.[filter.field]},
