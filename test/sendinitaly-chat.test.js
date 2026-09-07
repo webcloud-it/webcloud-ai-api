@@ -31,6 +31,23 @@ test('lists Send in Italy plans through the dedicated endpoint', async () => {
   assert.match(result.reply, /Pro/)
 })
 
+test('interprets generic sending statistics as the last 30 days, not in-process campaigns', async () => {
+  let requestedMode
+  const result = await handleSendInItalyChat({
+    message: 'Quali sono le statistiche di invio degli ultimi 30 giorni?',
+    token: 'token',
+    services: mockServices({
+      getCampaignStats: async ({mode}) => {
+        requestedMode = mode
+        return {data: {sent: 12}}
+      },
+    }),
+  })
+
+  assert.equal(requestedMode, 'last_30_days')
+  assert.equal(result.data.mode, 'last_30_days')
+})
+
 test('returns a sanitized Send in Italy user detail', async () => {
   const result = await handleSendInItalyChat({
     message: 'Mostra il dettaglio utente "Acme"',

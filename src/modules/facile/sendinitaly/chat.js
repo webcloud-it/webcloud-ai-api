@@ -30,7 +30,7 @@ function parseMode(text = '') {
   if (/365 giorni|ultimo anno/.test(text)) return 'last_365_days'
   if (/anno corrente|quest.?anno/.test(text)) return 'current_year'
   if (/coda|queued|in attesa/.test(text)) return 'queued'
-  if (/in corso|invio/.test(text)) return 'in_process'
+  if (/\bin corso\b|\bin invio\b|\bin_process\b/.test(text)) return 'in_process'
   return 'last_30_days'
 }
 
