@@ -280,6 +280,18 @@ test('global planner routes Send in Italy when its credential is available', () 
   assert.equal(plan.moduleId, 'facile.sendinitaly')
 })
 
+test('global planner routes helpdesk tickets to Send in Italy from another section', () => {
+  const plan = planGlobalChat({
+    message: 'Quali clienti hanno più ticket aperti?',
+    context: {path: '/webcamgo/webcams', activeModuleId: 'facile.webcamgo'},
+    credentials: {...credentials, specialk: 'specialk-token'},
+  })
+
+  assert.equal(plan.type, 'module')
+  assert.equal(plan.moduleId, 'facile.sendinitaly')
+  assert.equal(plan.source, 'message')
+})
+
 test('an explicit Send in Italy brand wins over generic plans and the active page', () => {
   const plan = planGlobalChat({
     message: 'Elenca i piani Send in Italy.',
