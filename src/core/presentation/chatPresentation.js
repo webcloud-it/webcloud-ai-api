@@ -36,7 +36,7 @@ function list(title, cards, total = cards.length) {
 
 function sendInItalyPresentation(data) {
   const items = Array.isArray(data.data) ? data.data : []
-  if (data.type === 'sendinitaly-support-tickets' && Array.isArray(data.items)) {
+  if (['sendinitaly-support-tickets', 'sendinitaly-support-analysis'].includes(data.type) && Array.isArray(data.items)) {
     return list(
       'Ticket assistenza Send in Italy',
       data.items.map(ticket => ({
@@ -54,11 +54,31 @@ function sendInItalyPresentation(data) {
           id: 'navigate',
           label: 'Apri assistenza',
           path: '/sendinitaly/support',
-          query: ticket.customerId ? {customer_id: text(ticket.customerId)} : {},
+          query: {
+            ...(ticket.customerId ? {customer_id: text(ticket.customerId)} : {}),
+            ...(ticket.id ? {ticket_id: text(ticket.id)} : {}),
+          },
         },
       })),
-      data.meta?.total
+      data.total ?? data.meta?.total
     )
+  }
+
+  if (data.type === 'sendinitaly-support-ticket-detail' && data.ticket) {
+    const ticket = data.ticket
+    return list('Dettaglio ticket assistenza', [{
+      id: text(ticket.id),
+      title: text(`#${ticket.number || ticket.id} ${ticket.title}`, 'Ticket'),
+      subtitle: text(ticket.customerName || ticket.customerId),
+      badge: text(ticket.state),
+      details: [
+        detail('Priorità', ticket.priority),
+        detail('Categoria', ticket.category),
+        detail('Messaggi', data.articles?.length),
+        detail('Aggiornato', String(ticket.updatedAt || '').slice(0, 16).replace('T', ' ')),
+      ].filter(Boolean),
+      action: {id: 'navigate', label: 'Apri ticket', path: '/sendinitaly/support', query: {ticket_id: text(ticket.id)}},
+    }], 1)
   }
 
   if (data.type === 'sendinitaly-campaigns') {

@@ -95,6 +95,19 @@ const CAPABILITIES = [
       'Elenca e filtra i ticket Zammad, con contesto cliente CRM e stato escalation ClickUp, senza esporre credenziali helpdesk.',
   },
   {
+    id: 'facile.sendinitaly.support.manage',
+    version: 1,
+    moduleId: 'facile.sendinitaly',
+    domain: 'sendinitaly',
+    credential: 'specialk',
+    mode: 'write',
+    risk: 'high',
+    confirmation: 'required',
+    title: 'Gestione assistenza Send in Italy',
+    description:
+      'Prepara e conferma creazione ticket, risposte, note interne, variazioni di stato o priorità ed escalation ClickUp.',
+  },
+  {
     id: 'facile.asiago.read',
     version: 1,
     moduleId: 'facile.asiago',

@@ -36,7 +36,7 @@ test('builds sanitized Send in Italy support cards with customer navigation', ()
 
   assert.equal(presentation.kind, 'list')
   assert.equal(presentation.cards[0].title, '#42001 Problema dominio')
-  assert.deepEqual(presentation.cards[0].action.query, {customer_id: 'customer-1'})
+  assert.deepEqual(presentation.cards[0].action.query, {customer_id: 'customer-1', ticket_id: '42'})
   assert.equal(JSON.stringify(presentation).includes('never-copy'), false)
 })
 

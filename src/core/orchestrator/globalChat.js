@@ -54,6 +54,8 @@ const DOMAIN_PATTERNS = {
     /\bcampagn[ae]\b/,
     /\bpostal\b/,
     /\bmittent[ei]\b/,
+    /\b(?:ticket|help\s*desk|zammad)\b/,
+    /\b(?:assistenza|supporto)\b.{0,40}\b(?:client[ei]|utent[ei]|send\s*in\s*italy)\b/,
   ],
   'facile.webcamgo': [
     /\bwebcam(?:go)?\b/,
@@ -176,7 +178,7 @@ const LOCAL_ENTITY_REQUEST = /\b(?:dettagli?|informazioni?|info|scheda|stat[oi]|
 const STRONG_DOMAIN_PATTERNS = {
   'facile.webcamgo': /\b(?:webcamgo|webcam|telecamer[ae]|snapshot|stream|offline|ptz|mikrotik)\b/i,
   'facile.renewals': /\b(?:rinnov\w*|scadenz\w*|scad(?:e|ono|r[aà]|ranno|ut[oaie])|fornitor\w*|piani?|add[- ]?on|componenti\s+aggiuntiv[ei]|plesk|fattur\w*|non\s+rinnovare|spazio|quota|disco|esaurit\w*|satur\w*)\b|\bservizi?\b.{0,64}\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b|\b(?:grupp[oi]|groups?|client[ei]|fornitor[ei])\b.{0,64}\bservizi?\b/i,
-  'facile.sendinitaly': /\b(?:send\s*in\s*italy|newsletter|campagn[ae]|postal|mittent[ei])\b/i,
+  'facile.sendinitaly': /\b(?:send\s*in\s*italy|newsletter|campagn[ae]|postal|mittent[ei]|ticket|help\s*desk|zammad)\b|\b(?:assistenza|supporto)\b.{0,40}\b(?:client[ei]|utent[ei])\b/i,
   'facile.businesshours': /\b(?:orari|apertura|aperture|chiusura|chiusure|apre|chiude)\b|\bminisit[oi]\b.{0,40}\b(?:apert\w*|chius\w*)\b/i,
   'facile.asiago': /\b(?:cms|event[oi]|manifestazion[ei]|minisit[oi]|contenut[oi]|articol[oi]|bollettino|listini?|redirects?)\b/i,
   'facile.webcloud': /\b(?:assets?|wam|cloudflare|cache|festivit[aà]|ferie|malatti[ae]|automazion[ei]|mattemation|workflow|chatbot)\b/i,

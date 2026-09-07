@@ -16,6 +16,8 @@ const DETAIL_INTENTS = new Set([
   'customer-report',
   'group-report',
   'summary',
+  'sendinitaly-support-ticket-detail',
+  'sendinitaly-support-analysis',
 ])
 const SENSITIVE_KEY = /(?:token|password|secret|api.?key|authorization|authcode|credential)/i
 const ITALIAN_NUMBER_WORDS = new Map([
@@ -106,6 +108,24 @@ function compactGroundedData(data = {}) {
       summary: data.summary,
       items: Array.isArray(data.items) ? data.items.slice(0, 10) : [],
       commonFactors: Array.isArray(data.commonFactors) ? data.commonFactors.slice(0, 8) : [],
+    }
+  }
+
+  if (data?.type === 'sendinitaly-support-analysis') {
+    return {
+      type: data.type,
+      total: data.total,
+      filters: data.filters || {},
+      analysis: data.analysis || null,
+      items: Array.isArray(data.items) ? data.items.slice(0, 12) : [],
+    }
+  }
+
+  if (data?.type === 'sendinitaly-support-ticket-detail') {
+    return {
+      type: data.type,
+      ticket: data.ticket || null,
+      articles: Array.isArray(data.articles) ? data.articles.slice(-10) : [],
     }
   }
 

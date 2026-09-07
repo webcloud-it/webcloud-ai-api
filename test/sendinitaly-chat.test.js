@@ -13,6 +13,10 @@ function mockServices(overrides = {}) {
     getCampaignStats: async () => ({data: {}}),
     getSupportTickets: async () => ({data: [], meta: {total: 0}}),
     getSupportTicket: async () => ({data: {}}),
+    createSupportTicket: async () => ({data: {}}),
+    addSupportTicketArticle: async () => ({data: {}}),
+    updateSupportTicket: async () => ({data: {}}),
+    escalateSupportTicket: async () => ({data: {}}),
     ...overrides,
   }
 }

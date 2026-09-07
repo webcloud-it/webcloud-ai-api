@@ -1,4 +1,5 @@
 import {httpError} from '../../../utils/httpError.js'
+import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
 import {handleSendInItalyChat} from './chat.js'
 import {getCampaigns, getCampaignStats, getUsers} from './service.js'
 
@@ -37,10 +38,16 @@ export async function chat(req, res) {
     message,
     token: req.auth.token,
     context: req.body?.context || {},
+    history: Array.isArray(req.body?.history) ? req.body.history : [],
   })
 
-  res.json({
-    ...result,
-    meta: {...result.meta, timings: {totalMs: Date.now() - startedAt}},
+  const response = await composeGroundedReply({
+    message,
+    result: {
+      ...result,
+      meta: {...result.meta, timings: {totalMs: Date.now() - startedAt}},
+    },
   })
+
+  res.json(response)
 }

@@ -23,6 +23,10 @@ function headers(token) {
   return {'api-key': token, Accept: 'application/json'}
 }
 
+function jsonHeaders(token) {
+  return {...headers(token), 'Content-Type': 'application/json'}
+}
+
 function withQuery(path, values = {}) {
   const query = new URLSearchParams()
 
@@ -158,4 +162,56 @@ export async function getSupportTicket({token, ticketId} = {}) {
     {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
     'Errore recupero dettaglio ticket assistenza Send in Italy'
   )
+}
+
+async function supportMutation({token, path, method = 'POST', body, errorMessage}) {
+  requireConfiguration()
+  requireToken(token)
+
+  return fetchJson(
+    joinUrl(env.sendInItalyApiBaseUrl, path),
+    {
+      method,
+      headers: jsonHeaders(token),
+      body: JSON.stringify(body || {}),
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+    },
+    errorMessage
+  )
+}
+
+export async function createSupportTicket({token, customerId, category, title, description} = {}) {
+  return supportMutation({
+    token,
+    path: '/facile/support/tickets',
+    body: {customer_id: customerId, category, title, description},
+    errorMessage: 'Errore creazione ticket assistenza Send in Italy',
+  })
+}
+
+export async function addSupportTicketArticle({token, ticketId, body, internal = false} = {}) {
+  return supportMutation({
+    token,
+    path: `/facile/support/tickets/${encodeURIComponent(String(ticketId))}/articles`,
+    body: {body, internal},
+    errorMessage: 'Errore aggiornamento ticket assistenza Send in Italy',
+  })
+}
+
+export async function updateSupportTicket({token, ticketId, state, priority} = {}) {
+  return supportMutation({
+    token,
+    method: 'PATCH',
+    path: `/facile/support/tickets/${encodeURIComponent(String(ticketId))}`,
+    body: {state, priority},
+    errorMessage: 'Errore modifica ticket assistenza Send in Italy',
+  })
+}
+
+export async function escalateSupportTicket({token, ticketId} = {}) {
+  return supportMutation({
+    token,
+    path: `/facile/support/tickets/${encodeURIComponent(String(ticketId))}/escalate`,
+    errorMessage: 'Errore escalation ticket assistenza Send in Italy',
+  })
 }
