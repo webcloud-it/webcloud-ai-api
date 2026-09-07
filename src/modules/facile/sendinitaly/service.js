@@ -3,9 +3,9 @@ import {fetchJson, joinUrl} from '../../../utils/http.js'
 
 const DEFAULT_TIMEOUT_MS = 20000
 
-function requireConfiguration() {
-  if (!env.sendInItalyApiBaseUrl) {
-    const error = new Error('SENDINITALY_API_BASE_URL non configurato')
+function requireConfiguration(baseUrl = env.sendInItalyApiBaseUrl, variable = 'SENDINITALY_API_BASE_URL') {
+  if (!baseUrl) {
+    const error = new Error(`${variable} non configurato`)
     error.statusCode = 503
     throw error
   }
@@ -126,12 +126,12 @@ export async function getSupportTickets({
   state = '',
   search = '',
 } = {}) {
-  requireConfiguration()
+  requireConfiguration(env.sendInItalySupportApiBaseUrl, 'SENDINITALY_SUPPORT_API_BASE_URL')
   requireToken(token)
 
   return fetchJson(
     joinUrl(
-      env.sendInItalyApiBaseUrl,
+      env.sendInItalySupportApiBaseUrl,
       withQuery('/facile/support/tickets', {
         page,
         per_page: perPage,
@@ -146,7 +146,7 @@ export async function getSupportTickets({
 }
 
 export async function getSupportTicket({token, ticketId} = {}) {
-  requireConfiguration()
+  requireConfiguration(env.sendInItalySupportApiBaseUrl, 'SENDINITALY_SUPPORT_API_BASE_URL')
   requireToken(token)
   if (!ticketId) {
     const error = new Error('Ticket assistenza mancante')
@@ -156,7 +156,7 @@ export async function getSupportTicket({token, ticketId} = {}) {
 
   return fetchJson(
     joinUrl(
-      env.sendInItalyApiBaseUrl,
+      env.sendInItalySupportApiBaseUrl,
       `/facile/support/tickets/${encodeURIComponent(String(ticketId))}`
     ),
     {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
@@ -165,11 +165,11 @@ export async function getSupportTicket({token, ticketId} = {}) {
 }
 
 async function supportMutation({token, path, method = 'POST', body, errorMessage}) {
-  requireConfiguration()
+  requireConfiguration(env.sendInItalySupportApiBaseUrl, 'SENDINITALY_SUPPORT_API_BASE_URL')
   requireToken(token)
 
   return fetchJson(
-    joinUrl(env.sendInItalyApiBaseUrl, path),
+    joinUrl(env.sendInItalySupportApiBaseUrl, path),
     {
       method,
       headers: jsonHeaders(token),

@@ -57,6 +57,10 @@ export const env = {
   sendInItalyApiBaseUrl:
     process.env.SENDINITALY_API_BASE_URL ||
     (process.env.NODE_ENV === 'production' ? null : 'http://127.0.0.1:3001/v1'),
+  sendInItalySupportApiBaseUrl:
+    process.env.SENDINITALY_SUPPORT_API_BASE_URL ||
+    process.env.SENDINITALY_API_BASE_URL ||
+    (process.env.NODE_ENV === 'production' ? null : 'http://127.0.0.1:3001/v1'),
 
   asiagoCmsBaseUrl: process.env.ASIAGO_CMS_BASE_URL || 'https://cms.asiago.it',
   asiagoSnowBulletinBaseUrl:

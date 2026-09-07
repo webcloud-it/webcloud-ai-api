@@ -60,6 +60,7 @@ CRM_TOKEN=<segreto server-side>
 AI_ALLOWED_CRM_ROLE_IDS=<uuid-ruolo-admin>,<uuid-ruolo-operatore>
 RENEWALS_API_BASE_URL=https://crm-renewals-api.webcloud.cloud
 SENDINITALY_API_BASE_URL=https://api.sendinitaly.com/v1
+SENDINITALY_SUPPORT_API_BASE_URL=https://api-dev.sendinitaly.com/v1
 BUSINESS_HOURS_API_BASE_URL=https://business-hours-api.webcloud.cloud/v1
 ```
 
