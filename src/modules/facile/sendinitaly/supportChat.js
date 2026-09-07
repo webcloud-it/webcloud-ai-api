@@ -84,7 +84,7 @@ function parseState(text = '') {
   if (/\b(?:chius|risolt|complet)/.test(text)) return 'closed'
   if (/\b(?:in attesa|pending)/.test(text)) return 'pending'
   if (/\bnuov/.test(text)) return 'new'
-  if (/\b(?:apert|attiv|da gestire)/.test(text)) return 'open'
+  if (/\b(?:apert|attiv|da gestire)/.test(text)) return 'active'
   return ''
 }
 
@@ -442,7 +442,7 @@ function sanitizeArticle(article = {}) {
 }
 
 async function handleDetailRequest({message, text, token, history, services}) {
-  const asksDetail = /\b(?:dettagli?|conversazione|cronologia|messaggi?|risposte?|ultima\s+risposta|cosa\s+(?:dice|chiede))\b/.test(text)
+  const asksDetail = /\b(?:dettagl(?:io|i)|conversazione|cronologia|messaggi?|risposte?|ultima\s+risposta|cosa\s+(?:dice|chiede))\b/.test(text)
   if (!asksDetail) return null
   const resolved = await resolveTicket({message, token, history, services})
   if (resolved.status !== 'resolved') return response('clarification', ticketClarification(resolved), {type: 'clarification', reason: `support-ticket-${resolved.status}`})
@@ -461,8 +461,11 @@ async function handleDetailRequest({message, text, token, history, services}) {
   }, 'tool-semantic')
 }
 
-function applyReadFilters(items, {priority, category, period, age, unanswered, escalated, text, now}) {
+function applyReadFilters(items, {state, priority, category, period, age, unanswered, escalated, text, now}) {
   return items.filter(ticket => {
+    const ticketState = normalizeComparable(ticket.state)
+    if (state === 'active' && ticketState === 'closed') return false
+    if (state && state !== 'active' && ticketState !== state) return false
     if (priority && normalizeComparable(ticket.priority) !== priority) return false
     if (category && normalizeComparable(ticket.category) !== category) return false
     if (period && (toTime(ticket.updatedAt) || toTime(ticket.createdAt) || 0) < period.since) return false
@@ -542,15 +545,21 @@ async function handleReadRequest({message, text, token, context, services, now =
     customerName = resolution.item.company_name || resolution.item.name || ''
   }
   const search = !customerId ? extractQuoted(message)[0] || '' : ''
-  const loaded = await loadAllTickets({token, services, customerId, state, search})
-  let items = applyReadFilters(loaded.items, {priority, category, period, age, unanswered, escalated, text, now})
+  const loaded = await loadAllTickets({
+    token,
+    services,
+    customerId,
+    state: state === 'active' ? '' : state,
+    search,
+  })
+  let items = applyReadFilters(loaded.items, {state, priority, category, period, age, unanswered, escalated, text, now})
   if (/\b(?:piu|più)\s+vecch|da\s+piu\s+tempo/.test(text)) {
     items = items.sort((a, b) => (toTime(a.createdAt) || Infinity) - (toTime(b.createdAt) || Infinity))
   } else {
     items = items.sort((a, b) => (toTime(b.updatedAt) || 0) - (toTime(a.updatedAt) || 0))
   }
   const labels = [
-    state ? `stato ${state}` : '', priority ? `priorità ${priority}` : '', category ? `categoria ${category}` : '',
+    state ? (state === 'active' ? 'non chiusi' : `stato ${state}`) : '', priority ? `priorità ${priority}` : '', category ? `categoria ${category}` : '',
     period?.label || '', age ? `da oltre ${age.label}` : '', unanswered ? 'senza risposta operatore' : '',
     escalated ? 'con escalation ClickUp' : '', customerName ? `del cliente ${customerName}` : '',
   ].filter(Boolean)

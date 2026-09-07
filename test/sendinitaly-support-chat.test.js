@@ -46,6 +46,24 @@ test('filters support tickets by state and priority without model calculations',
   assert.equal(result.data.items[0].id, 42)
 })
 
+test('treats natural open tickets as every unresolved Zammad state', async () => {
+  const result = await handleSupportChat({
+    message: 'Quanti ticket aperti ci sono?',
+    token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [
+        ticket({state: 'new'}),
+        ticket({id: 43, state: 'open'}),
+        ticket({id: 44, state: 'pending'}),
+        ticket({id: 45, state: 'closed'}),
+      ], meta: {total: 4}}),
+    }),
+  })
+  assert.equal(result.data.total, 3)
+  assert.match(result.reply, /3 ticket/)
+  assert.match(result.reply, /non chiusi/)
+})
+
 test('counts unanswered tickets older than a requested threshold', async () => {
   const result = await handleSupportChat({
     message: 'Quanti ticket sono senza risposta da più di 2 giorni?',
@@ -108,6 +126,19 @@ test('reads ticket conversation and sanitizes the article history', async () => 
   })
   assert.equal(result.intent, 'sendinitaly-support-ticket-detail')
   assert.equal(result.data.articles[0].body, 'Buongiorno')
+})
+
+test('recognizes the singular Italian detail request with a public ticket number', async () => {
+  const result = await handleSupportChat({
+    message: 'Mostrami il dettaglio del ticket 42001',
+    token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+      getSupportTicket: async () => ({data: {ticket: ticket(), articles: []}}),
+    }),
+  })
+  assert.equal(result.intent, 'sendinitaly-support-ticket-detail')
+  assert.equal(result.data.ticket.number, '42001')
 })
 
 test('latest reply is a read request, never a mutation', async () => {
