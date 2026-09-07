@@ -421,6 +421,7 @@ function findRelationalFact(definitions = [], target = null, measure = null) {
 function buildRelationalCountPlan(message = '', previousState = null) {
   const text = normalizeText(message)
   if (!/\b(?:quanti|quante|conteggio|numero)\b/i.test(text)) return null
+  if (extractRequestedLimit(text)) return null
   if (/\b(?:confront\w*|piu|meno|maggior\w*|minor\w*|top|raggrupp\w*|per\s+(?:ciascun\w*|ogni))\b/i.test(text)) {
     return null
   }
@@ -1287,7 +1288,7 @@ function buildDeterministicFilters(entityId, message = '') {
 
     if (/\badd[- ]?on\b|\bcomponenti aggiuntivi\b/i.test(text)) {
       filters.push({field: 'plan.kind', operator: 'equals', value: 'addon'})
-    } else if (/\bpiani base\b|\bpiano base\b/i.test(text)) {
+    } else if (/\bpiani?\b/i.test(text)) {
       filters.push({field: 'plan.kind', operator: 'equals', value: 'base'})
     }
 
@@ -1715,6 +1716,7 @@ export async function planReadQuery({
   callLlm = callOllamaChat,
   allowSemantic = true,
   actorToken = '',
+  useRememberedContext = true,
   resolvedDetailTarget = null,
   readUtterance = null,
   onSemanticError = null,
@@ -1727,7 +1729,9 @@ export async function planReadQuery({
   ) {
     effectiveHistory.pop()
   }
-  const rememberedState = getRememberedReadQueryContext({actorToken})
+  const rememberedState = useRememberedContext
+    ? getRememberedReadQueryContext({actorToken})
+    : null
   const previousState = getPreviousReadQueryState(effectiveHistory, {
     fallbackState: rememberedState,
   })

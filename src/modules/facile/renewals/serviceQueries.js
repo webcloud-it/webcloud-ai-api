@@ -151,6 +151,7 @@ function isOperationalScopeTerm(value = '') {
 function stripCustomerOrGroupTail(value = '') {
   return compactText(
     stripAfterKnownTail(value)
+      .replace(/\b(?:marcat[oi]|segnat[oi])\b[\s\S]*$/i, '')
       .replace(
         /\b(?:che\s+)?(?:scade|scadono|scadra|scadranno|rinnova|rinnovano|termina|terminano|ha|hanno|è|sono)\b.*$/i,
         ''

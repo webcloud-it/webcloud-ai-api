@@ -160,8 +160,16 @@ test('lists support tickets scoped by the active Facile customer', async () => {
               customer: {company_name: 'Acme'},
               clickup_task_id: 'task-7',
             },
+            {
+              id: 43,
+              number: '42002',
+              title: 'Ticket già risolto',
+              state: 'closed',
+              customer_id: 'u1',
+              customer: {company_name: 'Acme'},
+            },
           ],
-          meta: {total: 1},
+          meta: {total: 2},
         }
       },
     }),
@@ -169,7 +177,8 @@ test('lists support tickets scoped by the active Facile customer', async () => {
 
   assert.equal(result.intent, 'sendinitaly-support-tickets')
   assert.equal(query.customerId, 'u1')
-  assert.equal(query.state, 'open')
+  assert.equal(query.state, '')
+  assert.equal(result.data.total, 1)
   assert.equal(result.data.items[0].clickupLinked, true)
   assert.deepEqual(result.data.actions[0].query, {customer_id: 'u1'})
 })

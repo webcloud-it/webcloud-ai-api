@@ -888,6 +888,18 @@ test('planner analitico: comprende il limite naturale prima del nome entità', a
   assert.deepEqual(plan.groupBy, ['supplier.name'])
 })
 
+test('planner analitico: interpreta primi cinque fornitori per numero di servizi come ranking', async () => {
+  const plan = await planReadQuery({
+    message: 'Quali sono i primi cinque fornitori per numero di servizi?',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.limit, 5)
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.equal(plan.metrics[0].field, 'service.id')
+})
+
 test('planner: una semplice lista limitata di servizi resta sul fast path', () => {
   assert.equal(
     isAnalyticalReadQueryRequest('Mostrami i primi cinque servizi in scadenza a ottobre.'),
@@ -1033,8 +1045,36 @@ test('planner: piani senza prezzo applica realmente il filtro al catalogo', asyn
 
   assert.equal(plan.entity, 'plan-prices')
   assert.deepEqual(plan.filters, [
+    {field: 'plan.kind', operator: 'equals', value: 'base'},
     {field: 'price', operator: 'not-exists', value: null},
   ])
+})
+
+test('planner: una nuova conversazione non eredita analisi server-side di altre chat', async () => {
+  clearAllReadQueryContexts()
+  const actorToken = 'shared-user-across-chat-tabs'
+  rememberReadQueryContext({
+    actorToken,
+    plan: {
+      type: 'read-query-plan', operation: 'aggregate', entity: 'subscriptions',
+      filters: [], groupBy: [],
+      metrics: [{id: 'count', function: 'count-distinct', field: 'supplier.id'}],
+      having: [], sort: [{field: 'count', direction: 'desc'}], limit: 1, offset: 0,
+    },
+    result: {type: 'read-query-result', entity: 'subscriptions', operation: 'aggregate', items: []},
+  })
+
+  const plan = await planReadQuery({
+    message: 'Confronta i primi due fornitori per servizi in scadenza nel 2027',
+    history: [{role: 'user', content: 'Confronta i primi due fornitori per servizi in scadenza nel 2027'}],
+    actorToken,
+    useRememberedContext: false,
+    allowSemantic: false,
+  })
+
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.equal(plan.limit, 2)
+  assert.equal(plan.metrics[0].field, 'service.id')
 })
 
 test('executor: arricchisce un prezzo di catalogo con l’uso operativo del piano', () => {

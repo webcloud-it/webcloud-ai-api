@@ -207,6 +207,18 @@ describe('Intenti espliciti e precedenze', () => {
     assert.equal(expiryRange.label, 'entro il 2027')
   })
 
+  test('separa il gruppo dai flag operativi anche nella forma compatta', () => {
+    const filters = parseServiceListQuery({
+      message: 'Elenca i servizi di Zilio Group marcati non rinnovare e da trasferire',
+      settings: SETTINGS,
+      now: NOW,
+    }).filters
+
+    assert.equal(findFilter({filters}, 'customer-or-group')?.term, 'Zilio Group')
+    assert.ok(findFilter({filters}, 'dont-renew'))
+    assert.ok(findFilter({filters}, 'to-transfer'))
+  })
+
   test('interpreta la negazione naturale dei collegamenti Plesk', () => {
     const filters = parseServiceListQuery({
       message: 'Quali domini non sono collegati a Plesk?',

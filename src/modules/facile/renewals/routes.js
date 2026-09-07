@@ -502,6 +502,7 @@ async function verifyOperationResult(result) {
 
 export async function chat(req, res) {
   const startedAt = Date.now()
+  const hasClientHistory = Array.isArray(req.body?.history)
   const {
     message: rawMessage,
     context = {},
@@ -1862,6 +1863,7 @@ export async function chat(req, res) {
         message,
         history: Array.isArray(history) ? history : [],
         actorToken: req.auth.token,
+        useRememberedContext: !hasClientHistory,
         resolvedDetailTarget,
         readUtterance,
         allowSemantic: true,
