@@ -64,14 +64,29 @@ export async function getCampaignStats({token, mode = 'last_30_days'} = {}) {
   )
 }
 
-export async function getUsers({token, page = 1, limit = 20, search = '', plan = ''} = {}) {
+export async function getUsers({
+  token,
+  page = 1,
+  limit = 20,
+  search = '',
+  plan = '',
+  sortBy = '',
+  sortOrder = '',
+} = {}) {
   requireConfiguration()
   requireToken(token)
 
   return fetchJson(
     joinUrl(
       env.sendInItalyApiBaseUrl,
-      withQuery('/facile/users', {page, limit, search, plan})
+      withQuery('/facile/users', {
+        page,
+        limit,
+        search,
+        plan,
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      })
     ),
     {headers: headers(token), timeoutMs: DEFAULT_TIMEOUT_MS},
     'Errore recupero utenti Send in Italy'

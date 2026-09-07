@@ -48,6 +48,62 @@ test('interprets generic sending statistics as the last 30 days, not in-process 
   assert.equal(result.data.mode, 'last_30_days')
 })
 
+test('formats verified campaign rates from backend totals', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Qual è il tasso di apertura degli ultimi 30 giorni?',
+    token: 'token',
+    services: mockServices({
+      getCampaignStats: async () => ({
+        data: {totals: {shipped: 100, received: 80, opened: 20, clicked: 8, hard_bounce: 5}},
+      }),
+    }),
+  })
+
+  assert.equal(result.intent, 'sendinitaly-stats')
+  assert.match(result.reply, /tasso di apertura: 25\.0%/i)
+  assert.match(result.reply, /tasso di click: 10\.0%/i)
+  assert.match(result.reply, /tasso hard bounce: 5\.0%/i)
+})
+
+test('filters users through the canonical Send in Italy plan', async () => {
+  let requestedPlan
+  const result = await handleSendInItalyChat({
+    message: 'Quali utenti hanno il piano Free?',
+    token: 'token',
+    services: mockServices({
+      getUserPlans: async () => ({data: [{id: 'free-id', name: 'SendInItalyFree'}]}),
+      getUsers: async options => {
+        requestedPlan = options.plan
+        return {data: [{id: 'u1', company_name: 'Acme', subscription_config: {plan: {name: 'SendInItalyFree'}}}], meta: {total: 1}}
+      },
+    }),
+  })
+
+  assert.equal(requestedPlan, 'free-id')
+  assert.equal(result.intent, 'sendinitaly-users')
+  assert.match(result.reply, /piano SendInItalyFree/)
+})
+
+test('ranks users by a backend aggregate instead of counting a partial campaign page', async () => {
+  let query
+  const result = await handleSendInItalyChat({
+    message: 'Quale cliente ha creato più campagne?',
+    token: 'token',
+    services: mockServices({
+      getUsers: async options => {
+        query = options
+        return {data: [{id: 'u1', company_name: 'Acme', total_campaigns: 42}], meta: {total: 11}}
+      },
+    }),
+  })
+
+  assert.equal(query.sortBy, 'campaigns')
+  assert.equal(query.sortOrder, 'desc')
+  assert.equal(query.limit, 1)
+  assert.equal(result.intent, 'sendinitaly-user-ranking')
+  assert.match(result.reply, /Acme — 42 campagne/)
+})
+
 test('returns a sanitized Send in Italy user detail', async () => {
   const result = await handleSendInItalyChat({
     message: 'Mostra il dettaglio utente "Acme"',

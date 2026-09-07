@@ -39,7 +39,11 @@ import {httpError} from '../../../utils/httpError.js'
 import {contextualizeRenewalsMessage, getContextScope} from '../../../core/context/pageContext.js'
 import {buildTodoPayloadFromServices} from './todos.js'
 import {planChatRequest} from '../../../core/planner/chatPlanner.js'
-import {isAnalyticalReadQueryRequest, planReadQuery} from './readQueryPlanner.js'
+import {
+  getRenewalsReadDataGap,
+  isAnalyticalReadQueryRequest,
+  planReadQuery,
+} from './readQueryPlanner.js'
 import {executeReadQuery} from './readQueryExecutor.js'
 import {buildReadQueryReply} from './readQueryFormatters.js'
 import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
@@ -1731,6 +1735,26 @@ export async function chat(req, res) {
   })
   const hasExplicitRenewalsIntent = Boolean(explicitRenewalsIntent)
   const analyticalReadRequest = isAnalyticalReadQueryRequest(message)
+  const readDataGap = getRenewalsReadDataGap(message)
+
+  if (readDataGap) {
+    return res.json({
+      ok: true,
+      intent: 'data-gap',
+      source: 'tool-fast',
+      reply: readDataGap.reply,
+      data: {
+        type: 'data-gap',
+        reason: readDataGap.code,
+        availableAlternatives: ['current-space-usage', 'upgrade-communications'],
+      },
+      meta: {
+        moduleId: 'facile.renewals',
+        intent: 'data-gap',
+        timings: {totalMs: Date.now() - startedAt},
+      },
+    })
+  }
 
   const deterministicReadUtterance = parseReadQueryUtterance(message)
   const pendingReadTargetSelection = resolvePendingReadQueryTargetClarification({

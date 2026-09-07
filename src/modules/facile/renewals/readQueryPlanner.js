@@ -165,6 +165,23 @@ export function isAnalyticalReadQueryRequest(message = '') {
   )
 }
 
+export function getRenewalsReadDataGap(message = '') {
+  const text = normalizeText(message)
+  const asksRepeatedHistory =
+    /\b(?:quante?\s+volte|piu\s+volte|ricorrent\w*|ripetut\w*|frequent\w*)\b/i.test(text)
+  const asksSpaceHistory = /\b(?:spazio|quota|disco|storage)\b/i.test(text)
+
+  if (!asksRepeatedHistory || !asksSpaceHistory) return null
+
+  return {
+    code: 'historical-space-events-unavailable',
+    reply:
+      'Non posso stabilire in modo attendibile quante volte ogni servizio abbia esaurito lo spazio: ' +
+      'i dati disponibili espongono l’uso attuale e le comunicazioni di upgrade, ma non lo storico degli sforamenti. ' +
+      'Posso però mostrarti i servizi attualmente a spazio esaurito oppure classificare le richieste di upgrade registrate.',
+  }
+}
+
 export function checkAnalyticalReadPlannerReadiness() {
   const message = 'Quali fornitori hanno più servizi in scadenza nel 2027?'
   const candidate = buildDeterministicAnalyticalPlan(message)
@@ -469,9 +486,16 @@ function buildRelationalRankingPlan(message = '', previousState = null) {
     : /\b(?:piu|maggior\w*|massim\w*|top|prim[ei]\s+(?:\d{1,2}|[a-z]+))\b/i.test(text)
       ? 'desc'
       : null
-  const groupingMarkerIndex = text.search(
-    /\b(?:per\s+(?:ciascun(?:[oaie])?|ogni)\s+|raggrupp\w*\s+(?:per|in\s+base\s+a)\s+)/i
+  const groupingMarker = /\b(?:per\s+(?:ciascun(?:[oaie])?|ogni)\s+|raggrupp\w*[\s\S]{0,80}?\s+(?:per|in\s+base\s+a)\s+)/i.exec(text)
+  const groupingMarkerText = groupingMarker?.[0] || ''
+  const groupingDimensionOffset = Math.max(
+    groupingMarkerText.lastIndexOf(' per '),
+    groupingMarkerText.lastIndexOf(' in base a '),
+    0
   )
+  const groupingMarkerIndex = groupingMarker
+    ? groupingMarker.index + groupingDimensionOffset
+    : -1
   const asksRelationalGrouping =
     groupingMarkerIndex >= 0 &&
     /\b(?:quanti|quante|conteggio|numero|conta|raggrupp\w*)\b/i.test(text)
@@ -1357,6 +1381,8 @@ function buildDeterministicFilters(entityId, message = '') {
     const requiredYears = extractRequiredYears(text)
     if (requiredYears.length) {
       filters.push({field: 'expiryYear', operator: 'in', value: requiredYears})
+    } else if (monthRange) {
+      filters.push({field: 'endsOn', operator: 'between', value: monthRange})
     } else if (year) {
       filters.push({field: 'endsOn', operator: 'between', value: yearRange(year)})
     }

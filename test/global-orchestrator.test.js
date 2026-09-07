@@ -304,6 +304,52 @@ test('an explicit Send in Italy brand wins over generic plans and the active pag
   assert.equal(plan.source, 'message')
 })
 
+test('explicit Send in Italy requests bypass semantic routing even with shared plan vocabulary', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan({
+    message: 'Quali piani Send in Italy sono disponibili?',
+    context: {section: 'crm.renewals', path: '/crm/renewals/panel'},
+    credentials: {...credentials, specialk: 'specialk-token'},
+  }, async () => {
+    modelCalled = true
+    return null
+  })
+
+  assert.equal(plan.moduleId, 'facile.sendinitaly')
+  assert.equal(modelCalled, false)
+})
+
+test('Send in Italy context disambiguates users and plans without invoking the model', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan({
+    message: 'Quali utenti hanno il piano Pro?',
+    context: {section: 'sendinitaly.users', path: '/sendinitaly/users'},
+    credentials: {...credentials, specialk: 'specialk-token'},
+  }, async () => {
+    modelCalled = true
+    return null
+  })
+
+  assert.equal(plan.moduleId, 'facile.sendinitaly')
+  assert.equal(plan.source, 'context')
+  assert.equal(modelCalled, false)
+})
+
+test('email opening rates route to Send in Italy rather than business hours', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan({
+    message: 'Qual è il tasso di apertura degli ultimi 30 giorni?',
+    context: {section: 'sendinitaly.statistics', path: '/sendinitaly/statistics'},
+    credentials: {...credentials, specialk: 'specialk-token'},
+  }, async () => {
+    modelCalled = true
+    return null
+  })
+
+  assert.equal(plan.moduleId, 'facile.sendinitaly')
+  assert.equal(modelCalled, false)
+})
+
 test('global planner uses the active section for ambiguous business entities', () => {
   const sendPlan = planGlobalChat({
     message: 'Apri il cliente Acme',

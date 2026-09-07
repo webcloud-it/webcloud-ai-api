@@ -44,6 +44,61 @@ function extractUserTarget(message = '') {
     .trim()
 }
 
+function extractUserPlanTarget(message = '') {
+  return String(message)
+    .match(/\b(?:piano|plan)\s+["“”']?([^"“”'?.!,;]{2,80})/i)?.[1]
+    ?.replace(/\s+(?:e|ed|ma|con|senza)\s+.+$/i, '')
+    .trim() || ''
+}
+
+const USER_RANKING_METRICS = [
+  {pattern: /\bcampagn[ae]\b/i, sortBy: 'campaigns', field: 'total_campaigns', label: 'campagne'},
+  {pattern: /\bcontatt[oi]\b/i, sortBy: 'contacts', field: 'total_contacts', label: 'contatti'},
+  {pattern: /\blist[ae]\b/i, sortBy: 'lists', field: 'total_lists', label: 'liste'},
+  {pattern: /\battribut[oi]\b/i, sortBy: 'attributes', field: 'total_attributes', label: 'attributi'},
+  {pattern: /\bsegment[oi]\b/i, sortBy: 'segments', field: 'total_segments', label: 'segmenti'},
+  {pattern: /\btemplate\b/i, sortBy: 'templates', field: 'total_templates', label: 'template'},
+  {pattern: /\bform\b/i, sortBy: 'forms', field: 'total_forms', label: 'form'},
+  {pattern: /\bautomazion[ei]\b/i, sortBy: 'automations', field: 'total_automations', label: 'automazioni'},
+  {pattern: /\bmittent[ei]\b/i, sortBy: 'senders', field: 'total_senders', label: 'mittenti'},
+]
+
+function parseUserRanking(message = '') {
+  const text = normalizeText(message)
+  if (!/\b(?:utent[ei]?|account|client[ei]|aziend[ae])\b/i.test(text)) return null
+  if (!/(?:pi[uù]|meno|maggior\w*|minor\w*|top|classific\w*|ranking|prim[ei])/i.test(text)) return null
+
+  const metric = USER_RANKING_METRICS.find(item => item.pattern.test(text))
+  if (!metric) return null
+
+  const limitToken = text.match(/\b(?:prim[ei]|top)\s+(\d{1,2}|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)\b/i)?.[1]
+  const numbers = new Map([
+    ['uno', 1], ['un', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4],
+    ['cinque', 5], ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10],
+  ])
+  const parsedLimit = /^\d+$/.test(limitToken || '')
+    ? Number(limitToken)
+    : numbers.get(limitToken || '')
+
+  return {
+    ...metric,
+    sortOrder: /\b(?:meno|minor\w*)\b/i.test(text) ? 'asc' : 'desc',
+    limit: Math.min(Math.max(parsedLimit || (/\bqual[ei]\b/i.test(text) ? 1 : 5), 1), 20),
+  }
+}
+
+async function resolveUserPlan({target, token, services}) {
+  const payload = await services.getUserPlans({token})
+  const plans = Array.isArray(payload?.data) ? payload.data : []
+  const needle = normalizeText(target)
+  const matches = plans.filter(plan => {
+    const values = [plan?.id, plan?.name].map(normalizeText).filter(Boolean)
+    return values.some(value => value === needle || value.includes(needle) || needle.includes(value))
+  })
+
+  return matches.length === 1 ? matches[0] : null
+}
+
 function extractDnsUserTarget(message = '') {
   const quoted = extractQuotedValue(message)
   if (quoted) return quoted
@@ -184,12 +239,24 @@ function formatUsers(payload = {}) {
   if (!items.length) return 'Non ho trovato utenti Send in Italy corrispondenti.'
 
   const lines = items.slice(0, 20).map((item, index) => {
-    const plan = item.plan?.name || item.plan_name || item.subscription_plan || null
+    const plan = item.subscription_config?.plan?.name || item.plan?.name || item.plan_name || item.subscription_plan || null
     const contacts = item.total_contacts ?? item.contacts_count ?? null
     return `${index + 1}. ${item.company_name || item.name || item.id}${plan ? ` — piano ${plan}` : ''}${contacts !== null ? ` — ${contacts} contatti` : ''}`
   })
 
   return [`Ho trovato ${total} utenti Send in Italy.`, ...lines].join('\n')
+}
+
+function formatUserRanking(payload = {}, metric) {
+  const items = Array.isArray(payload.data) ? payload.data : []
+  if (!items.length) return `Non ho trovato utenti da classificare per ${metric.label}.`
+
+  return [
+    `Classifica utenti Send in Italy per ${metric.label}:`,
+    ...items.map((item, index) =>
+      `${index + 1}. ${item.company_name || item.name || item.id} — ${Number(item[metric.field] || 0)} ${metric.label}`
+    ),
+  ].join('\n')
 }
 
 function collectScalarEntries(value, prefix = '', output = []) {
@@ -211,6 +278,13 @@ function collectScalarEntries(value, prefix = '', output = []) {
 
 function formatStats(payload = {}, mode) {
   const source = payload.data && !Array.isArray(payload.data) ? payload.data : payload
+  const totals = source?.totals && typeof source.totals === 'object' ? source.totals : source
+  const received = Number(totals?.received || totals?.received_contacts || 0)
+  const shipped = Number(totals?.shipped || totals?.shipped_contacts || 0)
+  const opened = Number(totals?.opened || totals?.opened_contacts || 0)
+  const clicked = Number(totals?.clicked || totals?.clicked_contacts || 0)
+  const hardBounce = Number(totals?.hard_bounce || totals?.delivery_failed || 0)
+  const rate = (value, base) => base > 0 ? `${((value / base) * 100).toFixed(1)}%` : 'n/d'
   const entries = collectScalarEntries(source).slice(0, 15)
 
   if (!entries.length) {
@@ -219,6 +293,9 @@ function formatStats(payload = {}, mode) {
 
   return [
     `Statistiche Send in Italy (${mode}):`,
+    `- tasso di apertura: ${rate(opened, received)}`,
+    `- tasso di click: ${rate(clicked, received)}`,
+    `- tasso hard bounce: ${rate(hardBounce, shipped)}`,
     ...entries.map(([key, value]) => `- ${key.replaceAll('_', ' ')}: ${value}`),
   ].join('\n')
 }
@@ -248,6 +325,48 @@ export async function handleSendInItalyChat({
 
   const supportResult = await handleSupportChat({message, token, context, history, services})
   if (supportResult) return supportResult
+
+  const userPlanTarget = extractUserPlanTarget(message)
+  if (
+    userPlanTarget &&
+    /\b(?:utent[ei]?|account|client[ei]|aziend[ae])\b/i.test(text) &&
+    !/\b(?:dettaglio|scheda|apri|mostra\s+il)\b/i.test(text)
+  ) {
+    const resolvedPlan = await resolveUserPlan({target: userPlanTarget, token, services})
+    const plan = resolvedPlan?.id || resolvedPlan?.name || userPlanTarget
+    const payload = await services.getUsers({token, plan})
+    return {
+      ok: true,
+      intent: 'sendinitaly-users',
+      source: 'tool-fast',
+      reply: formatUsers(payload),
+      data: {type: 'sendinitaly-users', query: {plan}, ...payload},
+      meta: {moduleId: 'facile.sendinitaly'},
+    }
+  }
+
+  const userRanking = parseUserRanking(message)
+  if (userRanking) {
+    const payload = await services.getUsers({
+      token,
+      limit: userRanking.limit,
+      sortBy: userRanking.sortBy,
+      sortOrder: userRanking.sortOrder,
+    })
+    return {
+      ok: true,
+      intent: 'sendinitaly-user-ranking',
+      source: 'tool-fast',
+      reply: formatUserRanking(payload, userRanking),
+      data: {
+        type: 'sendinitaly-user-ranking',
+        metric: userRanking.sortBy,
+        direction: userRanking.sortOrder,
+        items: Array.isArray(payload?.data) ? payload.data : [],
+      },
+      meta: {moduleId: 'facile.sendinitaly'},
+    }
+  }
 
   if (isOpenEntityRequest(message) && /\b(utent[ei]?|account|azienda|cliente)\b/.test(text)) {
     const target = extractEntityTarget(message) || extractUserTarget(message)

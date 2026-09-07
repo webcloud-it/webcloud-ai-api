@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   checkAnalyticalReadPlannerReadiness,
+  getRenewalsReadDataGap,
   isAnalyticalReadQueryRequest,
   planReadQuery,
   getPreviousReadQueryState,
@@ -865,6 +866,16 @@ test('planner analitico: una durata minima resta un filtro semplice', () => {
   )
 })
 
+test('disponibilità dati: non inventa ricorrenze storiche dello spazio', () => {
+  const gap = getRenewalsReadDataGap(
+    'Quale servizio ha esaurito più volte lo spazio escludendo Zilio Group?'
+  )
+
+  assert.equal(gap?.code, 'historical-space-events-unavailable')
+  assert.match(gap?.reply, /non lo storico degli sforamenti/i)
+  assert.equal(getRenewalsReadDataGap('Quali servizi hanno lo spazio esaurito?'), null)
+})
+
 test('planner analitico: il limite primi non inverte una richiesta dei gruppi con meno servizi', async () => {
   const plan = await planReadQuery({
     message: 'Quali gruppi hanno meno servizi in scadenza nel 2027? Mostrami i primi cinque.',
@@ -927,6 +938,42 @@ test('planner analitico: conta servizi distinti sulla relazione richiesta per ci
     plan.filters.some(filter => filter.field === 'endsOn' && filter.operator === 'between'),
     true
   )
+})
+
+test('planner analitico: applica mese e anno al conteggio delle sottoscrizioni', async () => {
+  const plan = await planReadQuery({
+    message: 'Quanti servizi scadono a dicembre 2026?',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'subscriptions')
+  assert.deepEqual(plan.filters, [{
+    field: 'endsOn',
+    operator: 'between',
+    value: {
+      start: '2026-12-01T00:00:00.000Z',
+      end: '2026-12-31T23:59:59.999Z',
+    },
+  }])
+})
+
+test('planner analitico: raggruppa una misura esplicita per la dimensione richiesta', async () => {
+  const plan = await planReadQuery({
+    message: 'Raggruppa i servizi per fornitore e mostrami i primi cinque',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'subscriptions')
+  assert.equal(plan.limit, 5)
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.deepEqual(plan.metrics, [
+    {id: 'count', function: 'count-distinct', field: 'service.id'},
+  ])
+  assert.deepEqual(plan.filters, [
+    {field: 'kind', operator: 'equals', value: 'supplier'},
+  ])
 })
 
 test('executor analitico: filtra il dataset completo prima di raggruppare e contare', () => {
