@@ -324,6 +324,7 @@ test('aggregates all Send in Italy users by plan and calculates verified average
   assert.equal(result.data.groups[0].group.plan, 'Pro')
   assert.equal(result.data.groups[0].values.avg_contacts, 75)
   assert.match(result.reply, /3 utenti analizzati/)
+  assert.match(result.reply, /media contatti: 75/)
 })
 
 test('combines multiple numeric filters on the complete user dataset', async () => {
@@ -389,6 +390,26 @@ test('paginates the Send in Italy provider so analytics never use only the first
   assert.equal(result.data.sourceCount, 251)
   assert.equal(result.data.matchedCount, 251)
   assert.match(result.reply, /251 utenti/)
+})
+
+test('understands numeric user thresholds written in natural Italian', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Quanti clienti Send in Italy hanno almeno una campagna?',
+    token: 'token',
+    services: mockServices({
+      getUsers: async () => ({
+        data: [
+          {id: 'u1', company_name: 'Acme', total_campaigns: 1},
+          {id: 'u2', company_name: 'Beta', total_campaigns: 0},
+        ],
+        meta: {total: 2},
+      }),
+    }),
+  })
+
+  assert.equal(result.intent, 'sendinitaly-user-analytics')
+  assert.equal(result.data.matchedCount, 1)
+  assert.match(result.reply, /Risultano 1 utenti/)
 })
 
 test('validates semantic Send in Italy plans against the field allowlist', async () => {

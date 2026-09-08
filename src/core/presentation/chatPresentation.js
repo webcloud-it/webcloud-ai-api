@@ -143,12 +143,21 @@ function sendInItalyPresentation(data) {
 
   if (data.type === 'sendinitaly-user-analytics') {
     if (Array.isArray(data.groups) && data.groups.length) {
+      const metricLabels = new Map((data.plan?.metrics || []).map(metric => {
+        const fieldLabels = {
+          campaigns: 'campagne', contacts: 'contatti', lists: 'liste', attributes: 'attributi',
+          segments: 'segmenti', templates: 'template', forms: 'form', automations: 'automazioni', senders: 'mittenti',
+        }
+        const field = fieldLabels[metric.field] || metric.field || 'utenti'
+        const prefix = metric.function === 'avg' ? 'media ' : metric.function === 'sum' ? 'totale ' : metric.function === 'min' ? 'minimo ' : metric.function === 'max' ? 'massimo ' : ''
+        return [metric.id, metric.function === 'count' ? 'utenti' : `${prefix}${field}`]
+      }))
       return list('Analisi utenti Send in Italy', data.groups.map((item, index) => ({
         id: `group-${index + 1}`,
         title: compact(Object.values(item.group || {})).join(' · ') || `Gruppo ${index + 1}`,
         badge: 'dato verificato',
         details: Object.entries(item.values || {}).slice(0, 6).map(([label, value]) =>
-          detail(label.replaceAll('_', ' '), value)
+          detail(metricLabels.get(label) || label.replaceAll('_', ' '), value)
         ).filter(Boolean),
       })), data.groups.length)
     }

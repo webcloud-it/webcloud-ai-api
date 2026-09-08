@@ -78,6 +78,19 @@ const support = [
   ['T25', 'Mostrami le info del ticket 25004.', /25004/i],
 ]
 
+const sendInItaly = [
+  ['S01', 'Quale cliente Send in Italy ha creato più campagne?', /campagne/i],
+  ['S02', 'Elenca i clienti Send in Italy con almeno 100 contatti e più di 5 campagne.', /client|utent|campagne/i],
+  ['S03', 'Raggruppa gli utenti Send in Italy per piano e mostrami la media dei contatti.', /piano[\s\S]*(?:avg contacts|media contatti)/i],
+  ['S04', 'Confronta i primi due clienti Send in Italy per campagne e contatti.', /Confronto verificato[\s\S]*Differenze/i],
+  ['S05', 'Quanti clienti Send in Italy hanno almeno una campagna?', /utenti Send in Italy/i],
+  ['S06', 'Quali utenti Send in Italy hanno il piano SendInItalyFree?', /SendInItalyFree|non ho trovato/i],
+  ['S07', 'Quali sono i tre utenti Send in Italy con più automazioni?', /automazioni/i],
+  ['S08', 'Qual è il tasso di apertura Send in Italy negli ultimi 30 giorni?', /tasso di apertura/i],
+  ['S09', 'Mostrami le campagne Send in Italy in coda.', /campagne/i],
+  ['S10', 'Controlla lo stato DNS di Webcloud su Send in Italy.', /DNS|domini mittente/i],
+]
+
 const crossDomain = [
   ['M01', 'Quante webcam sono offline e quanti ticket sono da gestire?', /webcam[\s\S]*ticket|ticket[\s\S]*webcam/i],
   ['M02', 'Mostrami le webcam con stream offline e i cinque fornitori con più servizi in scadenza nel 2027.', /webcam[\s\S]*fornitor|fornitor[\s\S]*webcam/i],
@@ -89,6 +102,9 @@ const cases = [
   })),
   ...support.map(([id, message, replyPattern]) => ({
     id, message, replyPattern, section: 'sendinitaly-support', path: '/sendinitaly/support',
+  })),
+  ...sendInItaly.map(([id, message, replyPattern]) => ({
+    id, message, replyPattern, section: 'sendinitaly-users', path: '/sendinitaly/users',
   })),
   ...(includeCrossDomain
     ? crossDomain.map(([id, message, replyPattern]) => ({

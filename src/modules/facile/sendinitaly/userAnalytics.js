@@ -104,17 +104,28 @@ function parseLimit(text = '', fallback = 10) {
   return Math.min(Math.max(value || fallback, 1), 50)
 }
 
+function parseNaturalNumber(token = '') {
+  const normalized = normalizeComparableText(token)
+  const words = new Map([
+    ['un', 1], ['uno', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4],
+    ['cinque', 5], ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10],
+  ])
+  return /^\d+$/.test(normalized) ? Number(normalized) : words.get(normalized)
+}
+
 function parseThresholdFilters(text = '') {
   const filters = []
+  const amount = '(\\d+|un|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)'
   for (const alias of NUMERIC_ALIASES) {
     const source = alias.pattern.source
-    const after = text.match(new RegExp(`${source}\\s+(?:pari\\s+o\\s+)?(almeno|oltre|piu\\s+di|massimo|fino\\s+a|meno\\s+di)\\s+(\\d+)`, 'i'))
-    const before = text.match(new RegExp(`(almeno|oltre|piu\\s+di|massimo|fino\\s+a|meno\\s+di)\\s+(\\d+)\\s+${source}`, 'i'))
+    const after = text.match(new RegExp(`${source}\\s+(?:pari\\s+o\\s+)?(almeno|oltre|piu\\s+di|massimo|fino\\s+a|meno\\s+di)\\s+${amount}`, 'i'))
+    const before = text.match(new RegExp(`(almeno|oltre|piu\\s+di|massimo|fino\\s+a|meno\\s+di)\\s+${amount}\\s+${source}`, 'i'))
     const match = after || before
     if (!match) continue
     const [, phrase, rawValue] = match
     const operator = /almeno/i.test(phrase) ? 'gte' : /oltre|piu/i.test(phrase) ? 'gt' : /massimo|fino/i.test(phrase) ? 'lte' : 'lt'
-    filters.push({field: alias.field, operator, value: Number(rawValue)})
+    const value = parseNaturalNumber(rawValue)
+    if (Number.isFinite(value)) filters.push({field: alias.field, operator, value})
   }
   return filters
 }
@@ -206,6 +217,7 @@ function refinePreviousPlan(message = '', history = []) {
 }
 
 function normalizePlan(raw = {}) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const operation = ['list', 'count', 'aggregate', 'compare'].includes(raw.operation) ? raw.operation : null
   if (!operation) return null
   const rawFilters = Array.isArray(raw.filters) ? raw.filters : []
@@ -372,6 +384,16 @@ function formatFilterSummary(plan) {
   return ` dopo ${plan.filters.length} ${plan.filters.length === 1 ? 'filtro verificato' : 'filtri verificati'}`
 }
 
+function metricLabel(metric = {}) {
+  if (metric.function === 'count') return 'utenti'
+  const field = FIELD_DEFINITIONS[metric.field]?.label || metric.field || 'valore'
+  if (metric.function === 'avg') return `media ${field}`
+  if (metric.function === 'sum') return `totale ${field}`
+  if (metric.function === 'min') return `minimo ${field}`
+  if (metric.function === 'max') return `massimo ${field}`
+  return metric.id || field
+}
+
 function formatResult({plan, rows, aggregates, sourceCount, matchedCount}) {
   if (plan.operation === 'count') return `Risultano ${matchedCount} utenti Send in Italy${formatFilterSummary(plan)} (su ${sourceCount} analizzati).`
   if (plan.operation === 'aggregate') {
@@ -380,7 +402,7 @@ function formatResult({plan, rows, aggregates, sourceCount, matchedCount}) {
       `Analisi utenti Send in Italy per ${plan.groupBy.map(field => FIELD_DEFINITIONS[field].label).join(' e ')} (${sourceCount} utenti analizzati):`,
       ...aggregates.slice(0, plan.limit).map((item, index) => {
         const group = Object.entries(item.group).map(([field, value]) => `${FIELD_DEFINITIONS[field].label} ${value}`).join(', ')
-        const values = Object.entries(item.values).map(([id, value]) => `${id.replaceAll('_', ' ')}: ${formatNumber(value)}`).join('; ')
+        const values = plan.metrics.map(metric => `${metricLabel(metric)}: ${formatNumber(item.values[metric.id])}`).join('; ')
         return `${index + 1}. ${group} — ${values}`
       }),
     ].join('\n')
