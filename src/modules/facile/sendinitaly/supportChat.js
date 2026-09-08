@@ -2,6 +2,7 @@ import {createHash, randomUUID} from 'node:crypto'
 
 import {resolveNamedEntity} from '../../../core/entities/entityResolver.js'
 import {normalizeSearchText} from '../../../utils/text.js'
+import {analyzeSupportResolution, formatSupportAdvice} from './supportAdvisor.js'
 
 const proposals = new Map()
 const PROPOSAL_TTL_MS = 10 * 60 * 1000
@@ -25,6 +26,11 @@ const CATEGORY_ALIASES = new Map([
   ['integrazioni', 'integrations'],
   ['integrazione', 'integrations'],
   ['altro', 'other'],
+])
+const ITALIAN_AMOUNTS = new Map([
+  ['un', 1], ['uno', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4], ['cinque', 5],
+  ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10], ['quindici', 15],
+  ['venti', 20], ['trenta', 30], ['sessanta', 60],
 ])
 
 function response(intent, reply, data, source = 'tool-fast') {
@@ -61,6 +67,11 @@ function sanitizeTicket(ticket = {}) {
     customerName: ticket.customer?.company_name || ticket.customer?.email || null,
     crmCustomerId: ticket.crm_customer_id || null,
     owner: scalar(ticket.owner),
+    createdBy: scalar(ticket.created_by),
+    updatedBy: scalar(ticket.updated_by),
+    closedAt: ticket.closed_at || null,
+    resolvedBy: scalar(ticket.resolved_by),
+    resolutionBasis: ticket.resolution_basis || null,
     clickupLinked: Boolean(ticket.clickup_task_id),
     articleCount: Number(ticket.article_count || 0),
     createdAt: ticket.created_at || null,
@@ -109,9 +120,9 @@ function parsePeriod(text = '', now = Date.now()) {
     return {since: date.getTime(), label: 'oggi'}
   }
 
-  const match = text.match(/(?:ultim[oi]|scors[oi]|negli?\s+ultimi?)\s+(\d+)\s+(giorn|settiman|mes|ann)/)
+  const match = text.match(/(?:ultim[oi]|scors[oi]|negli?\s+ultimi?)\s+(\d+|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|quindici|venti|trenta|sessanta)\s+(giorn|settiman|mes|ann)/)
   if (match) {
-    const amount = Math.max(1, Math.min(Number(match[1]), 60))
+    const amount = Math.max(1, Math.min(Number(match[1]) || ITALIAN_AMOUNTS.get(match[1]) || 1, 60))
     const unit = match[2]
     const days = unit.startsWith('giorn')
       ? amount
@@ -130,9 +141,9 @@ function parsePeriod(text = '', now = Date.now()) {
 }
 
 function parseAgeThreshold(text = '') {
-  const match = text.match(/(?:piu|oltre|da)\s+(?:piu\s+)?(?:di\s+)?(\d+)\s*(or[ae]|giorn[oi]|settiman[ae])/)
+  const match = text.match(/(?:piu|oltre|da)\s+(?:piu\s+)?(?:di\s+)?(\d+|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci|quindici|venti|trenta|sessanta)\s*(or[ae]|giorn[oi]|settiman[ae])/)
   if (!match) return null
-  const amount = Math.max(1, Number(match[1]))
+  const amount = Math.max(1, Number(match[1]) || ITALIAN_AMOUNTS.get(match[1]) || 1)
   const hours = match[2].startsWith('or') ? amount : match[2].startsWith('giorn') ? amount * 24 : amount * 168
   return {ms: hours * 36e5, label: `${amount} ${match[2]}`}
 }
@@ -149,7 +160,7 @@ function extractTicketReference(message = '') {
 
 function findPriorSupportData(history = []) {
   return [...history].reverse().map(item => item?.data).find(data =>
-    ['sendinitaly-support-tickets', 'sendinitaly-support-ticket-detail', 'sendinitaly-support-analysis'].includes(data?.type)
+    ['sendinitaly-support-tickets', 'sendinitaly-support-ticket-detail', 'sendinitaly-support-analysis', 'sendinitaly-support-resolution-advice'].includes(data?.type)
   ) || null
 }
 
@@ -231,14 +242,27 @@ async function loadAllTickets({token, services, customerId = '', state = '', sea
   return {items: items.slice(0, max).map(sanitizeTicket), total, truncated: total > max}
 }
 
-async function resolveTicket({message, token, history, services}) {
+async function resolveTicket({message, token, context = {}, history, services}) {
   const prior = findPriorSupportData(history)
-  const reference = extractTicketReference(message)
+  const activeEntity = context?.activeEntity || null
+  const contextualReference = /^(?:support-)?ticket$/i.test(String(activeEntity?.type || ''))
+    ? activeEntity.id || activeEntity.number || null
+    : null
+  const explicitReference = extractTicketReference(message)
+  const reference = explicitReference || contextualReference
   const priorItems = prior?.ticket ? [prior.ticket] : Array.isArray(prior?.items) ? prior.items : []
 
   if (reference) {
     const match = priorItems.find(item => [item.id, item.number].some(value => String(value) === reference))
     if (match) return {status: 'resolved', item: match}
+    if (!explicitReference && contextualReference) {
+      try {
+        const detail = await services.getSupportTicket({token, ticketId: contextualReference})
+        if (detail?.data?.ticket) return {status: 'resolved', item: sanitizeTicket(detail.data.ticket), detail: detail.data}
+      } catch (_) {
+        return {status: 'not-found', items: []}
+      }
+    }
     const payload = await services.getSupportTickets({token, search: reference, perPage: 50})
     const matches = (Array.isArray(payload?.data) ? payload.data : [])
       .map(sanitizeTicket)
@@ -281,9 +305,12 @@ function proposalResponse(proposal) {
         : proposal.operation === 'support-create'
           ? `creare un ticket per ${proposal.customerName}`
           : `aggiornare ${ticketLabel(proposal.ticket)}`
+  const generatedReplyPreview = proposal.operation === 'support-reply' && proposal.generated
+    ? `\n\nBozza proposta:\n${proposal.body}`
+    : ''
   return response(
     'support-action-preview',
-    `Sto per ${action}. Scrivi “confermo” per procedere oppure “annulla”.`,
+    `Sto per ${action}.${generatedReplyPreview}\n\nScrivi “confermo” per procedere oppure “annulla”.`,
     {
       type: 'action-proposal',
       operation: proposal.operation,
@@ -293,6 +320,7 @@ function proposalResponse(proposal) {
         ? {id: proposal.ticket.id, name: ticketLabel(proposal.ticket)}
         : {id: proposal.customerId, name: proposal.customerName},
       changes: proposal.changes || [],
+      ...(proposal.operation === 'support-reply' ? {draft: proposal.body} : {}),
       confirmationRequired: true,
     }
   )
@@ -398,17 +426,19 @@ async function handleMutationRequest({message, text, token, context, history, se
     return proposalResponse(proposal)
   }
 
-  const action = /\b(?:rispondi|nota\s+interna|annota|escala|chiudi|riapri|metti\s+in\s+attesa)\b/.test(text) || /\b(?:imposta|cambia|assegna)\b[\s\S]*\bpriorita\b/.test(text) || /\b(?:crea|avvia|collega)\b[\s\S]*\b(?:escalation|clickup)\b/.test(text)
+  const priorDraft = findPriorSupportData(history)?.suggestedReply || ''
+  const sendsPriorDraft = Boolean(priorDraft && /\b(?:invia|manda|spedisci)\b[\s\S]*\b(?:questa|la|quella)?\s*risposta\b/.test(text))
+  const action = /\b(?:rispondi|nota\s+interna|annota|escala|chiudi|riapri|metti\s+in\s+attesa)\b/.test(text) || sendsPriorDraft || /\b(?:imposta|cambia|assegna)\b[\s\S]*\bpriorita\b/.test(text) || /\b(?:crea|avvia|collega)\b[\s\S]*\b(?:escalation|clickup)\b/.test(text)
   if (!action) return null
-  const resolved = await resolveTicket({message, token, history, services})
+  const resolved = await resolveTicket({message, token, context, history, services})
   if (resolved.status !== 'resolved') return response('clarification', ticketClarification(resolved), {type: 'clarification', reason: `support-ticket-${resolved.status}`})
   const ticket = resolved.item
   const base = {ticket, ticketId: ticket.id, actorFingerprint: fingerprint(token), expiresAt: Date.now() + PROPOSAL_TTL_MS}
 
-  if (/\brispondi\b/.test(text)) {
-    const body = parseMessageBody(message)
+  if (/\brispondi\b/.test(text) || sendsPriorDraft) {
+    const body = parseMessageBody(message) || (sendsPriorDraft ? priorDraft : '')
     if (!body) return response('clarification', `Quale risposta vuoi inviare a ${ticketLabel(ticket)}? Scrivila dopo i due punti.`, {type: 'clarification', reason: 'support-reply-body-required'})
-    return proposalResponse({...base, operation: 'support-reply', body})
+    return proposalResponse({...base, operation: 'support-reply', body, generated: Boolean(sendsPriorDraft && priorDraft)})
   }
   if (/\b(?:nota\s+interna|annota)\b/.test(text)) {
     const body = parseMessageBody(message)
@@ -433,6 +463,8 @@ function sanitizeArticle(article = {}) {
     body: String(article.body || '').trim().slice(0, 3000),
     sender: scalar(article.sender),
     from: article.from || null,
+    createdBy: scalar(article.created_by),
+    originBy: scalar(article.origin_by),
     internal: article.internal === true,
     createdAt: article.created_at || null,
     attachments: Array.isArray(article.attachments)
@@ -441,23 +473,104 @@ function sanitizeArticle(article = {}) {
   }
 }
 
-async function handleDetailRequest({message, text, token, history, services}) {
+function supportActions(ticket) {
+  return [{id: 'navigate', label: 'Apri ticket', path: '/sendinitaly/support', query: {ticket_id: String(ticket.id)}}]
+}
+
+async function loadTicketDetail({message, token, context, history, services}) {
+  const resolved = await resolveTicket({message, token, context, history, services})
+  if (resolved.status !== 'resolved') return {error: response('clarification', ticketClarification(resolved), {type: 'clarification', reason: `support-ticket-${resolved.status}`})}
+  const payload = resolved.detail || (await services.getSupportTicket({token, ticketId: resolved.item.id}))?.data || {}
+  return {
+    payload,
+    ticket: sanitizeTicket(payload.ticket || resolved.item),
+    articles: (Array.isArray(payload.articles) ? payload.articles : []).map(sanitizeArticle),
+  }
+}
+
+function asksSupportAdvice(text = '') {
+  return /\b(?:come\s+(?:va|posso|dovrei|si\s+puo)\s+risol|come\s+risol|cosa\s+(?:devo|dovrei|posso)\s+(?:fare|rispond)|come\s+rispond|prepara(?:mi)?|predisponi|suggerisci|genera|scrivi|invia|manda)\w*\b[\s\S]*\b(?:risoluzione|risposta|ticket)\b/.test(text) ||
+    /\b(?:analizza|diagnostica)\b[\s\S]*\bticket\b/.test(text)
+}
+
+async function handleAdviceRequest({message, text, token, context, history, services}) {
+  if (!asksSupportAdvice(text)) return null
+  const detail = await loadTicketDetail({message, token, context, history, services})
+  if (detail.error) return detail.error
+  const advice = await (services.analyzeSupportResolution || analyzeSupportResolution)({
+    ticket: detail.ticket,
+    articles: detail.articles,
+    request: message,
+  })
+  const wantsSend = /\b(?:invia|manda|spedisci)\b/.test(text)
+  if (wantsSend) {
+    return proposalResponse({
+      operation: 'support-reply',
+      ticket: detail.ticket,
+      ticketId: detail.ticket.id,
+      body: advice.suggestedReply,
+      generated: true,
+      actorFingerprint: fingerprint(token),
+      expiresAt: Date.now() + PROPOSAL_TTL_MS,
+      changes: [{label: 'Risposta pubblica', from: 'non inviata', to: advice.suggestedReply}],
+    })
+  }
+  return response('sendinitaly-support-resolution-advice', formatSupportAdvice(detail.ticket, advice), {
+    type: 'sendinitaly-support-resolution-advice',
+    ticket: detail.ticket,
+    articles: detail.articles.slice(-16),
+    ...advice,
+    actions: supportActions(detail.ticket),
+  }, advice.modelUsed ? 'llm-grounded' : 'tool-semantic')
+}
+
+async function handleTicketActorRequest({message, text, token, context, history, services}) {
+  const asksLatestCreator = /\bchi\b[\s\S]*\b(?:mandat|inviat|apert|creat)\w*\b[\s\S]*\bultim[oa]\b[\s\S]*\bticket\b|\bultim[oa]\s+ticket\b[\s\S]*\bchi\b/.test(text)
+  if (asksLatestCreator) {
+    const loaded = await loadAllTickets({token, services})
+    const latest = loaded.items.sort((a, b) => (toTime(b.createdAt) || 0) - (toTime(a.createdAt) || 0))[0]
+    if (!latest) return response('sendinitaly-support-analysis', 'Non risultano ticket di assistenza.', {type: 'sendinitaly-support-analysis', items: [], total: 0})
+    const actor = latest.customerName || latest.createdBy || latest.customerId || 'autore non disponibile'
+    return response('sendinitaly-support-ticket-actor', `L’ultimo ticket è ${ticketLabel(latest)}, aperto da ${actor}${latest.createdAt ? ` il ${String(latest.createdAt).slice(0, 16).replace('T', ' ')}` : ''}.`, {
+      type: 'sendinitaly-support-ticket-detail', ticket: latest, articles: [], actor: {role: 'creator', name: actor}, actions: supportActions(latest),
+    })
+  }
+
+  const asksResolver = /\bchi\b[\s\S]*\b(?:ha\s+)?(?:risolt|chius)\w*\b[\s\S]*\bticket\b|\bticket\b[\s\S]*\bchi\b[\s\S]*\b(?:risolt|chius)\w*\b/.test(text)
+  if (!asksResolver) return null
+  const detail = await loadTicketDetail({message, token, context, history, services})
+  if (detail.error) return detail.error
+  const resolution = detail.payload?.resolution || null
+  if (normalizeComparable(detail.ticket.state) !== 'closed') {
+    return response('sendinitaly-support-ticket-actor', `${ticketLabel(detail.ticket)} non risulta chiuso, quindi non c’è ancora un risolutore registrato.`, {
+      type: 'sendinitaly-support-ticket-detail', ticket: detail.ticket, articles: [], resolution: null, actions: supportActions(detail.ticket),
+    })
+  }
+  const actor = resolution?.actor || detail.ticket.resolvedBy
+  const inferred = resolution?.inferred === true || detail.ticket.resolutionBasis === 'latest-agent-before-close' || detail.ticket.resolutionBasis === 'current-owner'
+  const reply = actor
+    ? `${ticketLabel(detail.ticket)} risulta chiuso da ${actor}${resolution?.at || detail.ticket.closedAt ? ` il ${String(resolution?.at || detail.ticket.closedAt).slice(0, 16).replace('T', ' ')}` : ''}.${inferred ? ' Il nominativo è ricavato dall’ultima attività operatore disponibile prima della chiusura.' : ''}`
+    : `${ticketLabel(detail.ticket)} risulta chiuso, ma Zammad non espone un operatore di chiusura identificabile nei dati disponibili.`
+  return response('sendinitaly-support-ticket-actor', reply, {
+    type: 'sendinitaly-support-ticket-detail', ticket: detail.ticket, articles: [], resolution: resolution || {actor: actor || null, inferred}, actions: supportActions(detail.ticket),
+  })
+}
+
+async function handleDetailRequest({message, text, token, context, history, services}) {
   const asksDetail = /\b(?:dettagl(?:io|i)|conversazione|cronologia|messaggi?|risposte?|ultima\s+risposta|cosa\s+(?:dice|chiede))\b/.test(text)
   if (!asksDetail) return null
-  const resolved = await resolveTicket({message, token, history, services})
-  if (resolved.status !== 'resolved') return response('clarification', ticketClarification(resolved), {type: 'clarification', reason: `support-ticket-${resolved.status}`})
-  const payload = resolved.detail || (await services.getSupportTicket({token, ticketId: resolved.item.id}))?.data || {}
-  const ticket = sanitizeTicket(payload.ticket || resolved.item)
-  const articles = (Array.isArray(payload.articles) ? payload.articles : []).map(sanitizeArticle)
+  const detail = await loadTicketDetail({message, token, context, history, services})
+  if (detail.error) return detail.error
+  const {ticket, articles} = detail
   const visible = /\bultima\s+risposta\b/.test(text) ? articles.slice(-1) : articles.slice(-10)
   const lines = [
     `${ticketLabel(ticket)} — ${ticket.state || 'stato non disponibile'}, priorità ${ticket.priority || 'non disponibile'}.`,
     `Cliente: ${ticket.customerName || ticket.customerId || 'non associato'}; categoria: ${ticket.category || 'non indicata'}; messaggi: ${articles.length}.`,
-    ...visible.map(article => `- ${article.createdAt ? String(article.createdAt).slice(0, 16).replace('T', ' ') : 'data non disponibile'} · ${article.internal ? 'nota interna' : article.sender || 'messaggio'}: ${article.body || '(solo allegati)'}`),
+    ...visible.map(article => `- ${article.createdAt ? String(article.createdAt).slice(0, 16).replace('T', ' ') : 'data non disponibile'} · ${article.internal ? 'nota interna' : article.sender || 'messaggio'}${article.createdBy || article.from ? ` · ${article.createdBy || article.from}` : ''}: ${article.body || '(solo allegati)'}`),
   ]
   return response('sendinitaly-support-ticket-detail', lines.join('\n'), {
     type: 'sendinitaly-support-ticket-detail', ticket, articles: visible,
-    actions: [{id: 'navigate', label: 'Apri ticket', path: '/sendinitaly/support', query: {ticket_id: String(ticket.id)}}],
+    actions: supportActions(ticket),
   }, 'tool-semantic')
 }
 
@@ -537,7 +650,8 @@ async function handleReadRequest({message, text, token, context, services, now =
   const category = parseCategory(text)
   const period = parsePeriod(text, now)
   const age = parseAgeThreshold(text)
-  const unanswered = /\b(?:senza\s+risposta|da\s+rispondere|attendono\s+risposta|cliente\s+in\s+attesa)\b/.test(text)
+  const needsAttention = /\b(?:da\s+gestire|da\s+lavorare|richiedono\s+intervento|richiede\s+intervento)\b/.test(text)
+  const unanswered = needsAttention || /\b(?:senza\s+risposta|da\s+rispondere|attendono\s+risposta|cliente\s+in\s+attesa)\b/.test(text)
   const escalated = /\b(?:escalat|clickup|sviluppo)\b/.test(text) && !/\bsenza\b/.test(text)
   const customerTarget = extractCustomerTarget(message)
   const hasModuleContext = Boolean(context?.activeModuleId || context?.section)
@@ -581,7 +695,7 @@ async function handleReadRequest({message, text, token, context, services, now =
     {
       type: field || operation === 'count' || unanswered || age ? 'sendinitaly-support-analysis' : 'sendinitaly-support-tickets',
       items: items.slice(0, 50), total: items.length, loadedTotal: loaded.items.length,
-      filters: {customerId: customerId || null, state: state || null, priority: priority || null, category: category || null, period: period?.label || null, unanswered, escalated},
+      filters: {customerId: customerId || null, state: state || null, priority: priority || null, category: category || null, period: period?.label || null, unanswered, needsAttention, escalated},
       analysis: analytical.analysis,
       actions: [{id: 'navigate', label: 'Apri assistenza', path: '/sendinitaly/support', query: customerId ? {customer_id: String(customerId)} : {}}],
     },
@@ -590,7 +704,7 @@ async function handleReadRequest({message, text, token, context, services, now =
 }
 
 export function isSupportChatRequest({message = '', history = []} = {}) {
-  return SUPPORT_PATTERN.test(message) || Boolean(findProposalToken(history)) || Boolean(findPriorSupportData(history) && /\b(?:quest[oi]|prim[oa]|second[oa]|terz[oa]|aprilo|chiudilo|rispondi|escalalo)\b/i.test(message))
+  return SUPPORT_PATTERN.test(message) || Boolean(findProposalToken(history)) || Boolean(findPriorSupportData(history) && /\b(?:quest[oi]|prim[oa]|second[oa]|terz[oa]|aprilo|chiudilo|rispondi|risposta|invia|manda|escalalo)\b/i.test(message))
 }
 
 export async function handleSupportChat({message = '', token, context = {}, history = [], services} = {}) {
@@ -600,7 +714,11 @@ export async function handleSupportChat({message = '', token, context = {}, hist
   const text = normalizeSearchText(message)
   const mutation = await handleMutationRequest({message, text, token, context, history, services})
   if (mutation) return mutation
-  const detail = await handleDetailRequest({message, text, token, history, services})
+  const actor = await handleTicketActorRequest({message, text, token, context, history, services})
+  if (actor) return actor
+  const advice = await handleAdviceRequest({message, text, token, context, history, services})
+  if (advice) return advice
+  const detail = await handleDetailRequest({message, text, token, context, history, services})
   if (detail) return detail
   return handleReadRequest({message, text, token, context, services})
 }

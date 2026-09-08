@@ -40,6 +40,21 @@ test('builds sanitized Send in Italy support cards with customer navigation', ()
   assert.equal(JSON.stringify(presentation).includes('never-copy'), false)
 })
 
+test('builds a compact support advice card without treating the draft as executed', () => {
+  const presentation = buildChatPresentation({
+    type: 'sendinitaly-support-resolution-advice',
+    ticket: {id: 42, number: '42001', title: 'Problema dominio'},
+    summary: 'Il cliente segnala un problema DNS.',
+    confidence: 'medium',
+    steps: ['Verificare SPF'],
+    missingInformation: ['Dominio mittente'],
+    suggestedReply: 'Stiamo verificando.',
+  })
+  assert.equal(presentation.title, 'Analisi ticket assistenza')
+  assert.equal(presentation.cards[0].details[2].value, 'pronta, non inviata')
+  assert.deepEqual(presentation.cards[0].action.query, {ticket_id: '42'})
+})
+
 test('builds WebcamGo metrics and list cards with internal navigation', () => {
   const metrics = buildChatPresentation({type: 'webcam-summary', summary: {total: 10, online: 8, offline: 2}})
   assert.equal(metrics.kind, 'metrics')

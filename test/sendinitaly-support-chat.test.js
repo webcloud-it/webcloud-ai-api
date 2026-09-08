@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {handleSupportChat} from '../src/modules/facile/sendinitaly/supportChat.js'
+import {analyzeSupportResolution, redactSupportText} from '../src/modules/facile/sendinitaly/supportAdvisor.js'
 
 function services(overrides = {}) {
   return {
@@ -78,6 +79,17 @@ test('counts unanswered tickets older than a requested threshold', async () => {
   assert.equal(result.intent, 'sendinitaly-support-analysis')
   assert.equal(result.data.total, 1)
   assert.match(result.reply, /1 ticket/)
+})
+
+test('understands an age threshold written in Italian words', async () => {
+  const result = await handleSupportChat({
+    message: 'Quali ticket sono senza risposta da più di due giorni?', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({id: 1, last_contact_customer_at: '2026-09-01T10:00:00Z'}),
+      ticket({id: 2, last_contact_customer_at: new Date().toISOString()}),
+    ], meta: {total: 2}})}),
+  })
+  assert.equal(result.data.total, 1)
 })
 
 test('ranks customers by ticket count on the complete loaded dataset', async () => {
@@ -294,4 +306,152 @@ test('does not reuse a CRM customer scope for support filtering', async () => {
     services: services({getSupportTickets: async options => { customerId = options.customerId; return {data: [], meta: {total: 0}} }}),
   })
   assert.equal(customerId, '')
+})
+
+test('treats tickets da gestire as unresolved tickets awaiting an operator reply', async () => {
+  const result = await handleSupportChat({
+    message: 'Quanti ticket sono da gestire?', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({id: 1, state: 'new', last_contact_customer_at: '2026-09-07T10:00:00Z', last_contact_agent_at: null}),
+      ticket({id: 2, state: 'open', last_contact_customer_at: '2026-09-07T10:00:00Z', last_contact_agent_at: '2026-09-07T11:00:00Z'}),
+      ticket({id: 3, state: 'closed', last_contact_customer_at: '2026-09-07T10:00:00Z', last_contact_agent_at: null}),
+    ], meta: {total: 3}})}),
+  })
+  assert.equal(result.data.total, 1)
+  assert.equal(result.data.filters.needsAttention, true)
+  assert.match(result.reply, /1 ticket/)
+})
+
+test('identifies who opened the latest ticket using creation time, not update time', async () => {
+  const result = await handleSupportChat({
+    message: 'Chi ha mandato l’ultimo ticket?', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({id: 1, number: '1001', customer: {company_name: 'Vecchio'}, created_at: '2026-09-01T10:00:00Z', updated_at: '2026-09-08T10:00:00Z'}),
+      ticket({id: 2, number: '1002', customer: {company_name: 'Recente'}, created_at: '2026-09-07T10:00:00Z', updated_at: '2026-09-07T10:00:00Z'}),
+    ], meta: {total: 2}})}),
+  })
+  assert.equal(result.intent, 'sendinitaly-support-ticket-actor')
+  assert.equal(result.data.ticket.number, '1002')
+  assert.match(result.reply, /Recente/)
+})
+
+test('reports the recorded resolver of a closed ticket', async () => {
+  const result = await handleSupportChat({
+    message: 'Chi ha risolto il ticket #42001?', token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [ticket({state: 'closed'})], meta: {total: 1}}),
+      getSupportTicket: async () => ({data: {
+        ticket: ticket({state: 'closed', resolved_by: 'Mario Rossi', closed_at: '2026-09-07T12:00:00Z'}),
+        articles: [],
+        resolution: {actor: 'Mario Rossi', at: '2026-09-07T12:00:00Z', basis: 'closing-update', inferred: false},
+      }}),
+    }),
+  })
+  assert.match(result.reply, /Mario Rossi/)
+  assert.equal(result.data.resolution.inferred, false)
+})
+
+test('explains that an open ticket has no resolver yet', async () => {
+  const result = await handleSupportChat({
+    message: 'Chi ha risolto il ticket #42001?', token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+      getSupportTicket: async () => ({data: {ticket: ticket(), articles: []}}),
+    }),
+  })
+  assert.match(result.reply, /non risulta chiuso/i)
+})
+
+test('builds a grounded resolution plan and reply draft from the ticket conversation', async () => {
+  const result = await handleSupportChat({
+    message: 'Come va risolto il ticket #42001?', token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+      getSupportTicket: async () => ({data: {ticket: ticket(), articles: [{id: 1, sender: 'Customer', body: 'SPF non valido'}]}}),
+      analyzeSupportResolution: async () => ({
+        summary: 'Il cliente segnala un controllo SPF non valido.',
+        customerRequest: 'Correggere SPF', hypotheses: ['Record SPF incompleto'],
+        steps: ['Leggere il record DNS effettivo', 'Confrontarlo con il valore richiesto'],
+        missingInformation: ['Dominio mittente'], suggestedReply: 'Buongiorno, verifichiamo il record SPF del dominio mittente.',
+        confidence: 'medium', risks: [], modelUsed: true,
+      }),
+    }),
+  })
+  assert.equal(result.intent, 'sendinitaly-support-resolution-advice')
+  assert.match(result.reply, /Piano consigliato/)
+  assert.match(result.reply, /Bozza di risposta/)
+  assert.equal(result.data.suggestedReply, 'Buongiorno, verifichiamo il record SPF del dominio mittente.')
+})
+
+test('uses the support ticket opened in Facile when the request omits its number', async () => {
+  let requestedTicketId
+  const result = await handleSupportChat({
+    message: 'Come va risolto questo ticket?', token: 'token',
+    context: {activeEntity: {type: 'support-ticket', id: 42, number: '42001'}},
+    services: services({
+      getSupportTickets: async () => { throw new Error('list lookup should not be needed') },
+      getSupportTicket: async ({ticketId}) => {
+        requestedTicketId = ticketId
+        return {data: {ticket: ticket(), articles: []}}
+      },
+      analyzeSupportResolution: async () => ({summary: 'Analisi', customerRequest: 'Richiesta', hypotheses: [], steps: ['Verifica'], missingInformation: [], suggestedReply: 'Bozza', confidence: 'low', risks: [], modelUsed: true}),
+    }),
+  })
+  assert.equal(requestedTicketId, 42)
+  assert.equal(result.intent, 'sendinitaly-support-resolution-advice')
+})
+
+test('sending a generated draft still requires an explicit confirmation', async () => {
+  let calls = 0
+  const mocked = services({
+    getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+    getSupportTicket: async () => ({data: {ticket: ticket(), articles: []}}),
+    analyzeSupportResolution: async () => ({summary: 'Analisi', customerRequest: 'Richiesta', hypotheses: [], steps: ['Verifica'], missingInformation: [], suggestedReply: 'Bozza verificabile', confidence: 'low', risks: [], modelUsed: true}),
+    addSupportTicketArticle: async () => { calls += 1; return {data: {id: 9}} },
+  })
+  const advice = await handleSupportChat({message: 'Prepara una risposta per il ticket #42001', token: 'token', services: mocked})
+  const preview = await handleSupportChat({message: 'Invia questa risposta', token: 'token', history: [{data: advice.data}], services: mocked})
+  assert.equal(preview.data.type, 'action-proposal')
+  assert.equal(preview.data.draft, 'Bozza verificabile')
+  assert.equal(calls, 0)
+  await handleSupportChat({message: 'confermo', token: 'token', history: [{data: preview.data}], services: mocked})
+  assert.equal(calls, 1)
+})
+
+test('prepare and send in one request generates a preview instead of mutating Zammad', async () => {
+  let calls = 0
+  const preview = await handleSupportChat({
+    message: 'Prepara e invia una risposta per il ticket #42001', token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+      getSupportTicket: async () => ({data: {ticket: ticket(), articles: []}}),
+      analyzeSupportResolution: async () => ({summary: 'Analisi', customerRequest: 'Richiesta', hypotheses: [], steps: ['Verifica'], missingInformation: [], suggestedReply: 'Risposta proposta', confidence: 'low', risks: [], modelUsed: true}),
+      addSupportTicketArticle: async () => { calls += 1 },
+    }),
+  })
+  assert.equal(preview.data.type, 'action-proposal')
+  assert.equal(preview.data.draft, 'Risposta proposta')
+  assert.equal(calls, 0)
+})
+
+test('redacts credentials before ticket content can reach the model', () => {
+  const redacted = redactSupportText('password: hunter2 token=abc123456789 Authorization: secret-value')
+  assert.doesNotMatch(redacted, /hunter2|abc123456789|secret-value/)
+  assert.match(redacted, /dato sensibile omesso/)
+})
+
+test('support advisor validates structured model output and keeps deterministic playbook steps', async () => {
+  let modelInput
+  const advice = await analyzeSupportResolution({
+    ticket: ticket(),
+    articles: [{sender: 'Customer', body: 'La password: hunter2 non funziona'}],
+    request: 'Come va risolto?',
+    callModel: async input => {
+      modelInput = input
+      return {summary: 'Accesso non riuscito', customerRequest: 'Ripristinare accesso', hypotheses: [], steps: [], missingInformation: [], suggestedReply: 'Verifichiamo lo stato dell’account.', confidence: 'medium', risks: []}
+    },
+  })
+  assert.equal(advice.modelUsed, true)
+  assert.equal(advice.steps.length, 3)
+  assert.doesNotMatch(JSON.stringify(modelInput), /hunter2/)
 })

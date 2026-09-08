@@ -81,6 +81,22 @@ function sendInItalyPresentation(data) {
     }], 1)
   }
 
+  if (data.type === 'sendinitaly-support-resolution-advice' && data.ticket) {
+    const ticket = data.ticket
+    return list('Analisi ticket assistenza', [{
+      id: text(ticket.id),
+      title: text(`#${ticket.number || ticket.id} ${ticket.title}`, 'Ticket'),
+      subtitle: text(data.summary),
+      badge: text(`confidenza ${data.confidence || 'bassa'}`),
+      details: [
+        detail('Passaggi consigliati', data.steps?.length || 0),
+        detail('Informazioni mancanti', data.missingInformation?.length || 0),
+        detail('Bozza', data.suggestedReply ? 'pronta, non inviata' : 'non disponibile'),
+      ].filter(Boolean),
+      action: {id: 'navigate', label: 'Apri ticket', path: '/sendinitaly/support', query: {ticket_id: text(ticket.id)}},
+    }], 1)
+  }
+
   if (data.type === 'sendinitaly-campaigns') {
     return list('Campagne Send in Italy', items.map(item => ({
       id: text(item.id),

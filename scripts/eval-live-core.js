@@ -58,6 +58,14 @@ const support = [
   ['T14', 'Quanti ticket hanno priorità alta?', /ticket|priorit/i],
   ['T15', 'Quanti ticket risultano chiusi?', /ticket|chius/i],
   ['T16', 'Confronta i primi due clienti per numero di ticket.', /client|ticket|prim/i],
+  ['T17', 'Quanti ticket sono da gestire?', /ticket/i],
+  ['T18', 'Chi ha mandato l’ultimo ticket?', /ultimo ticket.*aperto da/i],
+  ['T19', 'Chi ha risolto il ticket 25003?', /25003.*chius|25003.*risolt/i],
+  ['T20', 'Chi ha risolto il ticket 25004?', /non risulta chiuso/i],
+  ['T21', 'Come va risolto il ticket 25004?', /analisi|piano consigliato|bozza di risposta/i],
+  ['T22', 'Prepara una risposta per il ticket 25004.', /bozza di risposta|bozza proposta/i],
+  ['T23', 'Prepara e invia una risposta per il ticket 25004.', /confermo|sto per inviare/i],
+  ['T24', 'Chi ha scritto l’ultima risposta nel ticket 25004?', /25004|risposta|agent|customer/i],
 ]
 
 const cases = [
