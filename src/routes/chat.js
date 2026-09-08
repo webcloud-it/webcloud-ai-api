@@ -16,6 +16,7 @@ import {recordChatAudit} from '../core/observability/chatAudit.js'
 import {attachChatPresentation} from '../core/presentation/chatPresentation.js'
 import {env} from '../config/env.js'
 import {buildInfo} from '../config/build.js'
+import {executeMultiModuleRead} from '../core/orchestrator/multiModuleRead.js'
 
 const router = express.Router()
 
@@ -74,7 +75,8 @@ router.post(
     }
 
     if (globalPlan?.type === 'multi-module') {
-      return res.json(buildMultiModuleResponse(globalPlan))
+      const result = await executeMultiModuleRead({plan: globalPlan, req})
+      return res.json(result || buildMultiModuleResponse(globalPlan))
     }
 
     if (globalPlan?.type === 'unsupported-domain') {

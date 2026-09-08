@@ -419,6 +419,7 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
         type: semantic.secondaryModuleIds.length ? 'multi-module' : 'module',
         moduleId: semantic.moduleId,
         secondaryModuleIds: semantic.secondaryModuleIds,
+        tasks: semantic.tasks,
         canonicalMessage: semantic.canonicalMessage,
         source: 'semantic',
         confidence: semantic.confidence,

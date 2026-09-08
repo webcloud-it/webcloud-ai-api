@@ -414,10 +414,25 @@ function proposalPresentation(data) {
   }
 }
 
+function multiModulePresentation(data) {
+  if (data.type !== 'multi-module-read-result' || !Array.isArray(data.results)) return null
+
+  return list('Analisi trasversale', data.results.map(result => ({
+    id: text(result.moduleId),
+    title: text(result.label, 'Area Webcloud'),
+    subtitle: text(result.canonicalMessage),
+    badge: text(result.data?.type || result.intent, 'verificata'),
+    details: [
+      detail('Risultati', result.data?.total),
+      detail('Stato', 'lettura completata'),
+    ].filter(Boolean),
+  })), data.results.length)
+}
+
 export function buildChatPresentation(data = null) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null
   if (data.presentation?.version) return data.presentation
-  return proposalPresentation(data) || asiagoPresentation(data) || webcloudPresentation(data) || sendInItalyPresentation(data) || webcamPresentation(data) || renewalsPresentation(data)
+  return proposalPresentation(data) || multiModulePresentation(data) || asiagoPresentation(data) || webcloudPresentation(data) || sendInItalyPresentation(data) || webcamPresentation(data) || renewalsPresentation(data)
 }
 
 export function attachChatPresentation(payload = null) {

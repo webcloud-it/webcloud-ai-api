@@ -564,11 +564,19 @@ test('semantic planner recognizes requests spanning multiple modules', async () 
       confidence: 0.95,
       relationToPrevious: 'new',
       secondaryModuleIds: ['facile.renewals'],
+      tasks: [
+        {moduleId: 'facile.webcamgo', canonicalMessage: 'elenca webcam offline', operation: 'read'},
+        {moduleId: 'facile.renewals', canonicalMessage: 'elenca scadenze di dicembre', operation: 'read'},
+      ],
     })
   )
 
   assert.equal(plan.type, 'multi-module')
   assert.deepEqual(plan.secondaryModuleIds, ['facile.renewals'])
+  assert.deepEqual(plan.tasks, [
+    {moduleId: 'facile.webcamgo', canonicalMessage: 'elenca webcam offline', operation: 'read'},
+    {moduleId: 'facile.renewals', canonicalMessage: 'elenca scadenze di dicembre', operation: 'read'},
+  ])
 })
 
 test('semantic router rejects invented or unavailable modules', async () => {

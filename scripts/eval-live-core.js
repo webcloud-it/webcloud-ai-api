@@ -12,9 +12,10 @@ if (!process.env.SPECIALK_CMS_TOKEN) {
 const API_URL = process.env.WEBCLOUD_AI_EVAL_URL || 'https://ai-api.webcloud.cloud/api/chat'
 const crmToken = process.env.CRM_TOKEN
 const specialkToken = process.env.SPECIALK_CMS_TOKEN
+const webcamgoToken = process.env.WEBCAMGO_CONTROL_API_KEY
 
-if (!crmToken || !specialkToken) {
-  console.error('CRM_TOKEN e SPECIALK_CMS_TOKEN sono obbligatori per la verifica live.')
+if (!crmToken || !specialkToken || !webcamgoToken) {
+  console.error('CRM_TOKEN, SPECIALK_CMS_TOKEN e WEBCAMGO_CONTROL_API_KEY sono obbligatori per la verifica live.')
   process.exit(2)
 }
 
@@ -69,12 +70,20 @@ const support = [
   ['T25', 'Mostrami le info del ticket 25004.', /25004/i],
 ]
 
+const crossDomain = [
+  ['M01', 'Quante webcam sono offline e quanti ticket sono da gestire?', /webcam[\s\S]*ticket|ticket[\s\S]*webcam/i],
+  ['M02', 'Mostrami le webcam con stream offline e i cinque fornitori con più servizi in scadenza nel 2027.', /webcam[\s\S]*fornitor|fornitor[\s\S]*webcam/i],
+]
+
 const cases = [
   ...renewals.map(([id, message, replyPattern]) => ({
     id, message, replyPattern, section: 'renewals', path: '/renewals',
   })),
   ...support.map(([id, message, replyPattern]) => ({
     id, message, replyPattern, section: 'sendinitaly-support', path: '/sendinitaly/support',
+  })),
+  ...crossDomain.map(([id, message, replyPattern]) => ({
+    id, message, replyPattern, section: 'home', path: '/',
   })),
 ]
 
@@ -89,6 +98,7 @@ async function execute(item) {
       authorization: `Bearer ${crmToken}`,
       'x-webcloud-credential-crm': crmToken,
       'x-webcloud-credential-specialk': specialkToken,
+      'x-webcloud-credential-webcamgo': webcamgoToken,
     },
     body: JSON.stringify({
       moduleId: 'facile',

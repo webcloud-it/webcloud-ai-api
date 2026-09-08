@@ -233,3 +233,30 @@ test('builds operational overview cards', () => {
   assert.equal(presentation.cards[0].badge, 'attenzione')
   assert.equal(presentation.cards[0].action.path, '/webcamgo')
 })
+
+test('builds a compact card for verified cross-domain reads', () => {
+  const presentation = buildChatPresentation({
+    type: 'multi-module-read-result',
+    results: [
+      {
+        moduleId: 'facile.webcamgo',
+        label: 'WebcamGo',
+        canonicalMessage: 'quante webcam sono offline',
+        intent: 'webcam-list',
+        data: {type: 'webcam-list', total: 3},
+      },
+      {
+        moduleId: 'facile.sendinitaly',
+        label: 'Send in Italy',
+        canonicalMessage: 'quanti ticket sono da gestire',
+        intent: 'sendinitaly-support-analysis',
+        data: {type: 'sendinitaly-support-analysis', total: 2},
+      },
+    ],
+  })
+
+  assert.equal(presentation.kind, 'list')
+  assert.equal(presentation.title, 'Analisi trasversale')
+  assert.equal(presentation.cards.length, 2)
+  assert.equal(presentation.cards[0].details[0].value, '3')
+})

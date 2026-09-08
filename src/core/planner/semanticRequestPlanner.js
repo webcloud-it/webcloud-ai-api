@@ -56,17 +56,35 @@ function normalizePlan(raw, availableModuleIds) {
   const moduleId = Object.hasOwn(MODULES, raw.moduleId) ? raw.moduleId : null
   const confidence = Math.max(0, Math.min(1, Number(raw.confidence) || 0))
   const canonicalMessage = String(raw.canonicalMessage || '').trim().slice(0, 1000)
+  const rawTasks = Array.isArray(raw.tasks) ? raw.tasks : []
+  const tasks = rawTasks
+    .map(task => {
+      const taskModuleId = Object.hasOwn(MODULES, task?.moduleId) ? task.moduleId : null
+      const taskMessage = String(task?.canonicalMessage || '').trim().slice(0, 1000)
+      const operation = ['read', 'write'].includes(task?.operation) ? task.operation : 'unknown'
+      return taskModuleId && taskMessage
+        ? {moduleId: taskModuleId, canonicalMessage: taskMessage, operation}
+        : null
+    })
+    .filter(Boolean)
+    .filter((task, index, all) => all.findIndex(item => item.moduleId === task.moduleId) === index)
+    .slice(0, 4)
+  const taskModuleIds = tasks.map(task => task.moduleId)
+  const resolvedModuleId = taskModuleIds[0] || moduleId
   const secondaryModuleIds = [...new Set(
     (Array.isArray(raw.secondaryModuleIds) ? raw.secondaryModuleIds : [])
-      .filter(id => Object.hasOwn(MODULES, id) && id !== moduleId)
+      .filter(id => Object.hasOwn(MODULES, id) && id !== resolvedModuleId)
   )]
+  for (const taskModuleId of taskModuleIds.slice(1)) {
+    if (!secondaryModuleIds.includes(taskModuleId)) secondaryModuleIds.push(taskModuleId)
+  }
 
   if (!mode) return null
-  if (mode === 'tool' && !moduleId) return null
+  if (mode === 'tool' && !resolvedModuleId) return null
 
   return {
     mode,
-    moduleId,
+    moduleId: resolvedModuleId,
     intent: String(raw.intent || '').trim().slice(0, 80) || null,
     canonicalMessage: canonicalMessage || null,
     confidence,
@@ -80,7 +98,11 @@ function normalizePlan(raw, availableModuleIds) {
         }
       : null,
     secondaryModuleIds,
-    available: moduleId ? availableModuleIds.includes(moduleId) : true,
+    tasks,
+    available:
+      resolvedModuleId
+        ? [resolvedModuleId, ...secondaryModuleIds].every(id => availableModuleIds.includes(id))
+        : true,
   }
 }
 
@@ -99,14 +121,15 @@ export async function planSemanticRequest({message, context = {}, history = [], 
         role: 'system',
         content: [
           'Planner JSON di Facile. Interpreta l’italiano; non rispondere e non inventare dati o ID.',
-          'Output: {"mode":"tool|conversation|clarification","moduleId":string|null,"intent":string,"canonicalMessage":string,"confidence":number,"relationToPrevious":"new|refine|correct|reference|continue","entity":{"type":string|null,"mention":string|null},"secondaryModuleIds":[]}.',
+          'Output: {"mode":"tool|conversation|clarification","moduleId":string|null,"intent":string,"canonicalMessage":string,"confidence":number,"relationToPrevious":"new|refine|correct|reference|continue","entity":{"type":string|null,"mention":string|null},"secondaryModuleIds":[],"tasks":[{"moduleId":string,"canonicalMessage":string,"operation":"read|write"}]}.',
           'Per richieste informative o operative usa tool. canonicalMessage: italiano breve e inequivocabile, stessa azione e TUTTI i vincoli originali.',
+          'Se la richiesta contiene più obiettivi in aree diverse, crea un task autonomo per ogni area, con la sola parte pertinente della richiesta. Non unire aree nello stesso task. Usa operation=write se il task modifica dati, invia messaggi o controlla dispositivi; altrimenti read.',
           'Risolvi pronomi e follow-up con history e activeEntity, senza creare ID. Un saluto seguito da una richiesta non è conversation.',
           'Per più aree: prima in moduleId, altre in secondaryModuleIds. clarification solo se manca un dato indispensabile.',
           `Moduli disponibili per questa sessione: ${availableModuleIds.join(', ') || 'nessuno'}.`,
           'Catalogo completo:',
           catalog,
-          'Esempi: “elenca webcam con stream offline escluse quelle con downtime attivo”; “dettagli della webcam Le Melette”; “elenca servizi del cliente Zilio con piano DomProf in scadenza entro dicembre 2027”.',
+          'Esempi: “elenca webcam con stream offline escluse quelle con downtime attivo”; “dettagli della webcam Le Melette”; “elenca servizi del cliente Zilio con piano DomProf in scadenza entro dicembre 2027”. Per “quante webcam sono offline e quanti ticket sono da gestire” genera due task read, uno WebcamGo e uno Send in Italy.',
         ].join('\n'),
       },
       {
