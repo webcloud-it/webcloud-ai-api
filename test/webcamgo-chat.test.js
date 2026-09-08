@@ -280,6 +280,19 @@ test('combina VPN presente e MikroTik assente senza perdere la negazione', () =>
   assert.deepEqual(result.data.items.map(item => item.id), ['cam-vpn'])
 })
 
+test('nelle liste tecniche mostra lo stato del componente richiesto', () => {
+  const disconnected = webcam('cam-router', 'Router scollegato', 'router-scollegato')
+  disconnected.status.connectivity.status = 'offline'
+
+  const result = handleWebcamgoChat({
+    message: 'Quali webcam hanno il router offline?',
+    webcams: [disconnected],
+  })
+
+  assert.match(result.reply, /connettività offline/i)
+  assert.doesNotMatch(result.reply, /\| online \|/i)
+})
+
 test('tratta prime cinque webcam come nuova lista limitata e non come paginazione', () => {
   const result = handleWebcamgoChat({
     message: 'Mostrami le prime cinque webcam con lo snapshot non online.',

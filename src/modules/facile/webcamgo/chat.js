@@ -417,7 +417,19 @@ function formatListReply(payload = {}) {
       : `Ho trovato ${total} ${label}. Ti mostro i risultati ${start}-${end}.`
 
   const lines = payload.items.map((item, index) => {
-    const status = item.status?.overall || 'unknown'
+    const componentLabels = new Map([
+      ['stream-offline', ['stream', item.status?.stream?.status]],
+      ['snapshot-offline', ['snapshot', item.status?.snapshot?.status]],
+      ['connectivity-offline', ['connettività', item.status?.connectivity?.status]],
+      ['mikrotik-offline', ['MikroTik', item.status?.mikrotik?.status]],
+    ])
+    const requestedComponents = (payload.query?.filters || [])
+      .map(filter => componentLabels.get(filter))
+      .filter(Boolean)
+      .map(([name, value]) => `${name} ${value || 'unknown'}`)
+    const status = requestedComponents.length
+      ? requestedComponents.join(', ')
+      : item.status?.overall || 'unknown'
     const location = item.location ? ` | ${item.location}` : ''
     const reseller = item.reseller ? ` | reseller ${item.reseller}` : ''
     const flags = [
