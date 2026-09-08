@@ -72,7 +72,7 @@ test('counts unanswered tickets older than a requested threshold', async () => {
     services: services({
       getSupportTickets: async () => ({data: [
         ticket({last_contact_customer_at: '2026-09-01T10:00:00Z'}),
-        ticket({id: 43, last_contact_customer_at: '2026-09-06T10:00:00Z'}),
+        ticket({id: 43, last_contact_customer_at: '2026-09-07T10:00:00Z'}),
       ], meta: {total: 2}}),
     }),
   })
