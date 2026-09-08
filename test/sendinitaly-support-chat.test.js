@@ -96,6 +96,27 @@ test('ranks customers by ticket count on the complete loaded dataset', async () 
   assert.match(result.reply, /Acme: 2 ticket/)
 })
 
+test('compares the first two customers using a deterministic complete-data ranking', async () => {
+  const result = await handleSupportChat({
+    message: 'Confronta i primi due clienti per numero di ticket.',
+    token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [
+        ticket(),
+        ticket({id: 43}),
+        ticket({id: 44, customer_id: 'u2', customer: {company_name: 'Beta'}}),
+      ], meta: {total: 3}}),
+    }),
+  })
+  assert.equal(result.data.analysis.operation, 'compare')
+  assert.deepEqual(result.data.analysis.comparison, {
+    first: {label: 'Acme', count: 2},
+    second: {label: 'Beta', count: 1},
+    difference: 1,
+  })
+  assert.match(result.reply, /Confronto: Acme ha 2 ticket, Beta ne ha 1; differenza 1/i)
+})
+
 test('groups ticket distribution by category', async () => {
   const result = await handleSupportChat({
     message: 'Mostrami la distribuzione dei ticket per categoria',

@@ -383,7 +383,12 @@ function matchesFilters(webcam, filters = [], filterMode = 'all') {
       case 'offline':
         return webcam.status.overall !== 'online'
       case 'stopped':
-        return webcam.status.overall === 'offline'
+        return (
+          webcam.status.overall === 'offline' &&
+          webcam.inUse === true &&
+          webcam.monitoring.any === true &&
+          webcam.downtime.active !== true
+        )
       case 'stream-offline':
         return webcam.status.stream.status !== 'online'
       case 'snapshot-offline':

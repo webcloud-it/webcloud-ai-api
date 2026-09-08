@@ -4,7 +4,8 @@ import {callOllamaChat} from '../providers/ollamaProvider.js'
 const SAFE_SOURCES = new Set(['tool-fast', 'tool-semantic'])
 const UNSAFE_INTENTS = /(?:action|open|navigate|clarification|confirmation|mutation|preview|draft|execute)/i
 const UNSAFE_DATA_TYPES = /(?:action|navigation|clarification|confirmation|mutation|preview|draft)/i
-const NARRATIVE_REQUEST = /\b(?:spieg|analizz|confront|valut|riassum|perch[eé]|come mai|cosa significa|dimmi|parlami)\b/i
+const NARRATIVE_REQUEST = /\b(?:spieg|analizz|confront|valut|riassum|perch[eé]|come mai|cosa significa|dimmi\b|parlami\b)/i
+const SUPPORT_NARRATIVE_REQUEST = /\b(?:spieg|analizz|valut|riassum|sintetizz|cosa\s+(?:ne\s+)?pens|come mai|perch[eé])/i
 const SIMPLE_VERIFIED_COMPARISON = /^\s*confront\w*\s+(?:(?:i|le|gli)\s+)?(?:prim[ei]\s+)?(?:due|2)(?:\s+risultati?)?[?.!]*\s*$/i
 const DETAIL_INTENTS = new Set([
   'webcam-detail',
@@ -196,6 +197,11 @@ export function shouldComposeGroundedReply({message = '', result = {}} = {}) {
   if (!SAFE_SOURCES.has(result.source)) return false
   if (UNSAFE_INTENTS.test(String(result.intent || ''))) return false
   if (UNSAFE_DATA_TYPES.test(String(result.data?.type || ''))) return false
+
+  if (
+    ['sendinitaly-support-analysis', 'sendinitaly-support-ticket-detail'].includes(result.data?.type) &&
+    !SUPPORT_NARRATIVE_REQUEST.test(String(message || ''))
+  ) return false
 
   if (
     result.data?.type === 'read-query-result' &&

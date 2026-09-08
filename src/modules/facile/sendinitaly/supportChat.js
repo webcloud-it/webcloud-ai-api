@@ -485,7 +485,10 @@ function applyReadFilters(items, {state, priority, category, period, age, unansw
 }
 
 function groupField(text = '') {
-  if (/\b(?:per\s+cliente|quali\s+clienti|clienti\s+con\s+(?:piu|più|meno))\b/.test(text)) return ['customerName', 'cliente']
+  if (
+    /\b(?:per\s+cliente|quali\s+clienti|clienti\s+con\s+(?:piu|più|meno))\b/.test(text) ||
+    /\b(?:confront\w*|prim[ei]\s+(?:due|2))\b[\s\S]*\bclienti\b/.test(text)
+  ) return ['customerName', 'cliente']
   if (/\b(?:per\s+categoria|categorie\s+con|distribuzione\s+.*categoria)\b/.test(text)) return ['category', 'categoria']
   if (/\b(?:per\s+stato|stati\s+con|distribuzione\s+.*stato)\b/.test(text)) return ['state', 'stato']
   if (/\b(?:per\s+priorita|priorita\s+con|distribuzione\s+.*priorita)\b/.test(text)) return ['priority', 'priorità']
@@ -493,7 +496,7 @@ function groupField(text = '') {
   return null
 }
 
-function analyticalReply({items, allCount, truncated, field, operation, filtersLabel}) {
+function analyticalReply({items, allCount, truncated, field, operation, filtersLabel, compareTopTwo = false}) {
   if (field) {
     const groups = new Map()
     for (const ticket of items) {
@@ -502,9 +505,12 @@ function analyticalReply({items, allCount, truncated, field, operation, filtersL
     }
     const ranking = [...groups.entries()].map(([label, count]) => ({label, count})).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
     const lines = ranking.slice(0, 20).map((item, index) => `${index + 1}. ${item.label}: ${item.count} ticket`)
+    const comparison = compareTopTwo && ranking.length >= 2
+      ? `\nConfronto: ${ranking[0].label} ha ${ranking[0].count} ticket, ${ranking[1].label} ne ha ${ranking[1].count}; differenza ${ranking[0].count - ranking[1].count}.`
+      : ''
     return {
-      reply: lines.length ? `Distribuzione per ${field[1]}${filtersLabel}:\n${lines.join('\n')}${truncated ? '\nAnalisi limitata ai primi 500 ticket.' : ''}` : `Non risultano ticket${filtersLabel}.`,
-      analysis: {operation: 'groupBy', dimension: field[0], ranking},
+      reply: lines.length ? `Distribuzione per ${field[1]}${filtersLabel}:\n${lines.join('\n')}${comparison}${truncated ? '\nAnalisi limitata ai primi 500 ticket.' : ''}` : `Non risultano ticket${filtersLabel}.`,
+      analysis: {operation: compareTopTwo ? 'compare' : 'groupBy', dimension: field[0], ranking, comparison: compareTopTwo && ranking.length >= 2 ? {first: ranking[0], second: ranking[1], difference: ranking[0].count - ranking[1].count} : null},
     }
   }
   if (operation === 'count') {
@@ -566,7 +572,8 @@ async function handleReadRequest({message, text, token, context, services, now =
   const filtersLabel = labels.length ? ` (${labels.join(', ')})` : ''
   const field = groupField(text)
   const operation = /\b(?:quanti|quante|conta|conteggio|numero\s+di)\b/.test(text) ? 'count' : field ? 'aggregate' : 'list'
-  const analytical = analyticalReply({items, allCount: loaded.items.length, truncated: loaded.truncated, field, operation, filtersLabel})
+  const compareTopTwo = Boolean(field && /\b(?:confront\w*|prim[ei]\s+(?:due|2))\b/.test(text))
+  const analytical = analyticalReply({items, allCount: loaded.items.length, truncated: loaded.truncated, field, operation, filtersLabel, compareTopTwo})
   const reply = analytical.reply || formatTicketList(items, items.length, filtersLabel)
   return response(
     field || operation === 'count' || unanswered || age ? 'sendinitaly-support-analysis' : 'sendinitaly-support-tickets',

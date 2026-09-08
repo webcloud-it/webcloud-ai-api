@@ -336,10 +336,19 @@ test('interpreta ferme come anomalie correnti e mostra da quando sono iniziate',
     status: 'offline',
     changedOn: '2026-08-20T08:00:00.000Z',
   }
+  const unused = webcam('cam-5', 'Webcam dismessa', 'webcam-dismessa', 'Gallio')
+  unused.status.overall = 'offline'
+  unused.inUse = false
+  const unmonitored = webcam('cam-6', 'Webcam non monitorata', 'webcam-non-monitorata', 'Gallio')
+  unmonitored.status.overall = 'offline'
+  unmonitored.monitoring.any = false
+  const scheduled = webcam('cam-7', 'Webcam in manutenzione', 'webcam-manutenzione', 'Gallio')
+  scheduled.status.overall = 'offline'
+  scheduled.downtime.active = true
 
   const result = handleWebcamgoChat({
     message: 'Quali webcam abbiamo ferme in questo momento e da quando?',
-    webcams: [...webcams, offline],
+    webcams: [...webcams, offline, unused, unmonitored, scheduled],
   })
 
   assert.equal(result.intent, 'webcam-list')

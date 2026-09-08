@@ -114,6 +114,27 @@ test('keeps simple read lists deterministic to avoid unnecessary latency', () =>
   )
 })
 
+test('keeps exact support lookups and aggregations deterministic', () => {
+  const detail = {
+    ok: true,
+    intent: 'sendinitaly-support-ticket-detail',
+    source: 'tool-semantic',
+    reply: '#25004 — new.',
+    data: {type: 'sendinitaly-support-ticket-detail', ticket: {number: '25004'}},
+  }
+  const aggregate = {
+    ok: true,
+    intent: 'sendinitaly-support-analysis',
+    source: 'tool-semantic',
+    reply: 'Distribuzione per categoria.',
+    data: {type: 'sendinitaly-support-analysis', analysis: {operation: 'groupBy'}},
+  }
+
+  assert.equal(shouldComposeGroundedReply({message: 'Mostrami il dettaglio del ticket 25004.', result: detail}), false)
+  assert.equal(shouldComposeGroundedReply({message: 'Raggruppa i ticket per categoria.', result: aggregate}), false)
+  assert.equal(shouldComposeGroundedReply({message: 'Riassumi il ticket 25004.', result: detail}), true)
+})
+
 test('keeps a simple verified ranking comparison deterministic', () => {
   const result = {
     ok: true,
