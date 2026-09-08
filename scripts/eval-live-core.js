@@ -66,6 +66,7 @@ const support = [
   ['T22', 'Prepara una risposta per il ticket 25004.', /bozza di risposta|bozza proposta/i],
   ['T23', 'Prepara e invia una risposta per il ticket 25004.', /confermo|sto per inviare/i],
   ['T24', 'Chi ha scritto l’ultima risposta nel ticket 25004?', /25004|risposta|agent|customer/i],
+  ['T25', 'Mostrami le info del ticket 25004.', /25004/i],
 ]
 
 const cases = [
