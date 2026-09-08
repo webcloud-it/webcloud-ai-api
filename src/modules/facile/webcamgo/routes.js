@@ -99,7 +99,8 @@ export async function chat(req, res) {
         token: req.auth.token,
         webcamId: detail.item.id,
         statusNot: 'online',
-        limit: 100,
+        limit: 1,
+        sort: '-changed_on',
       })
     }
   }

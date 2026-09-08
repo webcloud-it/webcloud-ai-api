@@ -479,13 +479,14 @@ export async function getWebcamStatusLogs({
   since = null,
   statusNot = null,
   limit = -1,
+  sort = 'changed_on',
 } = {}) {
   requireWebcamgoConfiguration()
   requireToken(token)
 
   const params = new URLSearchParams()
   params.set('fields', STATUS_LOG_FIELDS.join(','))
-  params.set('sort', 'changed_on')
+  params.set('sort', sort)
   params.set('limit', String(limit))
 
   if (webcamId) params.set('filter[webcam_id][_eq]', String(webcamId))
@@ -503,6 +504,7 @@ export async function getWebcamStatusLogs({
     sinceBucket,
     statusNot || '*',
     limit,
+    sort,
   ].join(':')
   const cached = statusLogsCache.get(cacheKey)
   if (cached && Date.now() - cached.at <= env.webcamgoCacheTtlMs) return cached.items
