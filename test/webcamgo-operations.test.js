@@ -137,6 +137,15 @@ test('una lista di snapshot non online non viene confusa con la visualizzazione 
   assert.equal(result, null)
 })
 
+test('una lista plurale con snapshot abilitato non viene confusa con una immagine singola', async () => {
+  const result = await handleWebcamgoOperation({
+    message: 'Mostrami le webcam monitorate con snapshot abilitato.',
+    webcams,
+  })
+
+  assert.equal(result, null)
+})
+
 test('natural snapshot wording keeps only the webcam name as target', async () => {
   const result = await handleWebcamgoOperation({
     message: 'Mostrami lo snapshot della webcam Piazza Centrale.',

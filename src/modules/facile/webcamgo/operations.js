@@ -84,6 +84,7 @@ function isSnapshotOperationRequest(message = '') {
   const asksToDisplay = /\b(mostra|mostrami|apri|visualizza|fammi vedere)\b[\s\S]*\b(snapshot|fotogramma|immagine)\b/i.test(text)
   const asksForAList =
     /\b(?:quali|elenca|elencami|lista|prime?|primi|top)\b/i.test(text) ||
+    /\b(?:le|delle)\s+(?:webcam|telecamer[ae])\b[\s\S]*\b(?:snapshot|fotogramm[ai]|immagin[ei])\b/i.test(text) ||
     /\b(?:webcam|telecamer[ae])\b[\s\S]*\b(?:snapshot|fotogramm[ai]|immagin[ei])\b[\s\S]*\b(?:offline|non\s+online|bloccat[oi]|ferm[oi]|congelat[oi])\b/i.test(text)
 
   return asksToDisplay && !asksForAList
