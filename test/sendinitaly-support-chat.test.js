@@ -174,6 +174,17 @@ test('recognizes the singular Italian detail request with a public ticket number
   assert.equal(result.data.ticket.number, '42001')
 })
 
+test('treats natural ticket information wording as a detail request', async () => {
+  const result = await handleSupportChat({
+    message: 'Mostrami le info del ticket 42001', token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+      getSupportTicket: async () => ({data: {ticket: ticket(), articles: []}}),
+    }),
+  })
+  assert.equal(result.intent, 'sendinitaly-support-ticket-detail')
+})
+
 test('latest reply is a read request, never a mutation', async () => {
   let mutated = false
   const result = await handleSupportChat({

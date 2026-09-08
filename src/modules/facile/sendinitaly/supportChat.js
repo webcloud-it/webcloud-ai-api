@@ -557,7 +557,7 @@ async function handleTicketActorRequest({message, text, token, context, history,
 }
 
 async function handleDetailRequest({message, text, token, context, history, services}) {
-  const asksDetail = /\b(?:dettagl(?:io|i)|conversazione|cronologia|messaggi?|risposte?|ultima\s+risposta|cosa\s+(?:dice|chiede))\b/.test(text)
+  const asksDetail = /\b(?:dettagl(?:io|i)|info|informazioni?|conversazione|cronologia|messaggi?|risposte?|ultima\s+risposta|cosa\s+(?:dice|chiede))\b/.test(text)
   if (!asksDetail) return null
   const detail = await loadTicketDetail({message, token, context, history, services})
   if (detail.error) return detail.error
