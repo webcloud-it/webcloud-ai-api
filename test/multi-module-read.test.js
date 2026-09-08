@@ -15,7 +15,7 @@ const plan = {
 }
 
 const req = {
-  body: {message: 'Quante webcam sono offline e quanti ticket sono da gestire?'},
+  body: {message: 'Confronta il numero di webcam offline con i ticket da gestire.'},
   auth: {credentials: {webcamgo: 'webcam-token', specialk: 'specialk-token'}},
 }
 
@@ -52,6 +52,26 @@ test('executes all module reads and composes only grounded evidence', async () =
   assert.equal(result.data.results.length, 2)
   assert.match(result.reply, /3 webcam offline/i)
   assert.match(result.reply, /2 ticket/i)
+})
+
+test('keeps simple multi-area reads on a fast deterministic response', async () => {
+  let modelCalled = false
+  const result = await executeMultiModuleRead({
+    plan,
+    req: {...req, body: {message: 'Quante webcam sono offline e quanti ticket sono da gestire?'}},
+    invokeTask: async ({task}) => task.moduleId === 'facile.webcamgo'
+      ? {ok: true, intent: 'webcam-list', reply: 'Risultano 3 webcam offline.', data: {type: 'webcam-list', total: 3}}
+      : {ok: true, intent: 'sendinitaly-support-analysis', reply: 'Risultano 2 ticket da gestire.', data: {type: 'sendinitaly-support-analysis', total: 2}},
+    callLlm: async () => {
+      modelCalled = true
+      return 'non deve essere chiamato'
+    },
+  })
+
+  assert.equal(modelCalled, false)
+  assert.equal(result.source, 'tool-multi')
+  assert.match(result.reply, /WebcamGo:/)
+  assert.match(result.reply, /Assistenza e Send in Italy:/)
 })
 
 test('rejects an LLM number absent from the verified module results', async () => {

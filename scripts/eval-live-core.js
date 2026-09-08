@@ -13,9 +13,17 @@ const API_URL = process.env.WEBCLOUD_AI_EVAL_URL || 'https://ai-api.webcloud.clo
 const crmToken = process.env.CRM_TOKEN
 const specialkToken = process.env.SPECIALK_CMS_TOKEN
 const webcamgoToken = process.env.WEBCAMGO_CONTROL_API_KEY
+const requestedIds = new Set(
+  String(process.env.EVAL_CASE_IDS || '')
+    .split(',')
+    .map(value => value.trim().toUpperCase())
+    .filter(Boolean)
+)
+const includeCrossDomain = process.env.EVAL_INCLUDE_CROSS === 'true' ||
+  [...requestedIds].some(id => id.startsWith('M'))
 
-if (!crmToken || !specialkToken || !webcamgoToken) {
-  console.error('CRM_TOKEN, SPECIALK_CMS_TOKEN e WEBCAMGO_CONTROL_API_KEY sono obbligatori per la verifica live.')
+if (!crmToken || !specialkToken || (includeCrossDomain && !webcamgoToken)) {
+  console.error('Mancano una o più credenziali richieste per la verifica live selezionata.')
   process.exit(2)
 }
 
@@ -82,9 +90,11 @@ const cases = [
   ...support.map(([id, message, replyPattern]) => ({
     id, message, replyPattern, section: 'sendinitaly-support', path: '/sendinitaly/support',
   })),
-  ...crossDomain.map(([id, message, replyPattern]) => ({
-    id, message, replyPattern, section: 'home', path: '/',
-  })),
+  ...(includeCrossDomain
+    ? crossDomain.map(([id, message, replyPattern]) => ({
+        id, message, replyPattern, section: 'home', path: '/',
+      }))
+    : []),
 ]
 
 const forbidden = /(?:non posso accedere|servizio non disponibile|non disponibile al momento|errore interno|riprova più tardi)/i
@@ -98,7 +108,7 @@ async function execute(item) {
       authorization: `Bearer ${crmToken}`,
       'x-webcloud-credential-crm': crmToken,
       'x-webcloud-credential-specialk': specialkToken,
-      'x-webcloud-credential-webcamgo': webcamgoToken,
+      ...(webcamgoToken ? {'x-webcloud-credential-webcamgo': webcamgoToken} : {}),
     },
     body: JSON.stringify({
       moduleId: 'facile',
@@ -128,9 +138,18 @@ async function execute(item) {
   }
 }
 
+const selectedCases = requestedIds.size
+  ? cases.filter(item => requestedIds.has(item.id.toUpperCase()))
+  : cases
+
+if (!selectedCases.length) {
+  console.error('Nessun caso corrisponde a EVAL_CASE_IDS.')
+  process.exit(2)
+}
+
 const results = []
-for (let index = 0; index < cases.length; index += 2) {
-  results.push(...await Promise.all(cases.slice(index, index + 2).map(execute)))
+for (let index = 0; index < selectedCases.length; index += 2) {
+  results.push(...await Promise.all(selectedCases.slice(index, index + 2).map(execute)))
 }
 
 for (const result of results) {

@@ -10,6 +10,15 @@ const MODULES = {
   'facile.webcloud': 'asset WAM, cache Cloudflare, festività, assenze, automazioni e stato operativo del chatbot',
 }
 
+const MODULE_LABELS = {
+  'facile.renewals': 'Rinnovi e CRM',
+  'facile.webcamgo': 'WebcamGo',
+  'facile.sendinitaly': 'Assistenza e Send in Italy',
+  'facile.businesshours': 'Orari minisiti',
+  'facile.asiago': 'Asiago.it e CMS',
+  'facile.webcloud': 'Strumenti Webcloud',
+}
+
 const FAST_PATH = /^\s*(?:conferm[oa]?|procedi|esegui|s[iì]|annulla|no|successiv[ei]|precedent[ei]|altr[ei]|apri (?:il |la )?(?:prim[oa]|second[oa]|terz[oa]|\d+))\s*[.!?]?\s*$/i
 
 export function isSemanticFastPath(message = '') {
@@ -147,5 +156,5 @@ export async function planSemanticRequest({message, context = {}, history = [], 
 }
 
 export function getSemanticModuleLabel(moduleId) {
-  return MODULES[moduleId] || moduleId
+  return MODULE_LABELS[moduleId] || moduleId
 }

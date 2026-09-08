@@ -6,6 +6,7 @@ import {getModuleById} from '../../modules/registry.js'
 
 const MUTATING_REQUEST = /\b(?:invia|manda|rispondi|pubblica|crea|aggiungi|modifica|aggiorna|imposta|elimina|cancella|chiudi|riapri|assegna|rinnova|riavvia|reboot|spegni|accendi|attiva|disattiva|sposta|lancia|pulisci|svuota|confermo)\b/i
 const UNSAFE_RESULT = /(?:action|proposal|preview|mutation|confirmation|execution|navigation|draft)/i
+const NARRATIVE_REQUEST = /\b(?:analizz\w*|confront\w*|correl\w*|spieg\w*|valut\w*|priorit\w*|cosa\s+(?:hanno|c['’]?e|ce)\s+in\s+comune|punt[oi]\s+in\s+comune|che\s+conclusioni|come\s+siamo\s+messi)\b/i
 
 function compactData(data = {}) {
   if (!data || typeof data !== 'object') return null
@@ -96,10 +97,28 @@ async function invokeModuleTask({task, req}) {
   return payload
 }
 
-function deterministicReply(results) {
+function compactVerifiedReply(reply = '') {
+  const lines = String(reply || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+  if (lines.length <= 7) return lines.join('\n')
+
   return [
-    'Ho verificato la richiesta nelle aree coinvolte:',
-    ...results.map(result => `\n${result.label}\n${result.reply}`),
+    ...lines.slice(0, 6),
+    `… altri dettagli disponibili nel risultato verificato.`,
+  ].join('\n')
+}
+
+function deterministicReply(results, failures = []) {
+  return [
+    results.length > 1
+      ? 'Ho verificato tutte le aree richieste.'
+      : 'Ho completato la parte che ho potuto verificare.',
+    ...results.map(result => `\n${result.label}:\n${compactVerifiedReply(result.reply)}`),
+    ...(failures.length
+      ? [`\nNon ho potuto verificare: ${failures.map(item => getSemanticModuleLabel(item.moduleId)).join(', ')}.`]
+      : []),
   ].join('\n')
 }
 
@@ -169,13 +188,15 @@ export async function executeMultiModuleRead({
 
   if (!results.length) return null
 
-  const fallback = deterministicReply(results)
-  const composition = await composeMultiModuleReply({
-    message: req.body.message,
-    results,
-    fallback,
-    callLlm,
-  })
+  const fallback = deterministicReply(results, failures)
+  const composition = NARRATIVE_REQUEST.test(String(req.body.message || ''))
+    ? await composeMultiModuleReply({
+        message: req.body.message,
+        results,
+        fallback,
+        callLlm,
+      })
+    : {reply: fallback, composed: false, reason: 'deterministic-fast-path'}
 
   return {
     ok: true,
