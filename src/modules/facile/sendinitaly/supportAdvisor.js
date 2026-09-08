@@ -54,6 +54,10 @@ function text(value, max = 1200) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max)
 }
 
+export function stripTechnicalContext(value = '') {
+  return String(value || '').split(/\n\s*---\s*\n\s*Contesto tecnico\b/i)[0].trim()
+}
+
 export function redactSupportText(value = '', max = 1600) {
   let result = String(value || '')
   for (const pattern of SECRET_PATTERNS) result = result.replace(pattern, '[dato sensibile omesso]')
@@ -67,7 +71,7 @@ function list(value, {maxItems = 8, maxLength = 600} = {}) {
 
 function fallbackAdvice(ticket, articles, playbook, reason = null) {
   const customerMessages = articles.filter(article => /customer|cliente/i.test(String(article.sender || '')))
-  const lastCustomerMessage = customerMessages.at(-1)?.body || articles.at(-1)?.body || ''
+  const lastCustomerMessage = stripTechnicalContext(customerMessages.at(-1)?.body || articles.at(-1)?.body || '')
   return {
     summary: lastCustomerMessage
       ? `Il cliente segnala: ${text(lastCustomerMessage, 420)}`
@@ -124,7 +128,7 @@ function compactEvidence(ticket = {}, articles = []) {
       sender: text(article.sender, 60),
       author: text(article.createdBy || article.from, 180),
       internal: article.internal === true,
-      body: redactSupportText(article.body, 1400),
+      body: redactSupportText(stripTechnicalContext(article.body), 1400),
       attachments: Array.isArray(article.attachments)
         ? article.attachments.slice(0, 5).map(item => text(item.filename, 160))
         : [],

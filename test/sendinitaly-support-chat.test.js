@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {handleSupportChat} from '../src/modules/facile/sendinitaly/supportChat.js'
-import {analyzeSupportResolution, redactSupportText} from '../src/modules/facile/sendinitaly/supportAdvisor.js'
+import {analyzeSupportResolution, redactSupportText, stripTechnicalContext} from '../src/modules/facile/sendinitaly/supportAdvisor.js'
 
 function services(overrides = {}) {
   return {
@@ -438,6 +438,11 @@ test('redacts credentials before ticket content can reach the model', () => {
   const redacted = redactSupportText('password: hunter2 token=abc123456789 Authorization: secret-value')
   assert.doesNotMatch(redacted, /hunter2|abc123456789|secret-value/)
   assert.match(redacted, /dato sensibile omesso/)
+})
+
+test('keeps the automatic technical context out of the customer request', () => {
+  const visible = stripTechnicalContext('Il dominio non funziona.\n\n---\nContesto tecnico\nCustomer ID: secret-id')
+  assert.equal(visible, 'Il dominio non funziona.')
 })
 
 test('support advisor validates structured model output and keeps deterministic playbook steps', async () => {
