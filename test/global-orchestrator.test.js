@@ -7,6 +7,7 @@ import {
 } from '../src/core/capabilities/catalog.js'
 import {
   planGlobalChat,
+  planDeterministicMultiModuleRead,
   resolveGlobalChatPlan,
   validateSemanticModuleSelection,
 } from '../src/core/orchestrator/globalChat.js'
@@ -555,7 +556,7 @@ test('semantic planner can correct a deterministic misclassification', async () 
 
 test('semantic planner recognizes requests spanning multiple modules', async () => {
   const plan = await resolveGlobalChatPlan(
-    {message: 'Mostra le webcam offline e le scadenze di dicembre', credentials},
+    {message: 'Preparami un quadro incrociato di webcam offline rispetto alle scadenze di dicembre', credentials},
     async () => ({
       mode: 'tool',
       moduleId: 'facile.webcamgo',
@@ -577,6 +578,45 @@ test('semantic planner recognizes requests spanning multiple modules', async () 
     {moduleId: 'facile.webcamgo', canonicalMessage: 'elenca webcam offline', operation: 'read'},
     {moduleId: 'facile.renewals', canonicalMessage: 'elenca scadenze di dicembre', operation: 'read'},
   ])
+})
+
+test('clear cross-domain reads are decomposed without waiting for the router model', async () => {
+  const crossCredentials = {...credentials, specialk: 'specialk-token'}
+  const cases = [
+    {
+      message: 'Quante webcam sono offline e quanti ticket sono da gestire?',
+      expected: ['facile.webcamgo', 'facile.sendinitaly'],
+    },
+    {
+      message: 'Mostrami le webcam con stream offline e i cinque fornitori con più servizi in scadenza nel 2027.',
+      expected: ['facile.webcamgo', 'facile.renewals'],
+    },
+  ]
+
+  for (const item of cases) {
+    let modelCalled = false
+    const resolved = await resolveGlobalChatPlan(
+      {message: item.message, credentials: crossCredentials},
+      async () => {
+        modelCalled = true
+        return null
+      }
+    )
+
+    assert.equal(resolved.type, 'multi-module')
+    assert.deepEqual(resolved.tasks.map(task => task.moduleId), item.expected)
+    assert.ok(resolved.tasks.every(task => task.operation === 'read'))
+    assert.equal(modelCalled, false)
+  }
+})
+
+test('deterministic decomposition never turns a mixed write into parallel execution', () => {
+  const result = planDeterministicMultiModuleRead(
+    'Mostrami le webcam offline e invia una risposta al ticket 25004',
+    {...credentials, specialk: 'specialk-token'}
+  )
+
+  assert.equal(result, null)
 })
 
 test('semantic router rejects invented or unavailable modules', async () => {

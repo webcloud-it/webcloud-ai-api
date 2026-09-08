@@ -91,6 +91,7 @@ const DOMAIN_PATTERNS = {
 const HELP_PATTERN = /^\s*(?:cosa puoi fare|come puoi aiutarmi|quali (?:funzioni|capacit[aà]|strumenti) (?:hai|sono disponibili))(?:\s+su\s+[\w .-]+)?\s*[?!.]?\s*$/i
 const GREETING_PATTERN = /^\s*(?:ciao|salve|buongiorno|buonasera|hey|ehi)\s*[!,.]?\s*$/i
 const HISTORY_COMMAND_PATTERN = /^\s*(?:(?:mostra|mostrami|fammi\s+vedere)\s+)?(?:(?:gli|le|i)\s+)?(?:altr[ei]|successiv[ei]|prossim[ei]|precedent[ei])(?:\s+(?:\d{1,2}|[a-z]+))?\s*[?!.]?\s*$/i
+const CROSS_MODULE_WRITE_PATTERN = /\b(?:invia|manda|rispondi|pubblica|crea|aggiungi|modifica|aggiorna|imposta|elimina|cancella|chiudi|riapri|assegna|rinnova|riavvia|reboot|spegni|accendi|attiva|disattiva|sposta|lancia|pulisci|svuota|confermo)\b/i
 
 const EXPLICIT_MODULE_PATTERNS = [
   ['facile.sendinitaly', /\bsend\s*in\s*italy\b/i],
@@ -210,6 +211,56 @@ function moduleFromStrongDomain(message = '') {
   return matches.length === 1 ? matches[0] : null
 }
 
+export function planDeterministicMultiModuleRead(message = '', credentials = {}) {
+  if (CROSS_MODULE_WRITE_PATTERN.test(String(message || ''))) return null
+
+  const clauses = String(message || '')
+    .split(/\s+(?:e|inoltre|poi)\s+|[;,]+/i)
+    .map(clause => clause.trim().replace(/^[,.!?]+|[,.!?]+$/g, ''))
+    .filter(clause => clause.length >= 3)
+  if (clauses.length < 2) return null
+
+  const assigned = clauses.flatMap(clause => {
+    const moduleIds = Object.entries(STRONG_DOMAIN_PATTERNS)
+      .filter(([, pattern]) => pattern.test(clause))
+      .map(([moduleId]) => moduleId)
+    return moduleIds.length === 1 ? [{moduleId: moduleIds[0], clause}] : []
+  })
+  const moduleIds = [...new Set(assigned.map(item => item.moduleId))]
+  if (moduleIds.length < 2) return null
+
+  const availableModuleIds = getAvailableModuleIds({credentials})
+  const unavailableModuleId = moduleIds.find(moduleId => !availableModuleIds.includes(moduleId))
+  if (unavailableModuleId) {
+    return {
+      type: 'unavailable',
+      reason: 'credential-unavailable',
+      moduleId: unavailableModuleId,
+      availableModuleIds,
+    }
+  }
+
+  const tasks = moduleIds.map(moduleId => {
+    const relevantClauses = assigned
+      .filter(item => item.moduleId === moduleId)
+      .map(item => item.clause)
+    let canonicalMessage = relevantClauses.join(' e ')
+    if (!/^(?:quali|quante|quanti|quanto|mostra|mostrami|elenca|elencami|cerca|trova|conta|dimmi|dammi|confronta|analizza|riassumi|riepiloga)\b/i.test(canonicalMessage)) {
+      canonicalMessage = `mostrami ${canonicalMessage}`
+    }
+    return {moduleId, canonicalMessage, operation: 'read'}
+  })
+
+  return {
+    type: 'multi-module',
+    moduleId: moduleIds[0],
+    secondaryModuleIds: moduleIds.slice(1),
+    tasks,
+    source: 'deterministic-multi',
+    confidence: 1,
+  }
+}
+
 export function validateSemanticModuleSelection(message = '', semantic = null) {
   if (semantic?.mode !== 'tool' || !semantic.moduleId) {
     return {valid: true, requiredModuleId: null}
@@ -282,6 +333,9 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   if (GREETING_PATTERN.test(String(message || '').trim())) {
     return {type: 'greeting'}
   }
+
+  const deterministicMultiModulePlan = planDeterministicMultiModuleRead(message, credentials)
+  if (deterministicMultiModulePlan) return deterministicMultiModulePlan
 
   const entityModuleId = moduleFromActiveEntityRequest(text, context)
   const explicitBrandModuleId = moduleFromExplicitBrand(message)
@@ -368,6 +422,7 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
 
   if (
     ['greeting', 'help', 'unsupported-domain'].includes(deterministicPlan.type) ||
+    deterministicPlan.type === 'multi-module' ||
     isSemanticFastPath(options.message) ||
     (deterministicPlan.type === 'module' &&
       deterministicPlan.moduleId === moduleFromExplicitBrand(options.message)) ||
