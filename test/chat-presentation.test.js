@@ -40,6 +40,23 @@ test('builds sanitized Send in Italy support cards with customer navigation', ()
   assert.equal(JSON.stringify(presentation).includes('never-copy'), false)
 })
 
+test('builds verified cards for Send in Italy user analytics', () => {
+  const presentation = buildChatPresentation({
+    type: 'sendinitaly-user-analytics',
+    sourceCount: 3,
+    matchedCount: 2,
+    items: [
+      {id: 'u1', companyName: 'Acme', plan: 'Pro', campaigns: 20, contacts: 100, lists: 2, automations: 1},
+      {id: 'u2', companyName: 'Beta', plan: 'Free', campaigns: 10, contacts: 80, lists: 1, automations: 0},
+    ],
+  })
+
+  assert.equal(presentation.kind, 'list')
+  assert.equal(presentation.total, 2)
+  assert.equal(presentation.cards[0].title, 'Acme')
+  assert.equal(presentation.cards[0].action.path, '/sendinitaly/users/u1')
+})
+
 test('builds a compact support advice card without treating the draft as executed', () => {
   const presentation = buildChatPresentation({
     type: 'sendinitaly-support-resolution-advice',

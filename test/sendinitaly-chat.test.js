@@ -2,6 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {handleSendInItalyChat} from '../src/modules/facile/sendinitaly/chat.js'
+import {
+  isSendInItalyUserAnalyticsRequest,
+  planSendInItalyUserAnalytics,
+} from '../src/modules/facile/sendinitaly/userAnalytics.js'
 
 function mockServices(overrides = {}) {
   return {
@@ -297,4 +301,124 @@ test('does not reuse a CRM page customer id as a Send in Italy customer id', asy
   })
 
   assert.equal(customerId, '')
+})
+
+test('aggregates all Send in Italy users by plan and calculates verified averages', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Raggruppa gli utenti per piano e mostrami la media dei contatti',
+    token: 'token',
+    services: mockServices({
+      getUsers: async () => ({
+        data: [
+          {id: 'u1', company_name: 'Acme', total_contacts: 100, subscription_config: {plan: {name: 'Pro'}}},
+          {id: 'u2', company_name: 'Beta', total_contacts: 50, subscription_config: {plan: {name: 'Pro'}}},
+          {id: 'u3', company_name: 'Gamma', total_contacts: 10, subscription_config: {plan: {name: 'Free'}}},
+        ],
+        meta: {total: 3},
+      }),
+    }),
+  })
+
+  assert.equal(result.intent, 'sendinitaly-user-analytics')
+  assert.equal(result.data.sourceCount, 3)
+  assert.equal(result.data.groups[0].group.plan, 'Pro')
+  assert.equal(result.data.groups[0].values.avg_contacts, 75)
+  assert.match(result.reply, /3 utenti analizzati/)
+})
+
+test('combines multiple numeric filters on the complete user dataset', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Elenca i clienti con almeno 100 contatti e più di 5 campagne',
+    token: 'token',
+    services: mockServices({
+      getUsers: async () => ({
+        data: [
+          {id: 'u1', company_name: 'Acme', total_contacts: 120, total_campaigns: 8},
+          {id: 'u2', company_name: 'Beta', total_contacts: 80, total_campaigns: 12},
+          {id: 'u3', company_name: 'Gamma', total_contacts: 200, total_campaigns: 2},
+        ],
+        meta: {total: 3},
+      }),
+    }),
+  })
+
+  assert.equal(result.data.matchedCount, 1)
+  assert.equal(result.data.items[0].companyName, 'Acme')
+  assert.match(result.reply, /Acme/)
+  assert.doesNotMatch(result.reply, /Beta|Gamma/)
+})
+
+test('compares top users using backend values and reports deterministic differences', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Confronta i primi due clienti per campagne e contatti',
+    token: 'token',
+    services: mockServices({
+      getUsers: async () => ({
+        data: [
+          {id: 'u1', company_name: 'Acme', total_campaigns: 20, total_contacts: 100},
+          {id: 'u2', company_name: 'Beta', total_campaigns: 10, total_contacts: 80},
+          {id: 'u3', company_name: 'Gamma', total_campaigns: 2, total_contacts: 500},
+        ],
+        meta: {total: 3},
+      }),
+    }),
+  })
+
+  assert.equal(result.data.items.length, 2)
+  assert.deepEqual(result.data.items.map(item => item.companyName), ['Acme', 'Beta'])
+  assert.match(result.reply, /campagne: Acme ha 10 in più \(100%\)/)
+  assert.match(result.reply, /contatti: Acme ha 20 in più \(25%\)/)
+})
+
+test('paginates the Send in Italy provider so analytics never use only the first page', async () => {
+  const requestedPages = []
+  const result = await handleSendInItalyChat({
+    message: 'Quanti clienti hanno almeno 1 campagna?',
+    token: 'token',
+    services: mockServices({
+      getUsers: async ({page}) => {
+        requestedPages.push(page)
+        return page === 1
+          ? {data: Array.from({length: 250}, (_, index) => ({id: `u${index}`, company_name: `A${index}`, total_campaigns: 1})), meta: {total: 251}}
+          : {data: [{id: 'last', company_name: 'Ultimo', total_campaigns: 1}], meta: {total: 251}}
+      },
+    }),
+  })
+
+  assert.deepEqual(requestedPages, [1, 2])
+  assert.equal(result.data.sourceCount, 251)
+  assert.equal(result.data.matchedCount, 251)
+  assert.match(result.reply, /251 utenti/)
+})
+
+test('validates semantic Send in Italy plans against the field allowlist', async () => {
+  const message = 'Analizza la distribuzione degli account in base al collegamento CRM'
+  assert.equal(isSendInItalyUserAnalyticsRequest(message), true)
+  const valid = await planSendInItalyUserAnalytics({
+    message,
+    callModel: async () => ({
+      operation: 'aggregate',
+      filters: [],
+      groupBy: ['crmLinked'],
+      metrics: [{id: 'users', function: 'count', field: null}],
+      sort: [{field: 'users', direction: 'desc'}],
+      limit: 10,
+      comparisonFields: [],
+    }),
+  })
+  const unsafe = await planSendInItalyUserAnalytics({
+    message,
+    callModel: async () => ({
+      operation: 'list',
+      filters: [{field: 'password', operator: 'contains', value: 'x'}],
+      groupBy: [],
+      metrics: [],
+      sort: [{field: 'password', direction: 'asc'}],
+      limit: 10,
+      comparisonFields: [],
+    }),
+  })
+
+  assert.equal(valid.groupBy[0], 'crmLinked')
+  assert.equal(unsafe, null)
 })

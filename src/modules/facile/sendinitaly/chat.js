@@ -19,6 +19,10 @@ import {
   updateSupportTicket,
 } from './service.js'
 import {handleSupportChat} from './supportChat.js'
+import {
+  executeSendInItalyUserAnalytics,
+  isSendInItalyUserAnalyticsRequest,
+} from './userAnalytics.js'
 
 function extractQuotedValue(message = '') {
   return String(message).match(/["“”']([^"“”']{2,80})["“”']/)?.[1]?.trim() || ''
@@ -325,6 +329,11 @@ export async function handleSendInItalyChat({
 
   const supportResult = await handleSupportChat({message, token, context, history, services})
   if (supportResult) return supportResult
+
+  if (isSendInItalyUserAnalyticsRequest(message)) {
+    const analyticsResult = await executeSendInItalyUserAnalytics({message, token, services})
+    if (analyticsResult) return analyticsResult
+  }
 
   const userPlanTarget = extractUserPlanTarget(message)
   if (

@@ -141,6 +141,45 @@ function sendInItalyPresentation(data) {
     })), data.items.length)
   }
 
+  if (data.type === 'sendinitaly-user-analytics') {
+    if (Array.isArray(data.groups) && data.groups.length) {
+      return list('Analisi utenti Send in Italy', data.groups.map((item, index) => ({
+        id: `group-${index + 1}`,
+        title: compact(Object.values(item.group || {})).join(' · ') || `Gruppo ${index + 1}`,
+        badge: 'dato verificato',
+        details: Object.entries(item.values || {}).slice(0, 6).map(([label, value]) =>
+          detail(label.replaceAll('_', ' '), value)
+        ).filter(Boolean),
+      })), data.groups.length)
+    }
+
+    if (Array.isArray(data.items) && data.items.length) {
+      return list('Analisi utenti Send in Italy', data.items.map(item => ({
+        id: text(item.id),
+        title: text(item.companyName, 'Utente'),
+        subtitle: text(item.plan),
+        badge: 'dato verificato',
+        details: [
+          detail('Campagne', item.campaigns),
+          detail('Contatti', item.contacts),
+          detail('Liste', item.lists),
+          detail('Automazioni', item.automations),
+        ].filter(Boolean),
+        ...(item.id ? {action: {id: 'navigate', label: 'Apri utente', path: `/sendinitaly/users/${encodeURIComponent(text(item.id))}`}} : {}),
+      })), data.matchedCount)
+    }
+
+    return {
+      version: 1,
+      kind: 'metrics',
+      title: 'Analisi utenti Send in Italy',
+      metrics: [
+        {label: 'Utenti analizzati', value: text(data.sourceCount ?? 0)},
+        {label: 'Corrispondenti', value: text(data.matchedCount ?? 0)},
+      ],
+    }
+  }
+
   if (data.type === 'sendinitaly-user-detail' && data.user) {
     const user = data.user
     const metrics = [
