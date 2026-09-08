@@ -330,8 +330,8 @@ export async function handleSendInItalyChat({
   const supportResult = await handleSupportChat({message, token, context, history, services})
   if (supportResult) return supportResult
 
-  if (isSendInItalyUserAnalyticsRequest(message)) {
-    const analyticsResult = await executeSendInItalyUserAnalytics({message, token, services})
+  if (isSendInItalyUserAnalyticsRequest(message, history)) {
+    const analyticsResult = await executeSendInItalyUserAnalytics({message, token, services, history})
     if (analyticsResult) return analyticsResult
   }
 

@@ -105,6 +105,27 @@ test('elliptical follow-ups stay in the previous module without a router model c
   assert.equal(modelCalled, false)
 })
 
+test('Send in Italy analytical refinements stay with the verified previous result', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan({
+    message: 'Ora escludi il primo e confronta i successivi due',
+    context: {path: '/webcamgo/webcams/barricata'},
+    history: [{
+      role: 'assistant',
+      data: {type: 'sendinitaly-user-analytics'},
+      meta: {moduleId: 'facile.sendinitaly'},
+    }],
+    credentials: {...credentials, specialk: 'specialk-token'},
+  }, async () => {
+    modelCalled = true
+    return null
+  })
+
+  assert.equal(plan.moduleId, 'facile.sendinitaly')
+  assert.equal(plan.source, 'history')
+  assert.equal(modelCalled, false)
+})
+
 test('natural pagination commands belong to the previous result, not the page module', async () => {
   let modelCalled = false
   const plan = await resolveGlobalChatPlan({

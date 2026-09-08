@@ -422,3 +422,32 @@ test('validates semantic Send in Italy plans against the field allowlist', async
   assert.equal(valid.groupBy[0], 'crmLinked')
   assert.equal(unsafe, null)
 })
+
+test('refines a previous user analysis without losing its verified ranking context', async () => {
+  const services = mockServices({
+    getUsers: async () => ({
+      data: [
+        {id: 'u1', company_name: 'Acme', total_campaigns: 20, total_contacts: 100},
+        {id: 'u2', company_name: 'Beta', total_campaigns: 10, total_contacts: 80},
+        {id: 'u3', company_name: 'Gamma', total_campaigns: 5, total_contacts: 70},
+      ],
+      meta: {total: 3},
+    }),
+  })
+  const first = await handleSendInItalyChat({
+    message: 'Confronta i primi due clienti per campagne e contatti',
+    token: 'token',
+    services,
+  })
+  const second = await handleSendInItalyChat({
+    message: 'Ora escludi il primo e confronta i successivi due',
+    token: 'token',
+    history: [{role: 'assistant', data: first.data, meta: first.meta}],
+    services,
+  })
+
+  assert.equal(second.intent, 'sendinitaly-user-analytics')
+  assert.deepEqual(second.data.items.map(item => item.companyName), ['Beta', 'Gamma'])
+  assert.equal(second.data.plan.filters.at(-1).value, 'Acme')
+  assert.match(second.reply, /Beta[\s\S]*Gamma/)
+})

@@ -74,9 +74,20 @@ export function sanitizeAnalyticsUser(raw = {}) {
   }
 }
 
-export function isSendInItalyUserAnalyticsRequest(message = '') {
+function previousAnalyticsData(history = []) {
+  return [...history].reverse().map(item => item?.data).find(data => data?.type === 'sendinitaly-user-analytics') || null
+}
+
+function isAnalyticsRefinement(message = '', history = []) {
+  if (!previousAnalyticsData(history)) return false
+  return /^\s*(?:e|ed|ma|ora|adesso|poi|invece|tra\s+quest\w*|fra\s+quest\w*|di\s+quest\w*|mostra\w*|esclud\w*|togli\w*|solo|soltanto|quanti|confront\w*)\b/i.test(message)
+}
+
+export function isSendInItalyUserAnalyticsRequest(message = '', history = []) {
   const text = normalizeComparableText(message)
-  return /\b(?:utent\w*|client\w*|account|aziend\w*|pian\w*)\b/i.test(text) && ANALYTICAL_PATTERN.test(text)
+  return isAnalyticsRefinement(message, history) || (
+    /\b(?:utent\w*|client\w*|account|aziend\w*|pian\w*)\b/i.test(text) && ANALYTICAL_PATTERN.test(text)
+  )
 }
 
 function mentionedNumericFields(text = '') {
@@ -157,6 +168,43 @@ export function planDeterministicUserAnalytics(message = '') {
   return null
 }
 
+function refinePreviousPlan(message = '', history = []) {
+  const previous = previousAnalyticsData(history)
+  const normalized = normalizePlan(previous?.plan)
+  if (!normalized || !isAnalyticsRefinement(message, history)) return null
+  const text = normalizeComparableText(message)
+  const fields = mentionedNumericFields(text)
+  const filters = [...normalized.filters]
+  const planFilter = extractPlanFilter(text)
+  const excludedCompany = extractExcludedCompany(text)
+  if (planFilter) filters.push(planFilter)
+  if (excludedCompany) filters.push(excludedCompany)
+  filters.push(...parseThresholdFilters(text))
+
+  const ordinal = /\b(?:prim[oa]|1)\b/i.test(text) ? 0 : /\b(?:second[oa]|2)\b/i.test(text) ? 1 : /\b(?:terz[oa]|3)\b/i.test(text) ? 2 : null
+  if (/\b(?:esclud\w*|togli\w*)\b/i.test(text) && ordinal !== null) {
+    const selected = previous.items?.[ordinal]
+    if (selected?.companyName) filters.push({field: 'companyName', operator: 'not-equals', value: selected.companyName})
+  }
+
+  const asksCompare = /\b(?:confront\w*|compar\w*|differenz\w*)\b/i.test(text)
+  const asksCount = /\b(?:quant[ei]|conteggio|numero)\b/i.test(text)
+  const asksList = /\b(?:mostra\w*|elenca\w*|lista)\b/i.test(text)
+  const sort = fields.length
+    ? [{field: fields[0], direction: /\bmeno\b/i.test(text) ? 'asc' : 'desc'}]
+    : normalized.sort
+
+  return normalizePlan({
+    ...normalized,
+    operation: asksCompare ? 'compare' : asksCount ? 'count' : asksList && normalized.operation === 'count' ? 'list' : normalized.operation,
+    filters,
+    sort,
+    limit: parseLimit(text, asksCompare ? 2 : normalized.limit),
+    comparisonFields: fields.length ? fields : normalized.comparisonFields,
+    source: 'deterministic',
+  })
+}
+
 function normalizePlan(raw = {}) {
   const operation = ['list', 'count', 'aggregate', 'compare'].includes(raw.operation) ? raw.operation : null
   if (!operation) return null
@@ -197,10 +245,12 @@ function normalizePlan(raw = {}) {
   }
 }
 
-export async function planSendInItalyUserAnalytics({message, callModel = callOllamaJson} = {}) {
+export async function planSendInItalyUserAnalytics({message, history = [], callModel = callOllamaJson} = {}) {
+  const refined = refinePreviousPlan(message, history)
+  if (refined) return {...refined, source: 'deterministic'}
   const deterministic = planDeterministicUserAnalytics(message)
   if (deterministic) return {...deterministic, source: 'deterministic'}
-  if (!isSendInItalyUserAnalyticsRequest(message)) return null
+  if (!isSendInItalyUserAnalyticsRequest(message, history)) return null
 
   try {
     const raw = await callModel({
@@ -351,8 +401,8 @@ function formatResult({plan, rows, aggregates, sourceCount, matchedCount}) {
   return ['Confronto verificato:', ...lines, differences.length ? `Differenze:\n${differences.map(item => `- ${item}`).join('\n')}` : 'I due utenti sono stati ordinati secondo il criterio richiesto.'].join('\n')
 }
 
-export async function executeSendInItalyUserAnalytics({message, token, services, plan = null} = {}) {
-  const resolvedPlan = normalizePlan(plan || await planSendInItalyUserAnalytics({message}))
+export async function executeSendInItalyUserAnalytics({message, token, services, history = [], plan = null} = {}) {
+  const resolvedPlan = normalizePlan(plan || await planSendInItalyUserAnalytics({message, history}))
   if (!resolvedPlan) return null
   const dataset = await fetchAllUsers({token, services})
   const filtered = dataset.items.filter(row => resolvedPlan.filters.every(filter => compareValue(row[filter.field], filter.operator, filter.value)))
