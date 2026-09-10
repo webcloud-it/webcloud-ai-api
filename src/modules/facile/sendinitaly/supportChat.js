@@ -634,6 +634,7 @@ function applyReadFilters(items, {state, priority, category, period, age, unansw
 function groupField(text = '') {
   if (
     /\b(?:per\s+cliente|quali\s+clienti|clienti\s+con\s+(?:piu|più|meno))\b/.test(text) ||
+    /\b(?:classific\w*|graduatoria|ranking)\b[\s\S]{0,45}\bclienti\b/.test(text) ||
     /\b(?:confront\w*|prim[ei]\s+(?:due|2))\b[\s\S]*\bclienti\b/.test(text)
   ) return ['customerName', 'cliente']
   if (/\b(?:per\s+categoria|categorie?[\s\S]{0,40}(?:frequen\w*|piu|meno|ticket)|distribuzione\s+.*categoria)\b/.test(text)) return ['category', 'categoria']
@@ -686,6 +687,7 @@ async function handleReadRequest({message, text, token, context, services, now =
   const age = parseAgeThreshold(text)
   const needsAttention = /\b(?:da\s+gestire|da\s+lavorare|richiedono\s+intervento|richiede\s+intervento)\b/.test(text)
   const unanswered = needsAttention || /\b(?:senza\s+risposta|da\s+rispondere|attendono\s+risposta|aspett\w*(?:\s+una)?\s+risposta|cliente\s+in\s+attesa)\b/.test(text)
+  const effectiveState = state || (unanswered ? 'active' : '')
   const escalated = /\b(?:escalat|clickup|sviluppo)\b/.test(text) && !/\bsenza\b/.test(text)
   const customerTarget = extractCustomerTarget(message)
   const hasModuleContext = Boolean(context?.activeModuleId || context?.section)
@@ -703,17 +705,17 @@ async function handleReadRequest({message, text, token, context, services, now =
     token,
     services,
     customerId,
-    state: state === 'active' ? '' : state,
+    state: effectiveState === 'active' ? '' : effectiveState,
     search,
   })
-  let items = applyReadFilters(loaded.items, {state, priority, category, period, age, unanswered, escalated, text, now})
+  let items = applyReadFilters(loaded.items, {state: effectiveState, priority, category, period, age, unanswered, escalated, text, now})
   if (/\b(?:piu|più)\s+vecch|da\s+piu\s+tempo/.test(text)) {
     items = items.sort((a, b) => (toTime(a.createdAt) || Infinity) - (toTime(b.createdAt) || Infinity))
   } else {
     items = items.sort((a, b) => (toTime(b.updatedAt) || 0) - (toTime(a.updatedAt) || 0))
   }
   const labels = [
-    state ? (state === 'active' ? 'non chiusi' : `stato ${state}`) : '', priority ? `priorità ${priority}` : '', category ? `categoria ${category}` : '',
+    effectiveState ? (effectiveState === 'active' ? 'non chiusi' : `stato ${effectiveState}`) : '', priority ? `priorità ${priority}` : '', category ? `categoria ${category}` : '',
     period?.label || '', age ? `da oltre ${age.label}` : '', unanswered ? 'senza risposta operatore' : '',
     escalated ? 'con escalation ClickUp' : '', customerName ? `del cliente ${customerName}` : '',
   ].filter(Boolean)
@@ -731,7 +733,7 @@ async function handleReadRequest({message, text, token, context, services, now =
     {
       type: field || operation === 'count' || unanswered || age ? 'sendinitaly-support-analysis' : 'sendinitaly-support-tickets',
       items: visibleItems.slice(0, 50), total: items.length, loadedTotal: loaded.items.length,
-      filters: {customerId: customerId || null, state: state || null, priority: priority || null, category: category || null, period: period?.label || null, unanswered, needsAttention, escalated},
+      filters: {customerId: customerId || null, state: effectiveState || null, priority: priority || null, category: category || null, period: period?.label || null, unanswered, needsAttention, escalated},
       analysis: analytical.analysis,
       actions: [{id: 'navigate', label: 'Apri assistenza', path: '/sendinitaly/support', query: customerId ? {customer_id: String(customerId)} : {}}],
     },

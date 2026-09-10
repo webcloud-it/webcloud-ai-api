@@ -153,7 +153,7 @@ function stripCustomerOrGroupTail(value = '') {
     stripAfterKnownTail(value)
       .replace(/\b(?:marcat[oi]|segnat[oi])\b[\s\S]*$/i, '')
       .replace(
-        /\b(?:che\s+)?(?:scade|scadono|scadra|scadranno|rinnova|rinnovano|termina|terminano|ha|hanno|è|sono)\b.*$/i,
+        /\b(?:che\s+)?(?:scade|scadono|scadra|scadranno|rinnova|rinnovano|termina|terminano|ha|hanno|è|sono|risulta|risultano)\b.*$/i,
         ''
       )
       .replace(
@@ -1108,7 +1108,7 @@ function detectBooleanFilters(message = '') {
     filters.push({kind: 'has-domain-record', label: 'con record dominio'})
   }
 
-  if (/\b(prezzo|prezzi|listino)\b.{0,30}\b(mancante|mancanti|assente|assenti)\b/.test(text)) {
+  if (/\b(prezzo|prezzi|listino)\b.{0,30}\b(mancante|mancanti|assente|assenti)\b|\b(?:senza|privi?\s+di)\s+prezz[oi]\b/.test(text)) {
     filters.push({kind: 'missing-price', label: 'con prezzo mancante'})
   }
 

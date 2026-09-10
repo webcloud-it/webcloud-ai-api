@@ -13,6 +13,6 @@ const commit = sanitizeBuildValue(
 )
 
 export const buildInfo = Object.freeze({
-  id: sanitizeBuildValue(process.env.API_BUILD_ID, '2026.09.10-chat-v33'),
+  id: sanitizeBuildValue(process.env.API_BUILD_ID, '2026.09.10-chat-v34'),
   commit,
 })

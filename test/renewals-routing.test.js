@@ -45,6 +45,16 @@ function assertDateParts(date, year, monthIndex, day) {
   assert.equal(date.getDate(), day)
 }
 
+test('servizi risultano senza prezzo applica il filtro operativo senza inventare un gruppo', () => {
+  const query = parseServiceListQuery({
+    message: 'Quanti servizi risultano senza prezzo?',
+    settings: SETTINGS,
+    now: NOW,
+  })
+  assert.equal(findFilter(query, 'missing-price')?.kind, 'missing-price')
+  assert.equal(findFilter(query, 'customer-or-group'), null)
+})
+
 test('riconosce lo spazio esaurito anche con verbo prima del nome', () => {
   assert.equal(
     pickExplicitChatIntent("mostrami l'ultimo servizio che ha esaurito lo spazio"),

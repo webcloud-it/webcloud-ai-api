@@ -162,6 +162,20 @@ test('non chiusi is an active-state filter, never a closed-state filter', async 
   assert.equal(result.data.total, 1)
 })
 
+test('classifies customers on unresolved tickets and excludes closed unanswered history', async () => {
+  const result = await handleSupportChat({
+    message: 'Classifica i clienti per ticket non chiusi senza risposta.', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({id: 1, customer: {company_name: 'Acme'}, state: 'new'}),
+      ticket({id: 2, customer: {company_name: 'Acme'}, state: 'open'}),
+      ticket({id: 3, customer: {company_name: 'Beta'}, state: 'closed'}),
+    ], meta: {total: 3}})}),
+  })
+  assert.equal(result.data.filters.state, 'active')
+  assert.equal(result.data.analysis.dimension, 'customerName')
+  assert.deepEqual(result.data.analysis.ranking.map(item => item.label), ['Acme'])
+})
+
 test('recognizes customer requests waiting for a reply as support work', async () => {
   const result = await handleSupportChat({
     message: 'Quali richieste aspettano una risposta da oltre 24 ore?', token: 'token',

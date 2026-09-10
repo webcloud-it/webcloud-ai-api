@@ -55,7 +55,7 @@ const renewals = [
   ['R25', 'Conta le sottoscrizioni del fornitore MisterDomain che scadono nel 2027.', /sottoscrizion|totale/i],
   ['R26', 'Quali gruppi hanno il maggior numero di servizi?', /grupp|servizi distinti/i],
   ['R27', 'Elenca i servizi che scadono a gennaio 2027.', /gennaio|01\/2027/i],
-  ['R28', 'Quanti servizi risultano senza prezzo?', /servizi|prezz/i],
+  ['R28', 'Quanti servizi risultano senza prezzo?', /servizi|prezz/i, body => body.data?.query?.filters?.some(filter => filter.kind === 'missing-price') && !body.data.query.filters.some(filter => filter.kind === 'customer-or-group')],
   ['R29', 'Quali fornitori hanno meno servizi?', /fornitor|servizi distinti/i],
   ['R30', 'Raggruppa i servizi per tipo.', /tip|servizi distinti/i],
   ['R31', 'Mostrami i primi cinque servizi con spazio esaurito.', /spazio/i],
@@ -94,18 +94,18 @@ const support = [
   ['T26', 'Fammi un quadro della coda assistenza da gestire.', /ticket/i],
   ['T27', 'Quanti ticket nuovi ci sono?', /ticket|new/i],
   ['T28', 'Ci sono ticket in attesa?', /ticket|pending|attesa/i],
-  ['T29', 'Quali categorie raccolgono più ticket aperti?', /categor/i],
-  ['T30', 'Classifica i clienti per ticket non chiusi.', /client|ticket/i],
-  ['T31', 'Quali richieste aspettano una risposta da oltre 24 ore?', /ticket|rispost|24 ore/i],
-  ['T32', 'Fammi vedere gli ultimi tre ticket ricevuti.', /ticket|#\d+/i],
-  ['T33', 'Riassumi il ticket numero 25004.', /25004/i],
-  ['T34', 'Cosa ha scritto per ultimo il cliente nel ticket 25004?', /25004|Customer|cliente/i],
-  ['T35', 'Nel ticket 25004 ha già risposto un operatore?', /25004|Agent|operatore/i],
-  ['T36', 'Qual è la categoria più frequente nei ticket?', /categor/i],
+  ['T29', 'Quali categorie raccolgono più ticket aperti?', /categor/i, body => body.data?.analysis?.dimension === 'category'],
+  ['T30', 'Classifica i clienti per ticket non chiusi.', /client|ticket/i, body => body.data?.analysis?.dimension === 'customerName' && body.data?.filters?.state === 'active'],
+  ['T31', 'Quali richieste aspettano una risposta da oltre 24 ore?', /ticket|rispost|24 ore/i, body => body.data?.filters?.unanswered === true && body.data?.filters?.state === 'active'],
+  ['T32', 'Fammi vedere gli ultimi tre ticket ricevuti.', /ticket|#\d+/i, body => body.data?.items?.length <= 3],
+  ['T33', 'Riassumi il ticket numero 25004.', /25004/i, body => String(body.data?.ticket?.number) === '25004'],
+  ['T34', 'Cosa ha scritto per ultimo il cliente nel ticket 25004?', /25004|Customer|cliente/i, body => body.data?.articles?.length === 1 && /customer|cliente/i.test(body.data.articles[0]?.sender || '')],
+  ['T35', 'Nel ticket 25004 ha già risposto un operatore?', /25004|Agent|operatore/i, body => /^(?:s[iì]|no)\./i.test(body.reply || '')],
+  ['T36', 'Qual è la categoria più frequente nei ticket?', /categor/i, body => body.data?.analysis?.dimension === 'category'],
   ['T37', 'Elenca i ticket collegati a ClickUp.', /ClickUp/i],
-  ['T38', 'Mostrami i ticket aperti con priorità minima.', /ticket|priorit/i],
+  ['T38', 'Mostrami i ticket aperti con priorità minima.', /ticket|priorit/i, body => body.data?.filters?.priority === 'minimum'],
   ['T39', 'Scrivi una bozza per il ticket 25004 senza inviarla.', /bozza|piano consigliato/i],
-  ['T40', 'Prepara l’invio della risposta al ticket 25004.', /confermo|sto per inviare|bozza/i],
+  ['T40', 'Prepara l’invio della risposta al ticket 25004.', /confermo|sto per inviare|bozza/i, body => body.data?.type === 'action-proposal'],
 ]
 
 const sendInItaly = [
@@ -121,14 +121,14 @@ const sendInItaly = [
   ['S10', 'Controlla lo stato DNS di Webcloud su Send in Italy.', /DNS|domini mittente/i],
   ['S11', 'Quali utenti Send in Italy hanno più contatti?', /contatti/i],
   ['S12', 'Confronta i tre clienti Send in Italy con più campagne usando anche i contatti.', /campagne[\s\S]*contatti|contatti[\s\S]*campagne/i],
-  ['S13', 'Calcola la media delle campagne per ogni piano Send in Italy.', /piano[\s\S]*(?:avg campaigns|media campagne)/i],
-  ['S14', 'Quali utenti Send in Italy non sono collegati al CRM?', /CRM|utenti Send in Italy/i],
+  ['S13', 'Calcola la media delle campagne per ogni piano Send in Italy.', /piano[\s\S]*(?:avg campaigns|media campagne)/i, body => body.data?.plan?.groupBy?.includes('plan') && !body.data.plan.filters?.some(filter => filter.field === 'plan')],
+  ['S14', 'Quali utenti Send in Italy non sono collegati al CRM?', /CRM|utenti Send in Italy/i, body => body.data?.plan?.filters?.some(filter => filter.field === 'crmLinked' && filter.operator === 'falsey')],
   ['S15', 'Quanti utenti Send in Italy hanno almeno una automazione?', /utenti Send in Italy|automazioni/i],
   ['S16', 'Quali clienti Send in Italy hanno più liste?', /liste/i],
   ['S17', 'Mostrami i clienti Send in Italy con più mittenti.', /mittenti/i],
   ['S18', 'Qual è il tasso di click Send in Italy negli ultimi 30 giorni?', /tasso di click/i],
   ['S19', 'Mostrami le ultime campagne Send in Italy inviate.', /campagne/i],
-  ['S20', 'Mostrami i dettagli dell’utente Send in Italy Webcloud.', /Webcloud/i],
+  ['S20', 'Mostrami i dettagli dell’utente Send in Italy Webcloud.', /Webcloud/i, body => body.data?.type === 'sendinitaly-user-detail'],
 ]
 
 const crossDomain = [
@@ -137,14 +137,14 @@ const crossDomain = [
 ]
 
 const cases = [
-  ...renewals.map(([id, message, replyPattern]) => ({
-    id, message, replyPattern, section: 'renewals', path: '/renewals',
+  ...renewals.map(([id, message, replyPattern, validate]) => ({
+    id, message, replyPattern, validate, section: 'renewals', path: '/renewals',
   })),
-  ...support.map(([id, message, replyPattern]) => ({
-    id, message, replyPattern, section: 'sendinitaly-support', path: '/sendinitaly/support',
+  ...support.map(([id, message, replyPattern, validate]) => ({
+    id, message, replyPattern, validate, section: 'sendinitaly-support', path: '/sendinitaly/support',
   })),
-  ...sendInItaly.map(([id, message, replyPattern]) => ({
-    id, message, replyPattern, section: 'sendinitaly-users', path: '/sendinitaly/users',
+  ...sendInItaly.map(([id, message, replyPattern, validate]) => ({
+    id, message, replyPattern, validate, section: 'sendinitaly-users', path: '/sendinitaly/users',
   })),
   ...(includeCrossDomain
     ? crossDomain.map(([id, message, replyPattern]) => ({
@@ -181,6 +181,7 @@ async function execute(item) {
   if (!reply) failures.push('risposta vuota')
   if (forbidden.test(reply)) failures.push('fallback/errore applicativo')
   if (!item.replyPattern.test(reply)) failures.push(`contenuto inatteso: ${reply.slice(0, 120)}`)
+  if (item.validate && !item.validate(body)) failures.push('struttura o filtri verificati non coerenti con la richiesta')
 
   return {
     id: item.id,
