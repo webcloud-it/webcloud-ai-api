@@ -6,7 +6,6 @@ import {
   buildWebcamSummaryPayload,
   extractDetailTarget,
   parseListQuery,
-  parseWebcamFleetAnalysisRequest,
   parseWebcamHistoryRequest,
   pickPreviousWebcamTarget,
 } from './queries.js'
@@ -15,6 +14,7 @@ import {extractWebcamOperationTarget, handleWebcamgoOperation} from './operation
 import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
 import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
+import {planWebcamFleetAnalysis} from './fleetPlanner.js'
 
 export async function summary(req, res) {
   const webcams = await getWebcams({token: req.auth.token})
@@ -68,7 +68,7 @@ export async function chat(req, res) {
     ? extractDetailTarget(normalizedMessage)
     : null
   const preliminaryOperationTarget = extractWebcamOperationTarget(normalizedMessage)
-  const preliminaryFleetAnalysis = parseWebcamFleetAnalysisRequest(normalizedMessage)
+  const preliminaryFleetAnalysis = await planWebcamFleetAnalysis({message: normalizedMessage, history})
   const webcams = await getWebcams({
     token: req.auth.token,
     profile: identityOnly ? 'identity' : 'full',
@@ -125,6 +125,7 @@ export async function chat(req, res) {
     context,
     statusLogs,
     historyRequest,
+    fleetAnalysisRequest: preliminaryFleetAnalysis,
   })
 
   const response = await composeGroundedReply({

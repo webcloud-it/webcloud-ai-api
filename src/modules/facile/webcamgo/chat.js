@@ -38,13 +38,14 @@ export function handleWebcamgoChat({
   webcams = [],
   statusLogs = [],
   historyRequest = null,
+  fleetAnalysisRequest = null,
   now = new Date(),
 } = {}) {
   const previousList = pickPreviousWebcamList(history)
   const previousTarget = pickPreviousWebcamTarget(history)
   const contextTarget = getContextEntityTarget(context, 'webcam')
   const resolvedHistoryRequest = historyRequest || parseWebcamHistoryRequest(message, now)
-  const fleetAnalysisRequest = parseWebcamFleetAnalysisRequest(message)
+  const resolvedFleetAnalysisRequest = fleetAnalysisRequest || parseWebcamFleetAnalysisRequest(message)
   const intent = detectIntent(message, {
     previousList,
     hasActiveEntity: Boolean(contextTarget),
@@ -56,15 +57,16 @@ export function handleWebcamgoChat({
     source: 'tool-fast',
   }
 
-  if (fleetAnalysisRequest) {
-    const payload = buildWebcamFleetAnalysisPayload({webcams, query: fleetAnalysisRequest})
+  if (resolvedFleetAnalysisRequest) {
+    const payload = buildWebcamFleetAnalysisPayload({webcams, query: resolvedFleetAnalysisRequest})
+    const source = resolvedFleetAnalysisRequest.source === 'semantic' ? 'tool-semantic' : 'tool-fast'
     return {
       ok: true,
       intent: 'webcam-fleet-analysis',
-      source: 'tool-fast',
+      source,
       reply: formatFleetAnalysisReply(payload),
       data: payload,
-      meta: {...meta, intent: 'webcam-fleet-analysis'},
+      meta: {...meta, intent: 'webcam-fleet-analysis', source},
     }
   }
 

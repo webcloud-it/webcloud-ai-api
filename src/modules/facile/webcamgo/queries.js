@@ -561,7 +561,7 @@ const FLEET_DIMENSIONS = Object.freeze([
 export function parseWebcamFleetAnalysisRequest(message = '') {
   const text = normalizeSearchText(message)
   const analytical = /\b(?:raggrupp\w*|distribuz\w*|confront\w*|compar\w*|percentual\w*|tasso|incidenza|quali\s+\w+[\s\S]{0,35}(?:piu|meno)\s+webcam|per\s+(?:ogni|ciascun\w*))\b/i.test(text)
-  if (!analytical || !/\bwebcam|telecamer\w*|flotta\b/i.test(text)) return null
+  if (!analytical) return null
 
   const dimension = FLEET_DIMENSIONS.find(item => item.pattern.test(text))
   if (!dimension) return null
