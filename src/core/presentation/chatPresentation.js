@@ -237,6 +237,19 @@ function webcamPresentation(data) {
     return {version: 1, kind: 'metrics', title: 'Stato WebcamGo', metrics: fields.map(([label, value]) => ({label, value: text(value ?? 0)}))}
   }
 
+  if (data.type === 'webcam-fleet-analysis' && Array.isArray(data.items)) {
+    return list(`Analisi WebcamGo per ${text(data.query?.dimensionLabel || data.query?.dimension, 'gruppo')}`, data.items.map((item, index) => ({
+      id: `fleet-group-${index + 1}`,
+      title: text(item.dimension, 'Non configurato'),
+      badge: `${text(item.percentage, '0')}%`,
+      details: [
+        detail('Corrispondenti', item.matching),
+        detail('Totale gruppo', item.total),
+        detail('Incidenza', `${text(item.percentage, '0')}%`),
+      ].filter(Boolean),
+    })), data.total)
+  }
+
   if (data.type !== 'webcam-list' || !Array.isArray(data.items)) return null
   return list('WebcamGo', data.items.map(item => {
     const slug = text(item.slug)

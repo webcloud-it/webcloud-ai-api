@@ -546,6 +546,97 @@ export function buildWebcamSummaryPayload(webcams = []) {
   }
 }
 
+const FLEET_DIMENSIONS = Object.freeze([
+  {id: 'reseller', label: 'reseller', pattern: /\b(?:reseller|rivenditor\w*)\b/i, value: webcam => webcam.reseller || 'Non configurato'},
+  {id: 'networkProvider', label: 'provider di rete', pattern: /\b(?:provider|operatore)\s+(?:di\s+)?rete\b|\bconnettivit[aà]\b/i, value: webcam => webcam.networkProvider || 'Non configurato'},
+  {id: 'hardwareBrand', label: 'marca hardware', pattern: /\b(?:marca|brand|produttore)\b/i, value: webcam => webcam.hardware?.brand || 'Non configurata'},
+  {id: 'hardwareModel', label: 'modello hardware', pattern: /\bmodello\b/i, value: webcam => webcam.hardware?.model || 'Non configurato'},
+  {id: 'location', label: 'località', pattern: /\b(?:localit[aà]|comune|zona|luogo)\b/i, value: webcam => String(webcam.location || '').split(',')[0].trim() || 'Non configurata'},
+  {id: 'vpn', label: 'VPN', pattern: /\bVPN\b/i, value: webcam => webcam.vpn ? 'Con VPN' : 'Senza VPN'},
+  {id: 'mikrotik', label: 'MikroTik', pattern: /\bMikroTik\b/i, value: webcam => webcam.hasMikrotik ? 'Con MikroTik' : 'Senza MikroTik'},
+  {id: 'encoding', label: 'encoding', pattern: /\bencoding\b/i, value: webcam => webcam.hasEncoding ? 'Con encoding' : 'Senza encoding'},
+  {id: 'monitored', label: 'monitoraggio', pattern: /\bmonitor(?:aggio|at[aei]?)\b/i, value: webcam => webcam.monitoring?.any ? 'Monitorate' : 'Non monitorate'},
+])
+
+export function parseWebcamFleetAnalysisRequest(message = '') {
+  const text = normalizeSearchText(message)
+  const analytical = /\b(?:raggrupp\w*|distribuz\w*|confront\w*|compar\w*|percentual\w*|tasso|incidenza|quali\s+\w+[\s\S]{0,35}(?:piu|meno)\s+webcam|per\s+(?:ogni|ciascun\w*))\b/i.test(text)
+  if (!analytical || !/\bwebcam|telecamer\w*|flotta\b/i.test(text)) return null
+
+  const dimension = FLEET_DIMENSIONS.find(item => item.pattern.test(text))
+  if (!dimension) return null
+  const dimensionFilters = {
+    reseller: new Set(['reseller']),
+    vpn: new Set(['vpn', 'no-vpn']),
+    mikrotik: new Set(['mikrotik', 'no-mikrotik', 'mikrotik-offline']),
+    encoding: new Set(['encoding']),
+    monitored: new Set(['monitored', 'unmonitored']),
+  }
+  const excludedFilters = dimensionFilters[dimension.id] || new Set()
+  const filters = parseFilters(message).filter(filter => !excludedFilters.has(filter))
+  const filterMode = filters.length > 1 && /\b(?:o|oppure)\b/i.test(text) ? 'any' : 'all'
+  const limit = extractLimit(message, 10)
+  return {
+    type: 'webcam-fleet-analysis-query',
+    dimension: dimension.id,
+    dimensionLabel: dimension.label,
+    filters,
+    filterMode,
+    metric: /\b(?:percentual\w*|tasso|incidenza)\b/i.test(text) ? 'percentage' : 'count',
+    direction: /\b(?:meno|minor\w*|basso|peggior\w*)\b/i.test(text) ? 'asc' : 'desc',
+    includeZero: /\b(?:confront\w*|compar\w*)\b/i.test(text),
+    limit,
+  }
+}
+
+function roundFleetPercentage(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100
+}
+
+export function buildWebcamFleetAnalysisPayload({webcams = [], query = {}} = {}) {
+  const dimension = FLEET_DIMENSIONS.find(item => item.id === query.dimension)
+  if (!dimension) return null
+  const groups = new Map()
+
+  for (const webcam of webcams) {
+    const value = dimension.value(webcam)
+    const current = groups.get(value) || {value, total: 0, matching: 0, items: []}
+    current.total += 1
+    if (matchesFilters(webcam, query.filters, query.filterMode)) {
+      current.matching += 1
+      current.items.push(toListItem(webcam))
+    }
+    groups.set(value, current)
+  }
+
+  const rows = [...groups.values()].map(group => ({
+    dimension: group.value,
+    total: group.total,
+    matching: group.matching,
+    percentage: group.total ? roundFleetPercentage((group.matching / group.total) * 100) : 0,
+    items: group.items.slice(0, 5),
+  })).filter(group => query.filters?.length && !query.includeZero ? group.matching > 0 : true)
+
+  const metric = query.metric === 'percentage' ? 'percentage' : 'matching'
+  rows.sort((first, second) => {
+    const delta = first[metric] - second[metric]
+    if (delta) return query.direction === 'asc' ? delta : -delta
+    return String(first.dimension).localeCompare(String(second.dimension), 'it', {sensitivity: 'base'})
+  })
+
+  return {
+    type: 'webcam-fleet-analysis',
+    query,
+    summary: {
+      webcamsAnalyzed: webcams.length,
+      groups: rows.length,
+      matchingWebcams: webcams.filter(webcam => matchesFilters(webcam, query.filters, query.filterMode)).length,
+    },
+    items: rows.slice(0, query.limit),
+    total: rows.length,
+  }
+}
+
 function parsePositionSelector(message = '') {
   const text = normalizeSearchText(message)
 

@@ -85,6 +85,22 @@ test('builds WebcamGo metrics and list cards with internal navigation', () => {
   assert.equal(cards.cards[0].action.path, '/webcamgo/webcams/piazza')
 })
 
+test('builds verified group cards for WebcamGo fleet analytics', () => {
+  const presentation = buildChatPresentation({
+    type: 'webcam-fleet-analysis',
+    query: {dimension: 'reseller', dimensionLabel: 'reseller'},
+    total: 2,
+    items: [
+      {dimension: 'Alpha', matching: 3, total: 4, percentage: 75},
+      {dimension: 'Beta', matching: 1, total: 5, percentage: 20},
+    ],
+  })
+
+  assert.equal(presentation.kind, 'list')
+  assert.equal(presentation.cards[0].title, 'Alpha')
+  assert.equal(presentation.cards[0].badge, '75%')
+})
+
 test('decorates renewals lists while preserving the original response contract', () => {
   const original = {ok: true, data: {type: 'critical-services', totale: 1, items: [{servizio: 'example.it', cliente: 'Acme', priorita: 'alta', msg: 'Rinnovo urgente', scadenza: '2026-12-01', scadenzaFornitore: '2027-01-03'}]}}
   const decorated = attachChatPresentation(original)

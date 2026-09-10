@@ -3,6 +3,7 @@ import {
   buildLatestOfflinePayload,
   buildWebcamListPayload,
   buildWebcamAnomalyAnalysisPayload,
+  buildWebcamFleetAnalysisPayload,
   buildWebcamOutagePayload,
   buildWebcamSummaryPayload,
   detectIntent,
@@ -11,6 +12,7 @@ import {
   parsePaginationRequest,
   parseReferenceRequest,
   parseWebcamHistoryRequest,
+  parseWebcamFleetAnalysisRequest,
   pickPreviousWebcamList,
   pickPreviousWebcamTarget,
   resolveReference,
@@ -42,6 +44,7 @@ export function handleWebcamgoChat({
   const previousTarget = pickPreviousWebcamTarget(history)
   const contextTarget = getContextEntityTarget(context, 'webcam')
   const resolvedHistoryRequest = historyRequest || parseWebcamHistoryRequest(message, now)
+  const fleetAnalysisRequest = parseWebcamFleetAnalysisRequest(message)
   const intent = detectIntent(message, {
     previousList,
     hasActiveEntity: Boolean(contextTarget),
@@ -51,6 +54,18 @@ export function handleWebcamgoChat({
     moduleId: 'facile.webcamgo',
     intent,
     source: 'tool-fast',
+  }
+
+  if (fleetAnalysisRequest) {
+    const payload = buildWebcamFleetAnalysisPayload({webcams, query: fleetAnalysisRequest})
+    return {
+      ok: true,
+      intent: 'webcam-fleet-analysis',
+      source: 'tool-fast',
+      reply: formatFleetAnalysisReply(payload),
+      data: payload,
+      meta: {...meta, intent: 'webcam-fleet-analysis'},
+    }
   }
 
   if (intent === 'greeting') {
@@ -611,6 +626,21 @@ function formatAnomalyAnalysisReply(payload = {}) {
     commonFactors.length
       ? `Elementi comuni da approfondire (correlazioni descrittive, non cause dimostrate):\n${commonFactors.join('\n')}`
       : 'Non emerge una caratteristica condivisa abbastanza frequente da essere segnalata in modo affidabile.',
+  ].join('\n')
+}
+
+function formatFleetAnalysisReply(payload = {}) {
+  const items = Array.isArray(payload.items) ? payload.items : []
+  if (!items.length) return `Non risultano gruppi WebcamGo corrispondenti ai criteri richiesti nei ${payload.summary?.webcamsAnalyzed || 0} record analizzati.`
+  const query = payload.query || {}
+  const filterLabel = query.filters?.length
+    ? ` che corrispondono a ${query.filters.join(query.filterMode === 'any' ? ' oppure ' : ', ')}`
+    : ''
+  return [
+    `Analisi flotta WebcamGo per ${query.dimensionLabel || query.dimension} (${payload.summary?.webcamsAnalyzed || 0} webcam analizzate):`,
+    ...items.map((item, index) =>
+      `${index + 1}. ${item.dimension} — ${item.matching}/${item.total} webcam${filterLabel} (${item.percentage}%)`
+    ),
   ].join('\n')
 }
 

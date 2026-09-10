@@ -66,13 +66,14 @@ test('treats natural open tickets as every unresolved Zammad state', async () =>
 })
 
 test('counts unanswered tickets older than a requested threshold', async () => {
+  const now = Date.now()
   const result = await handleSupportChat({
     message: 'Quanti ticket sono senza risposta da più di 2 giorni?',
     token: 'token',
     services: services({
       getSupportTickets: async () => ({data: [
-        ticket({last_contact_customer_at: '2026-09-01T10:00:00Z'}),
-        ticket({id: 43, last_contact_customer_at: '2026-09-07T10:00:00Z'}),
+        ticket({last_contact_customer_at: new Date(now - 3 * 24 * 60 * 60 * 1000).toISOString()}),
+        ticket({id: 43, last_contact_customer_at: new Date(now - 12 * 60 * 60 * 1000).toISOString()}),
       ], meta: {total: 2}}),
     }),
   })

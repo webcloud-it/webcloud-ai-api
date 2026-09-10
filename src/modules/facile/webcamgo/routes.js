@@ -6,6 +6,7 @@ import {
   buildWebcamSummaryPayload,
   extractDetailTarget,
   parseListQuery,
+  parseWebcamFleetAnalysisRequest,
   parseWebcamHistoryRequest,
   pickPreviousWebcamTarget,
 } from './queries.js'
@@ -67,11 +68,14 @@ export async function chat(req, res) {
     ? extractDetailTarget(normalizedMessage)
     : null
   const preliminaryOperationTarget = extractWebcamOperationTarget(normalizedMessage)
+  const preliminaryFleetAnalysis = parseWebcamFleetAnalysisRequest(normalizedMessage)
   const webcams = await getWebcams({
     token: req.auth.token,
     profile: identityOnly ? 'identity' : 'full',
     includeDowntime,
-    searchTerm: preliminaryOperationTarget || preliminaryListQuery?.term || preliminaryDetailTarget || null,
+    searchTerm: preliminaryFleetAnalysis
+      ? null
+      : preliminaryOperationTarget || preliminaryListQuery?.term || preliminaryDetailTarget || null,
   })
   const historyRequest = parseWebcamHistoryRequest(message)
   let statusLogs = []
@@ -130,7 +134,7 @@ export async function chat(req, res) {
       meta: {
         ...(result.meta || {}),
         narrationPolicy:
-          ['webcam-anomaly-analysis', 'webcam-detail', 'webcam-status'].includes(result.intent)
+          ['webcam-anomaly-analysis', 'webcam-fleet-analysis', 'webcam-detail', 'webcam-status'].includes(result.intent)
             ? 'deterministic'
             : result.meta?.narrationPolicy,
         webcamsCount: webcams.length,

@@ -51,6 +51,55 @@ test('il riepilogo non considera gli stati N/A come problemi reali', () => {
   assert.match(result.reply, /MikroTik non online: 0/i)
 })
 
+test('ranks resellers by the verified percentage of offline webcams', () => {
+  const first = webcam('a1', 'A1', 'a1')
+  first.reseller = 'Alpha'
+  first.status.overall = 'offline'
+  const second = webcam('a2', 'A2', 'a2')
+  second.reseller = 'Alpha'
+  const third = webcam('b1', 'B1', 'b1')
+  third.reseller = 'Beta'
+  third.status.overall = 'offline'
+
+  const result = handleWebcamgoChat({
+    message: 'Quali reseller hanno la percentuale più alta di webcam offline?',
+    webcams: [first, second, third],
+  })
+
+  assert.equal(result.intent, 'webcam-fleet-analysis')
+  assert.equal(result.data.items[0].dimension, 'Beta')
+  assert.equal(result.data.items[0].percentage, 100)
+  assert.equal(result.data.items[1].percentage, 50)
+  assert.match(result.reply, /Beta — 1\/1 webcam.*100%/)
+})
+
+test('compares current webcam failure rates with and without VPN', () => {
+  const withVpn = webcam('v1', 'VPN', 'vpn')
+  withVpn.vpn = true
+  withVpn.status.stream.status = 'offline'
+  const withoutVpn = webcam('n1', 'No VPN', 'no-vpn')
+
+  const result = handleWebcamgoChat({
+    message: 'Confronta il tasso di webcam con stream offline tra quelle con VPN e senza VPN',
+    webcams: [withVpn, withoutVpn],
+  })
+
+  assert.equal(result.intent, 'webcam-fleet-analysis')
+  assert.deepEqual(result.data.items.map(item => item.dimension), ['Con VPN', 'Senza VPN'])
+  assert.equal(result.data.items[0].percentage, 100)
+  assert.equal(result.data.items[1].percentage, 0)
+})
+
+test('keeps ordinary filtered webcam requests on the existing list fast path', () => {
+  const result = handleWebcamgoChat({
+    message: 'Mostrami le webcam offline del reseller Alpha',
+    webcams,
+  })
+
+  assert.equal(result.intent, 'webcam-list')
+  assert.equal(result.data.type, 'webcam-list')
+})
+
 test('riconosce il downtime programmato attivo senza confonderlo con quello configurato', () => {
   const active = webcam('cam-active', 'Webcam in downtime', 'cam-active')
   active.downtime = {configured: true, enabledCount: 1, active: true, activeSchedule: {}}
