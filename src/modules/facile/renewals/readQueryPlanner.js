@@ -159,7 +159,7 @@ export function isAnalyticalReadQueryRequest(message = '') {
     ANALYTICAL_READ_PATTERN.test(analyticalText) ||
     Boolean(extractAggregateThreshold(text)) ||
     /\bsia\s+(?:nel\s+)?20\d{2}\s+sia\s+(?:nel\s+)?20\d{2}\b/i.test(text) ||
-    /\b(?:quanti|quante|conteggio|numero)\b[\s\S]{0,100}\b(?:scad\w*|scadenz\w*|plesk|spazio|prezzo|rinnov\w*|trasfer\w*)\b/i.test(text) ||
+    /\b(?:quanti|quante|conta|conteggio|numero)\b[\s\S]{0,100}\b(?:scad\w*|scadenz\w*|plesk|spazio|rinnov\w*|trasfer\w*)\b/i.test(text) ||
     /\b(?:quanti|quante|conteggio|numero)\b[\s\S]{0,80}\bper\b/i.test(text) ||
     /\bper\b[\s\S]{0,80}\b(?:quanti|quante|conteggio|numero)\b/i.test(text)
   )
@@ -618,6 +618,32 @@ function buildDeterministicAnalyticalPlan(message = '', previousState = null) {
   const relationalCountPlan = buildRelationalCountPlan(message, previousState)
   if (relationalCountPlan) return relationalCountPlan
 
+  if (/\bchi\s+(?:gestisce|amministra|fornisce)\b[\s\S]{0,80}\bservizi?\b/i.test(text)) {
+    const filters = buildDeterministicFilters('subscriptions', text)
+    if (!filters.some(filter => filter.field === 'kind')) {
+      filters.unshift({field: 'kind', operator: 'equals', value: 'supplier'})
+    }
+    return {
+      type: 'read-query-plan', operation: 'aggregate', entity: 'subscriptions', filters,
+      groupBy: ['supplier.name'],
+      metrics: [{id: 'count', function: 'count-distinct', field: 'service.id'}],
+      having: [], sort: [{field: 'count', direction: 'desc'}, {field: 'supplier.name', direction: 'asc'}],
+      limit: extractAnalyticalLimit(text, getAnalyticalEntityDefinition('providers')), offset: 0,
+      confidence: 1, source: 'deterministic-analytical', sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
+
+  if (/\b(?:raggrupp\w*|distribuz\w*)\b[\s\S]{0,60}\bservizi?\b[\s\S]{0,30}\b(?:per\s+)?(?:tipo|categoria)\b/i.test(text)) {
+    return {
+      type: 'read-query-plan', operation: 'list', entity: 'service-types', filters: [],
+      groupBy: [], metrics: [], having: [], sort: [{field: 'serviceCount', direction: 'desc'}],
+      limit: extractAnalyticalLimit(text, getAnalyticalEntityDefinition('service-types')), offset: 0,
+      confidence: 1, source: 'deterministic-analytical', sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
+
   const relationalRankingPlan = buildRelationalRankingPlan(message, previousState)
   if (relationalRankingPlan) return relationalRankingPlan
 
@@ -628,6 +654,16 @@ function buildDeterministicAnalyticalPlan(message = '', previousState = null) {
   const entity = getReadEntityRegistry().get(entityId)
   const definition = getAnalyticalEntityDefinition(entityId)
   if (!entity || !definition) return null
+
+  if (/\b(?:quanti|quante|conta|conteggio|numero)\b/i.test(text)) {
+    return {
+      type: 'read-query-plan', operation: 'count', entity: entity.id,
+      filters: buildDeterministicFilters(entity.id, text), groupBy: [], metrics: [], having: [],
+      sort: entity.defaultSort || [], limit: 0, offset: 0, confidence: 1,
+      source: 'deterministic-analytical', sourceMessage: message,
+      previousPlan: previousState?.plan || null,
+    }
+  }
 
   const groupByField = findGroupingField(definition, text)
   const asksGrouping = /\b(?:raggrupp\w*|divid\w*|suddivid\w*)\b/i.test(text)
@@ -1370,8 +1406,12 @@ function buildDeterministicFilters(entityId, message = '') {
     const supplier = extractNamedAfter(text, [
       /\b(?:con|del|della|di)\s+(?:il\s+)?fornitore\s+(.+?)(?=\s+(?:che|nel|in scadenza|scadono)\b|$)/i,
       /\bfornitore\s+(.+)$/i,
+      /\bsottoscrizioni\s+(?:del|della|di)\s+(.+?)(?=\s+(?:che|nel|in scadenza|scadono|scade)\b|$)/i,
     ])
     if (supplier && !/^(?:cliente|fornitore|supplier|provider|hanno|ha|che|sia)$/i.test(supplier)) {
+      if (!filters.some(filter => filter.field === 'kind')) {
+        filters.push({field: 'kind', operator: 'equals', value: 'supplier'})
+      }
       filters.push({field: 'supplier.name', operator: 'contains', value: supplier})
     }
 

@@ -48,6 +48,21 @@ const renewals = [
   ['R18', 'Quali fornitori hanno servizi sia nel 2026 sia nel 2027?', /valori distinti/i],
   ['R19', 'Raggruppa i servizi per fornitore e mostrami i primi cinque.', /servizi distinti/i],
   ['R20', 'Qual è il servizio che ha esaurito più volte lo spazio, escludendo Zilio Group?', /storico|ricorren|non.*dispon|spazio/i],
+  ['R21', 'Fammi la classifica dei primi tre fornitori per numero di servizi.', /servizi distinti/i],
+  ['R22', 'Chi gestisce più servizi con rinnovo nel 2026?', /fornitor|servizi distinti/i],
+  ['R23', 'Escludendo Aruba, quali sono i due fornitori con più servizi?', /servizi distinti/i],
+  ['R24', 'Mostrami i clienti che hanno servizi segnati da non rinnovare.', /non rinnov/i],
+  ['R25', 'Conta le sottoscrizioni del fornitore MisterDomain che scadono nel 2027.', /sottoscrizion|totale/i],
+  ['R26', 'Quali gruppi hanno il maggior numero di servizi?', /grupp|servizi distinti/i],
+  ['R27', 'Elenca i servizi che scadono a gennaio 2027.', /gennaio|01\/2027/i],
+  ['R28', 'Quanti servizi risultano senza prezzo?', /servizi|prezz/i],
+  ['R29', 'Quali fornitori hanno meno servizi?', /fornitor|servizi distinti/i],
+  ['R30', 'Raggruppa i servizi per tipo.', /tip|servizi distinti/i],
+  ['R31', 'Mostrami i primi cinque servizi con spazio esaurito.', /spazio/i],
+  ['R32', 'Quali domini in scadenza nel 2027 sono marcati non rinnovare?', /domini?|non rinnov/i],
+  ['R33', 'Mostrami i dettagli del piano DomProf25.', /DomProf25/i],
+  ['R34', 'Quante sottoscrizioni di MisterDomain scadono nel 2027?', /sottoscrizion|totale/i],
+  ['R35', 'Quali fornitori utilizzano piani senza prezzo?', /fornitor|prezz/i],
 ]
 
 const support = [
@@ -76,6 +91,21 @@ const support = [
   ['T23', 'Prepara e invia una risposta per il ticket 25004.', /confermo|sto per inviare/i],
   ['T24', 'Chi ha scritto l’ultima risposta nel ticket 25004?', /25004|risposta|agent|customer/i],
   ['T25', 'Mostrami le info del ticket 25004.', /25004/i],
+  ['T26', 'Fammi un quadro della coda assistenza da gestire.', /ticket/i],
+  ['T27', 'Quanti ticket nuovi ci sono?', /ticket|new/i],
+  ['T28', 'Ci sono ticket in attesa?', /ticket|pending|attesa/i],
+  ['T29', 'Quali categorie raccolgono più ticket aperti?', /categor/i],
+  ['T30', 'Classifica i clienti per ticket non chiusi.', /client|ticket/i],
+  ['T31', 'Quali richieste aspettano una risposta da oltre 24 ore?', /ticket|rispost|24 ore/i],
+  ['T32', 'Fammi vedere gli ultimi tre ticket ricevuti.', /ticket|#\d+/i],
+  ['T33', 'Riassumi il ticket numero 25004.', /25004/i],
+  ['T34', 'Cosa ha scritto per ultimo il cliente nel ticket 25004?', /25004|Customer|cliente/i],
+  ['T35', 'Nel ticket 25004 ha già risposto un operatore?', /25004|Agent|operatore/i],
+  ['T36', 'Qual è la categoria più frequente nei ticket?', /categor/i],
+  ['T37', 'Elenca i ticket collegati a ClickUp.', /ClickUp/i],
+  ['T38', 'Mostrami i ticket aperti con priorità minima.', /ticket|priorit/i],
+  ['T39', 'Scrivi una bozza per il ticket 25004 senza inviarla.', /bozza|piano consigliato/i],
+  ['T40', 'Prepara l’invio della risposta al ticket 25004.', /confermo|sto per inviare|bozza/i],
 ]
 
 const sendInItaly = [
@@ -89,6 +119,16 @@ const sendInItaly = [
   ['S08', 'Qual è il tasso di apertura Send in Italy negli ultimi 30 giorni?', /tasso di apertura/i],
   ['S09', 'Mostrami le campagne Send in Italy in coda.', /campagne/i],
   ['S10', 'Controlla lo stato DNS di Webcloud su Send in Italy.', /DNS|domini mittente/i],
+  ['S11', 'Quali utenti Send in Italy hanno più contatti?', /contatti/i],
+  ['S12', 'Confronta i tre clienti Send in Italy con più campagne usando anche i contatti.', /campagne[\s\S]*contatti|contatti[\s\S]*campagne/i],
+  ['S13', 'Calcola la media delle campagne per ogni piano Send in Italy.', /piano[\s\S]*(?:avg campaigns|media campagne)/i],
+  ['S14', 'Quali utenti Send in Italy non sono collegati al CRM?', /CRM|utenti Send in Italy/i],
+  ['S15', 'Quanti utenti Send in Italy hanno almeno una automazione?', /utenti Send in Italy|automazioni/i],
+  ['S16', 'Quali clienti Send in Italy hanno più liste?', /liste/i],
+  ['S17', 'Mostrami i clienti Send in Italy con più mittenti.', /mittenti/i],
+  ['S18', 'Qual è il tasso di click Send in Italy negli ultimi 30 giorni?', /tasso di click/i],
+  ['S19', 'Mostrami le ultime campagne Send in Italy inviate.', /campagne/i],
+  ['S20', 'Mostrami i dettagli dell’utente Send in Italy Webcloud.', /Webcloud/i],
 ]
 
 const crossDomain = [

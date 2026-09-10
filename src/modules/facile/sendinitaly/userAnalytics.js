@@ -86,7 +86,8 @@ function isAnalyticsRefinement(message = '', history = []) {
 export function isSendInItalyUserAnalyticsRequest(message = '', history = []) {
   const text = normalizeComparableText(message)
   return isAnalyticsRefinement(message, history) || (
-    /\b(?:utent\w*|client\w*|account|aziend\w*|pian\w*)\b/i.test(text) && ANALYTICAL_PATTERN.test(text)
+    /\b(?:utent\w*|client\w*|account|aziend\w*|pian\w*)\b/i.test(text) &&
+    (ANALYTICAL_PATTERN.test(text) || /\b(?:crm|collegat\w*|accesso\s+light)\b/i.test(text))
   )
 }
 
@@ -131,13 +132,14 @@ function parseThresholdFilters(text = '') {
 }
 
 function extractPlanFilter(text = '') {
+  if (/\b(?:per\s+(?:ogni|ciascun\w*)|raggrupp\w*[\s\S]{0,30}(?:per|in\s+base\s+a))\s+piano\b/i.test(text)) return null
   const match = text.match(/\bpiano\s+["“”']?([a-z0-9][a-z0-9 _.-]{1,50})/i)
   if (!match) return null
   const value = match[1]
     .replace(/^(?:e|ma|per|ogni|ciascun\w*)\b.*/i, '')
     .replace(/\s+(?:con|che|e|ma|ordin\w*|raggrupp\w*|esclud\w*).*/i, '')
     .trim()
-  return value && !/^(?:per|ogni|ciascun\w*)$/i.test(value)
+  return value && !/^(?:per|ogni|ciascun\w*|send\s+in\s+italy)$/i.test(value)
     ? {field: 'plan', operator: 'contains', value}
     : null
 }
@@ -154,25 +156,43 @@ export function planDeterministicUserAnalytics(message = '') {
   if (!isSendInItalyUserAnalyticsRequest(text)) return null
 
   const fields = mentionedNumericFields(text)
-  const filters = [extractPlanFilter(text), extractExcludedCompany(text), ...parseThresholdFilters(text)].filter(Boolean)
+  const booleanFilters = []
+  if (/\bcrm\b/i.test(text)) {
+    booleanFilters.push({
+      field: 'crmLinked',
+      operator: /\b(?:non|senza)\b[\s\S]{0,35}\b(?:collegat\w*|crm)\b|\b(?:non\s+collegat\w*|senza\s+collegamento)\b/i.test(text) ? 'falsey' : 'truthy',
+      value: null,
+    })
+  }
+  if (/\baccesso\s+light\b/i.test(text)) {
+    booleanFilters.push({
+      field: 'lightAccessDisabled',
+      operator: /\b(?:disabilitat\w*|bloccato|senza)\b/i.test(text) ? 'truthy' : 'falsey',
+      value: null,
+    })
+  }
+  const filters = [extractPlanFilter(text), extractExcludedCompany(text), ...parseThresholdFilters(text), ...booleanFilters].filter(Boolean)
   const groupByPlan = /(?:raggrupp\w*|distribuz\w*|per\s+(?:ogni|ciascun\w*|piano))[^.]{0,40}pian|\bper\s+piano\b/i.test(text)
+  const groupByCrm = /(?:raggrupp\w*|distribuz\w*|in\s+base\s+a)[^.]{0,50}\b(?:crm|collegamento)\b/i.test(text)
+  const groupByLightAccess = /(?:raggrupp\w*|distribuz\w*|in\s+base\s+a)[^.]{0,50}\baccesso\s+light\b/i.test(text)
   const asksAverage = /\bmedi[aoe]\b/i.test(text)
   const asksSum = /\b(?:somma|totale)\b/i.test(text)
 
-  if (groupByPlan) {
+  const groupingField = groupByPlan ? 'plan' : groupByCrm ? 'crmLinked' : groupByLightAccess ? 'lightAccessDisabled' : null
+  if (groupingField) {
     const field = fields[0]
     const metrics = [{id: 'users', function: 'count', field: null}]
     if (field && asksAverage) metrics.push({id: `avg_${field}`, function: 'avg', field})
     else if (field && asksSum) metrics.push({id: `sum_${field}`, function: 'sum', field})
     const rankingMetric = metrics.at(-1).id
-    return {operation: 'aggregate', filters, groupBy: ['plan'], metrics, sort: [{field: rankingMetric, direction: 'desc'}], limit: parseLimit(text, 20), comparisonFields: []}
+    return {operation: 'aggregate', filters: groupingField === 'crmLinked' ? filters.filter(filter => filter.field !== 'crmLinked') : groupingField === 'lightAccessDisabled' ? filters.filter(filter => filter.field !== 'lightAccessDisabled') : filters, groupBy: [groupingField], metrics, sort: [{field: rankingMetric, direction: 'desc'}], limit: parseLimit(text, 20), comparisonFields: []}
   }
 
   if (/\b(?:confront\w*|compar\w*|differenz\w*)\b/i.test(text) && fields.length) {
     return {operation: 'compare', filters, groupBy: [], metrics: [], sort: [{field: fields[0], direction: /\bmeno\b/i.test(text) ? 'asc' : 'desc'}], limit: parseLimit(text, 2), comparisonFields: fields}
   }
 
-  if (filters.some(filter => FIELD_DEFINITIONS[filter.field]?.type === 'number')) {
+  if (filters.length) {
     return {operation: /\bquant[ei]\b|\bconteggio\b/i.test(text) ? 'count' : 'list', filters, groupBy: [], metrics: [], sort: fields[0] ? [{field: fields[0], direction: 'desc'}] : [], limit: parseLimit(text, 20), comparisonFields: fields}
   }
 

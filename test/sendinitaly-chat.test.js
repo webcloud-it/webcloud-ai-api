@@ -413,7 +413,7 @@ test('understands numeric user thresholds written in natural Italian', async () 
 })
 
 test('validates semantic Send in Italy plans against the field allowlist', async () => {
-  const message = 'Analizza la distribuzione degli account in base al collegamento CRM'
+  const message = 'Confronta in modo avanzato la struttura degli account'
   assert.equal(isSendInItalyUserAnalyticsRequest(message), true)
   const valid = await planSendInItalyUserAnalytics({
     message,
@@ -442,6 +442,42 @@ test('validates semantic Send in Italy plans against the field allowlist', async
 
   assert.equal(valid.groupBy[0], 'crmLinked')
   assert.equal(unsafe, null)
+})
+
+test('per ogni piano does not become a fictitious Send in Italy plan filter', async () => {
+  const plan = await planSendInItalyUserAnalytics({
+    message: 'Calcola la media delle campagne per ogni piano Send in Italy.',
+    callModel: async () => { throw new Error('il fast path non deve usare il modello') },
+  })
+  assert.equal(plan.operation, 'aggregate')
+  assert.deepEqual(plan.groupBy, ['plan'])
+  assert.equal(plan.filters.some(filter => filter.field === 'plan'), false)
+  assert.equal(plan.metrics.some(metric => metric.id === 'avg_campaigns'), true)
+})
+
+test('filters users by CRM linkage through the verified analytics executor', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Quali utenti Send in Italy non sono collegati al CRM?', token: 'token',
+    services: mockServices({getUsers: async () => ({data: [
+      {id: 'u1', company_name: 'Senza CRM'},
+      {id: 'u2', company_name: 'Con CRM', crm_customers_id: 'crm-2'},
+    ], meta: {total: 2}})}),
+  })
+  assert.equal(result.intent, 'sendinitaly-user-analytics')
+  assert.deepEqual(result.data.items.map(item => item.companyName), ['Senza CRM'])
+})
+
+test('extracts a named user after the Send in Italy platform qualifier', async () => {
+  let search
+  const result = await handleSendInItalyChat({
+    message: 'Mostrami i dettagli dell’utente Send in Italy Webcloud.', token: 'token',
+    services: mockServices({
+      getUsers: async options => { search = options.search; return {data: [{id: 'u1', company_name: 'Webcloud'}]} },
+      getUser: async () => ({data: {id: 'u1', company_name: 'Webcloud'}}),
+    }),
+  })
+  assert.equal(search, 'Webcloud')
+  assert.equal(result.intent, 'sendinitaly-user-detail')
 })
 
 test('refines a previous user analysis without losing its verified ranking context', async () => {

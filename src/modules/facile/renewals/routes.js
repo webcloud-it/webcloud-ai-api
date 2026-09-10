@@ -1881,7 +1881,8 @@ export async function chat(req, res) {
 
   let readQueryPlannerError = null
   const readQueryPlan =
-    skipReadQueryForServiceTarget || (hasExplicitRenewalsIntent && !analyticalReadRequest)
+    skipReadQueryForServiceTarget ||
+    (hasExplicitRenewalsIntent && !analyticalReadRequest && deterministicReadUtterance?.entityHint !== 'plans' && deterministicReadUtterance?.entityHint !== 'addons')
       ? null
       : await planReadQuery({
         message,

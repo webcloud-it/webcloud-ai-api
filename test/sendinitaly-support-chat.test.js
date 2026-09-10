@@ -140,6 +140,52 @@ test('groups ticket distribution by category', async () => {
   assert.equal(result.data.analysis.ranking.length, 2)
 })
 
+test('groups natural category rankings without requiring the word distribution', async () => {
+  const result = await handleSupportChat({
+    message: 'Quali categorie raccolgono più ticket aperti?', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({category: 'account'}), ticket({id: 43, category: 'account'}), ticket({id: 44, category: 'billing'}),
+    ], meta: {total: 3}})}),
+  })
+  assert.equal(result.data.analysis.dimension, 'category')
+  assert.deepEqual(result.data.analysis.ranking[0], {label: 'account', count: 2})
+})
+
+test('non chiusi is an active-state filter, never a closed-state filter', async () => {
+  const result = await handleSupportChat({
+    message: 'Classifica i clienti per ticket non chiusi.', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({id: 1, state: 'new'}), ticket({id: 2, state: 'closed', customer: {company_name: 'Closed'}}),
+    ], meta: {total: 2}})}),
+  })
+  assert.equal(result.data.filters.state, 'active')
+  assert.equal(result.data.total, 1)
+})
+
+test('recognizes customer requests waiting for a reply as support work', async () => {
+  const result = await handleSupportChat({
+    message: 'Quali richieste aspettano una risposta da oltre 24 ore?', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({last_contact_customer_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()}),
+      ticket({id: 43, last_contact_customer_at: new Date().toISOString()}),
+    ], meta: {total: 2}})}),
+  })
+  assert.equal(result.intent, 'sendinitaly-support-analysis')
+  assert.equal(result.data.total, 1)
+  assert.equal(result.data.filters.unanswered, true)
+})
+
+test('filters the localized minimum Zammad priority precisely', async () => {
+  const result = await handleSupportChat({
+    message: 'Mostrami i ticket aperti con priorità minima.', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({id: 1, priority: '01 - Priorità minima'}), ticket({id: 2, priority: '02 - Priorità molto bassa'}),
+    ], meta: {total: 2}})}),
+  })
+  assert.equal(result.data.total, 1)
+  assert.equal(result.data.items[0].id, 1)
+})
+
 test('filters tickets in a relative time range', async () => {
   const result = await handleSupportChat({
     message: 'Elenca i ticket aggiornati nell’ultimo mese',
@@ -173,6 +219,64 @@ test('recognizes the singular Italian detail request with a public ticket number
   })
   assert.equal(result.intent, 'sendinitaly-support-ticket-detail')
   assert.equal(result.data.ticket.number, '42001')
+})
+
+test('summaries and natural actor questions resolve the requested ticket detail', async () => {
+  const mocked = services({
+    getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+    getSupportTicket: async () => ({data: {ticket: ticket(), articles: [{id: 1, sender: 'Customer', body: 'Ultimo testo cliente'}]}}),
+  })
+  for (const message of [
+    'Riassumi il ticket numero 42001.',
+    'Cosa ha scritto per ultimo il cliente nel ticket 42001?',
+    'Nel ticket 42001 ha già risposto un operatore?',
+  ]) {
+    const result = await handleSupportChat({message, token: 'token', services: mocked})
+    assert.equal(result.intent, 'sendinitaly-support-ticket-detail')
+    assert.equal(result.data.ticket.number, '42001')
+  }
+})
+
+test('returns only the requested latest customer message and answers operator presence explicitly', async () => {
+  const mocked = services({
+    getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+    getSupportTicket: async () => ({data: {ticket: ticket(), articles: [
+      {id: 1, sender: 'Customer', body: 'Prima richiesta'},
+      {id: 2, sender: 'Agent', body: 'Prima risposta'},
+      {id: 3, sender: 'Customer', body: 'Ultima richiesta'},
+    ]}}),
+  })
+  const customer = await handleSupportChat({message: 'Cosa ha scritto per ultimo il cliente nel ticket 42001?', token: 'token', services: mocked})
+  const agent = await handleSupportChat({message: 'Nel ticket 42001 ha già risposto un operatore?', token: 'token', services: mocked})
+  assert.deepEqual(customer.data.articles.map(article => article.body), ['Ultima richiesta'])
+  assert.match(agent.reply, /^Sì\./)
+  assert.deepEqual(agent.data.articles.map(article => article.body), ['Prima risposta'])
+})
+
+test('understands ultimo messaggio del cliente without relying on one fixed word order', async () => {
+  const result = await handleSupportChat({
+    message: 'Qual è l’ultimo messaggio del cliente nel ticket 25004?', token: 'token',
+    services: services({
+      getSupportTicket: async () => ({data: {ticket: ticket({id: 42, number: '25004'}), articles: [
+        {id: 1, sender: 'Customer', body: 'Primo messaggio'},
+        {id: 2, sender: 'Agent', body: 'Risposta operatore'},
+        {id: 3, sender: 'Customer', body: 'Ultimo aggiornamento cliente'},
+      ]}}),
+    }),
+  })
+  assert.match(result.reply, /Ultimo aggiornamento cliente/)
+  assert.doesNotMatch(result.reply, /Risposta operatore/)
+})
+
+test('limits a natural latest-ticket request without changing the verified total', async () => {
+  const result = await handleSupportChat({
+    message: 'Fammi vedere gli ultimi tre ticket ricevuti.', token: 'token',
+    services: services({getSupportTickets: async () => ({data: [
+      ticket({id: 1}), ticket({id: 2}), ticket({id: 3}), ticket({id: 4}),
+    ], meta: {total: 4}})}),
+  })
+  assert.equal(result.data.total, 4)
+  assert.equal(result.data.items.length, 3)
 })
 
 test('treats natural ticket information wording as a detail request', async () => {
@@ -444,6 +548,19 @@ test('prepare and send in one request generates a preview instead of mutating Za
   assert.equal(preview.data.type, 'action-proposal')
   assert.equal(preview.data.draft, 'Risposta proposta')
   assert.equal(calls, 0)
+})
+
+test('prepare the sending also produces a confirmation preview', async () => {
+  const preview = await handleSupportChat({
+    message: 'Prepara l’invio della risposta al ticket #42001', token: 'token',
+    services: services({
+      getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+      getSupportTicket: async () => ({data: {ticket: ticket(), articles: []}}),
+      analyzeSupportResolution: async () => ({summary: 'Analisi', customerRequest: 'Richiesta', hypotheses: [], steps: ['Verifica'], missingInformation: [], suggestedReply: 'Risposta proposta', confidence: 'low', risks: [], modelUsed: true}),
+    }),
+  })
+  assert.equal(preview.data.type, 'action-proposal')
+  assert.equal(preview.data.draft, 'Risposta proposta')
 })
 
 test('redacts credentials before ticket content can reach the model', () => {

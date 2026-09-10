@@ -43,7 +43,7 @@ function extractUserTarget(message = '') {
   if (quoted) return quoted
   return String(message)
     .replace(/^.*?\b(?:utente|account|azienda|cliente)\b\s*/i, '')
-    .replace(/\b(?:su send\s*in\s*italy|di send\s*in\s*italy)\b/gi, '')
+    .replace(/\b(?:(?:su|di)\s+)?send\s*in\s*italy\b/gi, '')
     .replace(/[?.!]+$/g, '')
     .trim()
 }
@@ -326,11 +326,17 @@ export async function handleSendInItalyChat({
 } = {}) {
   const text = normalizeText(message)
   const search = extractQuotedValue(message)
+  const explicitUserDetail = (
+    /\b(dettaglio|dettagli|scheda|situazione|stato)\b/.test(text) &&
+    /\b(utent[ei]?|account|azienda|cliente)\b/.test(text) &&
+    !/\b(ticket|assistenza|supporto)\b/.test(text) &&
+    !/\b(confront\w*|compar\w*|raggrupp\w*|distribuz\w*|media|somma|totale)\b/.test(text)
+  )
 
   const supportResult = await handleSupportChat({message, token, context, history, services})
   if (supportResult) return supportResult
 
-  if (isSendInItalyUserAnalyticsRequest(message, history)) {
+  if (!explicitUserDetail && isSendInItalyUserAnalyticsRequest(message, history)) {
     const analyticsResult = await executeSendInItalyUserAnalytics({message, token, services, history})
     if (analyticsResult) return analyticsResult
   }
@@ -455,7 +461,7 @@ export async function handleSendInItalyChat({
   }
 
   if (
-    /\b(dettaglio|scheda|situazione|stato)\b/.test(text) &&
+    /\b(dettaglio|dettagli|scheda|situazione|stato)\b/.test(text) &&
     /\b(utent[ei]?|account|azienda|cliente)\b/.test(text) &&
     !/\b(ticket|assistenza|supporto)\b/.test(text)
   ) {

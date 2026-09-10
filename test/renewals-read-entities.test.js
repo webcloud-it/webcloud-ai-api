@@ -976,6 +976,41 @@ test('planner analitico: raggruppa una misura esplicita per la dimensione richie
   ])
 })
 
+test('planner analitico: comprende il fornitore implicito in chi gestisce i servizi', async () => {
+  const plan = await planReadQuery({
+    message: 'Chi gestisce più servizi con rinnovo nel 2026?',
+    allowSemantic: false,
+  })
+  assert.equal(plan.operation, 'aggregate')
+  assert.equal(plan.entity, 'subscriptions')
+  assert.deepEqual(plan.groupBy, ['supplier.name'])
+  assert.equal(plan.filters.some(filter => filter.field === 'endsOn'), true)
+})
+
+test('planner analitico: conta sottoscrizioni filtrate senza invocare il modello', async () => {
+  for (const message of [
+    'Conta le sottoscrizioni del fornitore MisterDomain che scadono nel 2027.',
+    'Quante sottoscrizioni di MisterDomain scadono nel 2027?',
+  ]) {
+    const plan = await planReadQuery({message, allowSemantic: false})
+    assert.equal(plan.operation, 'count')
+    assert.equal(plan.entity, 'subscriptions')
+    assert.equal(plan.filters.some(filter => filter.field === 'supplier.name' && filter.value === 'misterdomain'), true)
+    assert.equal(plan.filters.some(filter => filter.field === 'endsOn'), true)
+  }
+})
+
+test('planner analitico: usa il catalogo tipi per raggruppare i servizi', async () => {
+  const plan = await planReadQuery({message: 'Raggruppa i servizi per tipo.', allowSemantic: false})
+  assert.equal(plan.entity, 'service-types')
+  assert.equal(plan.operation, 'list')
+  assert.deepEqual(plan.sort, [{field: 'serviceCount', direction: 'desc'}])
+})
+
+test('planner: il conteggio servizi senza prezzo resta sul fast path operativo', () => {
+  assert.equal(isAnalyticalReadQueryRequest('Quanti servizi risultano senza prezzo?'), false)
+})
+
 test('executor analitico: filtra il dataset completo prima di raggruppare e contare', () => {
   const result = executeReadQuery({
     plan: {

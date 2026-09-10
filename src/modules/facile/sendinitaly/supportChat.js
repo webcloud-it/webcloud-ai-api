@@ -6,7 +6,7 @@ import {analyzeSupportResolution, formatSupportAdvice} from './supportAdvisor.js
 
 const proposals = new Map()
 const PROPOSAL_TTL_MS = 10 * 60 * 1000
-const SUPPORT_PATTERN = /\b(?:ticket|assistenza|supporto|help\s*desk|zammad)\b/i
+const SUPPORT_PATTERN = /\b(?:ticket|assistenza|supporto|help\s*desk|zammad)\b|\brichiest\w*[\s\S]{0,50}\brispost\w*\b/i
 const CONFIRM_PATTERN = /^\s*(?:confermo|conferma|procedi|esegui|s[iì])\s*[.!]?\s*$/i
 const CANCEL_PATTERN = /^\s*(?:annulla|cancella|no)\s*[.!]?\s*$/i
 const CATEGORY_ALIASES = new Map([
@@ -92,6 +92,7 @@ function normalizeComparable(value = '') {
 }
 
 function parseState(text = '') {
+  if (/\b(?:non\s+chius|non\s+risolt|da\s+chiudere|da\s+risolvere)\w*\b/.test(text)) return 'active'
   if (/\b(?:chius|risolt|complet)/.test(text)) return 'closed'
   if (/\b(?:in attesa|pending)/.test(text)) return 'pending'
   if (/\bnuov/.test(text)) return 'new'
@@ -100,10 +101,20 @@ function parseState(text = '') {
 }
 
 function parsePriority(text = '') {
+  if (/\b(?:minima|minimo|lowest)\b/.test(text)) return 'minimum'
   if (/\b(?:alta|alto|high|urgent|urgente|critica|critico)\b/.test(text)) return 'high'
   if (/\b(?:bassa|basso|low)\b/.test(text)) return 'low'
   if (/\b(?:normale|normal|media|medio)\b/.test(text)) return 'normal'
   return ''
+}
+
+function matchesPriority(value = '', expected = '') {
+  const actual = normalizeComparable(value)
+  if (expected === 'minimum') return /\b(?:minima|minimo|lowest)\b/.test(actual)
+  if (expected === 'low') return /\b(?:bassa|basso|low|minima|minimo)\b/.test(actual)
+  if (expected === 'high') return /\b(?:alta|alto|high|urgent|urgente|critica|critico|massima|massimo)\b/.test(actual)
+  if (expected === 'normal') return /\b(?:normale|normal|media|medio)\b/.test(actual)
+  return actual === expected
 }
 
 function parseCategory(text = '') {
@@ -138,6 +149,13 @@ function parsePeriod(text = '', now = Date.now()) {
   if (/\b(?:ultima|scorsa)\s+settimana\b/.test(text)) return {since: now - 7 * 864e5, label: 'ultima settimana'}
   if (/\b(?:ultimo|scorso)\s+anno\b/.test(text)) return {since: now - 365 * 864e5, label: 'ultimo anno'}
   return null
+}
+
+function parseTicketLimit(text = '') {
+  const match = String(text).match(/\b(?:ultim[ei]|prim[ei]|mostra(?:mi)?|elenca(?:mi)?|fammi\s+vedere)\s+(?:i\s+|le\s+)?(\d{1,2}|un[oa]?|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)\s+(?:ticket|richiest\w*)\b/i)
+  if (!match?.[1]) return null
+  const amount = Number(match[1]) || ITALIAN_AMOUNTS.get(match[1])
+  return Number.isFinite(amount) ? Math.min(Math.max(amount, 1), 50) : null
 }
 
 function parseAgeThreshold(text = '') {
@@ -502,7 +520,7 @@ async function handleAdviceRequest({message, text, token, context, history, serv
     articles: detail.articles,
     request: message,
   })
-  const wantsSend = /\b(?:invia|manda|spedisci)\b/.test(text)
+  const wantsSend = /\b(?:invia|invio|manda|spedisci)\b/.test(text)
   if (wantsSend) {
     return proposalResponse({
       operation: 'support-reply',
@@ -557,12 +575,28 @@ async function handleTicketActorRequest({message, text, token, context, history,
 }
 
 async function handleDetailRequest({message, text, token, context, history, services}) {
-  const asksDetail = /\b(?:dettagl(?:io|i)|info|informazioni?|conversazione|cronologia|messaggi?|risposte?|ultima\s+risposta|cosa\s+(?:dice|chiede))\b/.test(text)
+  const asksDetail = /\b(?:dettagl(?:io|i)|info|informazioni?|conversazione|cronologia|messagg(?:io|i)|risposte?|ultim[oa]\s+risposta|riassum\w*|riepilog\w*|cosa\s+(?:dice|chiede|ha\s+scritto)|ha\s+(?:gia\s+)?risposto\s+(?:un\s+)?operatore)\b/.test(text)
   if (!asksDetail) return null
   const detail = await loadTicketDetail({message, token, context, history, services})
   if (detail.error) return detail.error
   const {ticket, articles} = detail
-  const visible = /\bultima\s+risposta\b/.test(text) ? articles.slice(-1) : articles.slice(-10)
+  const asksLastCustomer = /\b(?:per\s+ultimo|ultim[oa]\s+(?:risposta|messaggio))\b[\s\S]{0,35}\bcliente\b|\bcliente\b[\s\S]{0,35}\b(?:per\s+ultimo|ultim[oa]\s+(?:risposta|messaggio))\b/.test(text)
+  const asksAgentAnswer = /\bha\s+(?:gia\s+)?risposto\s+(?:un\s+)?operatore\b/.test(text)
+  const customerArticles = articles.filter(article => /customer|cliente/i.test(String(article.sender || '')))
+  const agentArticles = articles.filter(article => /agent|operatore/i.test(String(article.sender || '')))
+  const visible = asksLastCustomer
+    ? customerArticles.slice(-1)
+    : asksAgentAnswer ? agentArticles.slice(-1) : /\bultima\s+risposta\b/.test(text) ? articles.slice(-1) : articles.slice(-10)
+  if (asksAgentAnswer) {
+    const lastAgent = agentArticles.at(-1)
+    const reply = lastAgent
+      ? `Sì. Nel ${ticketLabel(ticket)} risulta almeno una risposta operatore${lastAgent.createdAt ? ` del ${String(lastAgent.createdAt).slice(0, 16).replace('T', ' ')}` : ''}: ${lastAgent.body || '(solo allegati)'}`
+      : `No. Nel ${ticketLabel(ticket)} non risulta ancora una risposta operatore.`
+    return response('sendinitaly-support-ticket-detail', reply, {
+      type: 'sendinitaly-support-ticket-detail', ticket, articles: visible,
+      actions: supportActions(ticket),
+    }, 'tool-semantic')
+  }
   const lines = [
     `${ticketLabel(ticket)} — ${ticket.state || 'stato non disponibile'}, priorità ${ticket.priority || 'non disponibile'}.`,
     `Cliente: ${ticket.customerName || ticket.customerId || 'non associato'}; categoria: ${ticket.category || 'non indicata'}; messaggi: ${articles.length}.`,
@@ -579,7 +613,7 @@ function applyReadFilters(items, {state, priority, category, period, age, unansw
     const ticketState = normalizeComparable(ticket.state)
     if (state === 'active' && ticketState === 'closed') return false
     if (state && state !== 'active' && ticketState !== state) return false
-    if (priority && normalizeComparable(ticket.priority) !== priority) return false
+    if (priority && !matchesPriority(ticket.priority, priority)) return false
     if (category && normalizeComparable(ticket.category) !== category) return false
     if (period && (toTime(ticket.updatedAt) || toTime(ticket.createdAt) || 0) < period.since) return false
     if (/\bsenza\s+(?:escalation|clickup)\b/.test(text) && ticket.clickupLinked) return false
@@ -602,7 +636,7 @@ function groupField(text = '') {
     /\b(?:per\s+cliente|quali\s+clienti|clienti\s+con\s+(?:piu|più|meno))\b/.test(text) ||
     /\b(?:confront\w*|prim[ei]\s+(?:due|2))\b[\s\S]*\bclienti\b/.test(text)
   ) return ['customerName', 'cliente']
-  if (/\b(?:per\s+categoria|categorie\s+con|distribuzione\s+.*categoria)\b/.test(text)) return ['category', 'categoria']
+  if (/\b(?:per\s+categoria|categorie?[\s\S]{0,40}(?:frequen\w*|piu|meno|ticket)|distribuzione\s+.*categoria)\b/.test(text)) return ['category', 'categoria']
   if (/\b(?:per\s+stato|stati\s+con|distribuzione\s+.*stato)\b/.test(text)) return ['state', 'stato']
   if (/\b(?:per\s+priorita|priorita\s+con|distribuzione\s+.*priorita)\b/.test(text)) return ['priority', 'priorità']
   if (/\b(?:per\s+operatore|per\s+assegnatario|operatori\s+con)\b/.test(text)) return ['owner', 'operatore']
@@ -651,7 +685,7 @@ async function handleReadRequest({message, text, token, context, services, now =
   const period = parsePeriod(text, now)
   const age = parseAgeThreshold(text)
   const needsAttention = /\b(?:da\s+gestire|da\s+lavorare|richiedono\s+intervento|richiede\s+intervento)\b/.test(text)
-  const unanswered = needsAttention || /\b(?:senza\s+risposta|da\s+rispondere|attendono\s+risposta|cliente\s+in\s+attesa)\b/.test(text)
+  const unanswered = needsAttention || /\b(?:senza\s+risposta|da\s+rispondere|attendono\s+risposta|aspett\w*(?:\s+una)?\s+risposta|cliente\s+in\s+attesa)\b/.test(text)
   const escalated = /\b(?:escalat|clickup|sviluppo)\b/.test(text) && !/\bsenza\b/.test(text)
   const customerTarget = extractCustomerTarget(message)
   const hasModuleContext = Boolean(context?.activeModuleId || context?.section)
@@ -685,16 +719,18 @@ async function handleReadRequest({message, text, token, context, services, now =
   ].filter(Boolean)
   const filtersLabel = labels.length ? ` (${labels.join(', ')})` : ''
   const field = groupField(text)
+  const requestedLimit = parseTicketLimit(text)
   const operation = /\b(?:quanti|quante|conta|conteggio|numero\s+di)\b/.test(text) ? 'count' : field ? 'aggregate' : 'list'
   const compareTopTwo = Boolean(field && /\b(?:confront\w*|prim[ei]\s+(?:due|2))\b/.test(text))
   const analytical = analyticalReply({items, allCount: loaded.items.length, truncated: loaded.truncated, field, operation, filtersLabel, compareTopTwo})
-  const reply = analytical.reply || formatTicketList(items, items.length, filtersLabel)
+  const visibleItems = field || operation === 'count' ? items : items.slice(0, requestedLimit || 50)
+  const reply = analytical.reply || formatTicketList(visibleItems, items.length, filtersLabel)
   return response(
     field || operation === 'count' || unanswered || age ? 'sendinitaly-support-analysis' : 'sendinitaly-support-tickets',
     reply,
     {
       type: field || operation === 'count' || unanswered || age ? 'sendinitaly-support-analysis' : 'sendinitaly-support-tickets',
-      items: items.slice(0, 50), total: items.length, loadedTotal: loaded.items.length,
+      items: visibleItems.slice(0, 50), total: items.length, loadedTotal: loaded.items.length,
       filters: {customerId: customerId || null, state: state || null, priority: priority || null, category: category || null, period: period?.label || null, unanswered, needsAttention, escalated},
       analysis: analytical.analysis,
       actions: [{id: 'navigate', label: 'Apri assistenza', path: '/sendinitaly/support', query: customerId ? {customer_id: String(customerId)} : {}}],
