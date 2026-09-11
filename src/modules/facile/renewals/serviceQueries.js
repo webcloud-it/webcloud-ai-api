@@ -1005,6 +1005,7 @@ function detectSpaceUsageThreshold(message = '') {
   const match = text.match(
     /\b(?:oltre|piu\s+di|superiore\s+(?:a|al)|almeno)\s+(?:(?:il|lo|la)\s+)?(\d{1,3}(?:[.,]\d+)?)\s*%/
   )
+  if (!match) return null
   const threshold = Number(String(match?.[1] || '').replace(',', '.'))
   if (!Number.isFinite(threshold) || threshold < 0 || threshold > 100) return null
 

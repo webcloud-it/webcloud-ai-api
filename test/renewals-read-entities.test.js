@@ -200,6 +200,20 @@ test('planner: lista dei fornitori presenti', async () => {
   ])
 })
 
+test('planner ed executor: fornitori con piani senza prezzo verificano la relazione reale', async () => {
+  const plan = await planReadQuery({
+    message: 'Quali fornitori utilizzano piani senza prezzo?',
+    allowSemantic: false,
+  })
+  assert.equal(plan.entity, 'providers')
+  assert.deepEqual(plan.filters, [
+    {field: 'missingPricePlanCount', operator: 'gte', value: 1},
+  ])
+  const result = executeReadQuery({plan, services, options})
+  assert.deepEqual(result.items.map(item => item.name), ['MisterDomain'])
+  assert.equal(result.items[0].missingPricePlanCount, 1)
+})
+
 test('planner: quanti fornitori abbiamo', async () => {
   const plan = await planReadQuery({message: 'quanti fornitori abbiamo?', allowSemantic: false})
   assert.equal(plan.entity, 'providers')
@@ -1117,6 +1131,16 @@ test('planner: prezzi degli add-on nel listino', async () => {
     {field: 'priceListVersion.version', operator: 'equals', value: 2026},
     {field: 'plan.kind', operator: 'equals', value: 'addon'},
   ])
+})
+
+test('formatter: i prezzi degli add-on non vengono descritti come piani base', () => {
+  const reply = buildReadQueryReply({
+    ok: true, operation: 'list', entity: 'plan-prices', entityLabel: 'prezzi dei piani', entitySingular: 'prezzo del piano',
+    dataSource: 'catalog', total: 0, shown: 0, offset: 0, items: [],
+    plan: {filters: [{field: 'plan.kind', operator: 'equals', value: 'addon'}]},
+  })
+  assert.match(reply, /prezzi degli add-on/i)
+  assert.doesNotMatch(reply, /prezzi dei piani/i)
 })
 
 test('planner: piani senza prezzo applica realmente il filtro al catalogo', async () => {

@@ -314,6 +314,20 @@ test('global planner routes helpdesk tickets to Send in Italy from another secti
   assert.equal(plan.source, 'message')
 })
 
+test('customer requests waiting for an answer use the support fast path', async () => {
+  let modelCalled = false
+  const plan = await resolveGlobalChatPlan({
+    message: 'Quali richieste aspettano una risposta da oltre 24 ore?',
+    context: {path: '/sendinitaly/support'},
+    credentials: {...credentials, specialk: 'specialk-token'},
+  }, async () => {
+    modelCalled = true
+    throw new Error('semantic routing should not run')
+  })
+  assert.equal(plan.moduleId, 'facile.sendinitaly')
+  assert.equal(modelCalled, false)
+})
+
 test('an explicit Send in Italy brand wins over generic plans and the active page', () => {
   const plan = planGlobalChat({
     message: 'Elenca i piani Send in Italy.',

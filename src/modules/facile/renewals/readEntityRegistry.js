@@ -133,6 +133,7 @@ function buildProviders({services = [], options = {}} = {}) {
         subscriptionIds: new Set(),
         planIds: new Set(),
         planNames: new Set(),
+        missingPricePlanIds: new Set(),
         expiryYears: new Set(),
         nextExpiry: null,
       })
@@ -154,6 +155,9 @@ function buildProviders({services = [], options = {}} = {}) {
       if (ref.subscription?.id) provider.subscriptionIds.add(String(ref.subscription.id))
       if (ref.plan?.id) provider.planIds.add(String(ref.plan.id))
       if (ref.plan?.name) provider.planNames.add(ref.plan.name)
+      if (ref.plan?.missingPrice === true) {
+        provider.missingPricePlanIds.add(String(ref.plan?.id || stableKey(ref.plan?.name)))
+      }
 
       const year = toDateYear(ref.subscription?.endsOn)
       if (year) provider.expiryYears.add(year)
@@ -174,6 +178,7 @@ function buildProviders({services = [], options = {}} = {}) {
     subscriptionCount: item.subscriptionIds.size,
     planCount: item.planIds.size || item.planNames.size,
     planNames: [...item.planNames].sort((a, b) => a.localeCompare(b, 'it')),
+    missingPricePlanCount: item.missingPricePlanIds.size,
     expiryYears: [...item.expiryYears].sort(),
     nextExpiry: item.nextExpiry,
     present: item.subscriptionIds.size > 0,
@@ -862,6 +867,7 @@ const definitions = [
       subscriptionCount: {type: 'number', label: 'numero sottoscrizioni', aliases: ['sottoscrizioni', 'numero sottoscrizioni', 'abbonamenti', 'subscription count']},
       planCount: {type: 'number', label: 'numero piani', aliases: ['piani', 'numero piani', 'conteggio piani', 'plan count']},
       planNames: {type: 'string-array', label: 'piani', aliases: ['piano', 'piani', 'plan', 'plans']},
+      missingPricePlanCount: {type: 'number', label: 'piani senza prezzo', aliases: ['piani senza prezzo', 'piani con prezzo mancante']},
       expiryYears: {type: 'number-array', label: 'anni di scadenza', aliases: ['anno scadenza', 'anni scadenza', 'scadenza', 'scadenze']},
       nextExpiry: {type: 'date', label: 'prossima scadenza', aliases: ['prossima scadenza', 'scadenza più vicina', 'next expiry']},
       present: {type: 'boolean'},

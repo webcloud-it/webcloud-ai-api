@@ -1269,6 +1269,9 @@ function buildDeterministicFilters(entityId, message = '') {
       filters.push({field: 'present', operator: 'truthy', value: null})
     }
     if (year) filters.push({field: 'expiryYears', operator: 'contains', value: year})
+    if (/\bpiani?\b[\s\S]{0,35}\b(?:senza|privi?\s+di)\s+prezz[oi]\b|\bpiani?\b[\s\S]{0,35}\bprezz[oi]\s+(?:mancant[ei]|assent[ei])\b/i.test(text)) {
+      filters.push({field: 'missingPricePlanCount', operator: 'gte', value: 1})
+    }
   }
 
   if (entityId === 'plans' || entityId === 'addons') {

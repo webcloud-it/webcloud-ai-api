@@ -55,6 +55,16 @@ test('servizi risultano senza prezzo applica il filtro operativo senza inventare
   assert.equal(findFilter(query, 'customer-or-group'), null)
 })
 
+test('primi cinque servizi con spazio esaurito non inventa una soglia zero percento', () => {
+  const query = parseServiceListQuery({
+    message: 'Mostrami i primi cinque servizi con spazio esaurito.',
+    settings: SETTINGS,
+    now: NOW,
+  })
+  assert.equal(findFilter(query, 'space-full')?.kind, 'space-full')
+  assert.equal(findFilter(query, 'space-usage-gte'), null)
+})
+
 test('riconosce lo spazio esaurito anche con verbo prima del nome', () => {
   assert.equal(
     pickExplicitChatIntent("mostrami l'ultimo servizio che ha esaurito lo spazio"),

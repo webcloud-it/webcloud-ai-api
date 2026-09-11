@@ -267,6 +267,22 @@ test('returns only the requested latest customer message and answers operator pr
   assert.deepEqual(agent.data.articles.map(article => article.body), ['Prima risposta'])
 })
 
+test('answers who wrote the latest ticket reply instead of dumping the conversation', async () => {
+  const mocked = services({
+    getSupportTickets: async () => ({data: [ticket()], meta: {total: 1}}),
+    getSupportTicket: async () => ({data: {ticket: ticket(), articles: [
+      {id: 1, sender: 'Customer', from: 'cliente@example.it', body: 'Domanda'},
+      {id: 2, sender: 'Agent', from: 'support@example.it', body: 'Risposta'},
+    ]}}),
+  })
+  const result = await handleSupportChat({
+    message: 'Chi ha scritto l’ultima risposta nel ticket 42001?', token: 'token', services: mocked,
+  })
+  assert.equal(result.intent, 'sendinitaly-support-ticket-actor')
+  assert.match(result.reply, /support@example\.it/)
+  assert.equal(result.data.articles.length, 1)
+})
+
 test('understands ultimo messaggio del cliente without relying on one fixed word order', async () => {
   const result = await handleSupportChat({
     message: 'Qual è l’ultimo messaggio del cliente nel ticket 25004?', token: 'token',

@@ -508,3 +508,17 @@ test('refines a previous user analysis without losing its verified ranking conte
   assert.equal(second.data.plan.filters.at(-1).value, 'Acme')
   assert.match(second.reply, /Beta[\s\S]*Gamma/)
 })
+
+test('confronta i tre clienti preserves the requested comparison cardinality', async () => {
+  const result = await handleSendInItalyChat({
+    message: 'Confronta i tre clienti Send in Italy con più campagne usando anche i contatti.',
+    token: 'token',
+    services: mockServices({getUsers: async () => ({data: [
+      {id: 'u1', company_name: 'Acme', total_campaigns: 30, total_contacts: 10},
+      {id: 'u2', company_name: 'Beta', total_campaigns: 20, total_contacts: 20},
+      {id: 'u3', company_name: 'Gamma', total_campaigns: 10, total_contacts: 30},
+    ], meta: {total: 3}})}),
+  })
+  assert.equal(result.data.plan.limit, 3)
+  assert.equal(result.data.items.length, 3)
+})

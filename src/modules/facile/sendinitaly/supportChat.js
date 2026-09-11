@@ -543,6 +543,21 @@ async function handleAdviceRequest({message, text, token, context, history, serv
 }
 
 async function handleTicketActorRequest({message, text, token, context, history, services}) {
+  const asksLatestReplyAuthor = /\bchi\b[\s\S]{0,45}\b(?:ha\s+)?scritt\w*\b[\s\S]{0,45}\bultim[oa]\s+risposta\b|\bultim[oa]\s+risposta\b[\s\S]{0,45}\bchi\b/.test(text)
+  if (asksLatestReplyAuthor) {
+    const detail = await loadTicketDetail({message, token, context, history, services})
+    if (detail.error) return detail.error
+    const latest = detail.articles.at(-1)
+    const actor = latest?.from || latest?.createdBy || latest?.originBy || latest?.sender || 'autore non disponibile'
+    return response('sendinitaly-support-ticket-actor', latest
+      ? `L’ultima risposta nel ${ticketLabel(detail.ticket)} è stata scritta da ${actor}${latest.createdAt ? ` il ${String(latest.createdAt).slice(0, 16).replace('T', ' ')}` : ''}.`
+      : `Nel ${ticketLabel(detail.ticket)} non risultano ancora messaggi.`, {
+      type: 'sendinitaly-support-ticket-detail', ticket: detail.ticket,
+      articles: latest ? [latest] : [], actor: {role: latest?.sender || null, name: actor},
+      actions: supportActions(detail.ticket),
+    })
+  }
+
   const asksLatestCreator = /\bchi\b[\s\S]*\b(?:mandat|inviat|apert|creat)\w*\b[\s\S]*\bultim[oa]\b[\s\S]*\bticket\b|\bultim[oa]\s+ticket\b[\s\S]*\bchi\b/.test(text)
   if (asksLatestCreator) {
     const loaded = await loadAllTickets({token, services})

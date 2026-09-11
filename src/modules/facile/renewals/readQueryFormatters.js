@@ -176,6 +176,9 @@ const formatters = {
 }
 
 function getEntityLabel(result = {}, value = 0) {
+  const addOnPrices = result.entity === 'plan-prices' &&
+    result.plan?.filters?.some(filter => filter.field === 'plan.kind' && filter.operator === 'equals' && filter.value === 'addon')
+  if (addOnPrices) return Number(value) === 1 ? 'prezzo di add-on' : 'prezzi degli add-on'
   return Number(value) === 1
     ? result.entitySingular || result.entityLabel
     : result.entityLabel
@@ -217,6 +220,9 @@ const detailEntityHeadings = {
 }
 
 function getDetailEntityHeading(result = {}) {
+  if (result.entity === 'plan-prices' && result.plan?.filters?.some(filter => filter.field === 'plan.kind' && filter.value === 'addon')) {
+    return "del prezzo dell’add-on"
+  }
   if (detailEntityHeadings[result.entity]) return detailEntityHeadings[result.entity]
 
   const singular = result.entitySingular || result.entityLabel || 'entità'
@@ -366,7 +372,7 @@ export function buildReadQueryReply(result = {}) {
   }
 
   if (!result.total) {
-    return `Non ho trovato ${result.entityLabel} corrispondenti ai filtri richiesti${buildSourceSuffix(result)}.`
+    return `Non ho trovato ${getEntityLabel(result, result.total)} corrispondenti ai filtri richiesti${buildSourceSuffix(result)}.`
   }
 
   const formatter = formatters[result.entity] || formatGeneric

@@ -100,7 +100,9 @@ function parseLimit(text = '', fallback = 10) {
     ['uno', 1], ['una', 1], ['due', 2], ['tre', 3], ['quattro', 4], ['cinque', 5],
     ['sei', 6], ['sette', 7], ['otto', 8], ['nove', 9], ['dieci', 10],
   ])
-  const token = text.match(/\b(?:prim\w*|top)\s+(\d{1,2}|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)\b/i)?.[1]
+  const amount = '(\\d{1,2}|uno|una|due|tre|quattro|cinque|sei|sette|otto|nove|dieci)'
+  const token = text.match(new RegExp(`\\b(?:prim\\w*|top)\\s+${amount}\\b`, 'i'))?.[1] ||
+    text.match(new RegExp(`\\b(?:confront\\w*|compar\\w*)\\s+(?:(?:i|le)\\s+)?${amount}\\s+(?:utent\\w*|client\\w*|account|aziend\\w*)\\b`, 'i'))?.[1]
   const value = /^\d+$/.test(token || '') ? Number(token) : words.get(token || '')
   return Math.min(Math.max(value || fallback, 1), 50)
 }

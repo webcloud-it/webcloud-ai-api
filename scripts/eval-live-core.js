@@ -42,7 +42,7 @@ const renewals = [
   ['R12', 'Quali piani usa il fornitore Aruba?', /Aruba|pian/i],
   ['R13', 'Mostrami i piani del fornitore MisterDomain.', /MisterDomain|pian/i],
   ['R14', 'Quali servizi hanno prezzi mancanti?', /prezz/i],
-  ['R15', 'Mostrami gli add-on che hanno un prezzo nel 2026.', /add-on|prezz/i],
+  ['R15', 'Mostrami gli add-on che hanno un prezzo nel 2026.', /add-on|prezz/i, body => body.data?.plan?.filters?.some(filter => filter.field === 'plan.kind' && filter.value === 'addon')],
   ['R16', 'Quali servizi sono scaduti da più di 30 giorni?', /scadut|30/i],
   ['R17', 'Quali servizi hanno scadenza fornitore diversa dalla nostra?', /scadenz|fornitor/i],
   ['R18', 'Quali fornitori hanno servizi sia nel 2026 sia nel 2027?', /valori distinti/i],
@@ -58,11 +58,11 @@ const renewals = [
   ['R28', 'Quanti servizi risultano senza prezzo?', /servizi|prezz/i, body => body.data?.query?.filters?.some(filter => filter.kind === 'missing-price') && !body.data.query.filters.some(filter => filter.kind === 'customer-or-group')],
   ['R29', 'Quali fornitori hanno meno servizi?', /fornitor|servizi distinti/i],
   ['R30', 'Raggruppa i servizi per tipo.', /tip|servizi distinti/i],
-  ['R31', 'Mostrami i primi cinque servizi con spazio esaurito.', /spazio/i],
+  ['R31', 'Mostrami i primi cinque servizi con spazio esaurito.', /spazio/i, body => body.data?.query?.filters?.some(filter => filter.kind === 'space-full') && !body.data.query.filters.some(filter => filter.kind === 'space-usage-gte')],
   ['R32', 'Quali domini in scadenza nel 2027 sono marcati non rinnovare?', /domini?|non rinnov/i],
   ['R33', 'Mostrami i dettagli del piano DomProf25.', /DomProf25/i],
   ['R34', 'Quante sottoscrizioni di MisterDomain scadono nel 2027?', /sottoscrizion|totale/i],
-  ['R35', 'Quali fornitori utilizzano piani senza prezzo?', /fornitor|prezz/i],
+  ['R35', 'Quali fornitori utilizzano piani senza prezzo?', /fornitor|prezz/i, body => body.data?.plan?.filters?.some(filter => filter.field === 'missingPricePlanCount' && filter.operator === 'gte' && filter.value === 1) && body.data?.items?.every(item => item.missingPricePlanCount > 0)],
 ]
 
 const support = [
@@ -89,7 +89,7 @@ const support = [
   ['T21', 'Come va risolto il ticket 25004?', /analisi|piano consigliato|bozza di risposta/i],
   ['T22', 'Prepara una risposta per il ticket 25004.', /bozza di risposta|bozza proposta/i],
   ['T23', 'Prepara e invia una risposta per il ticket 25004.', /confermo|sto per inviare/i],
-  ['T24', 'Chi ha scritto l’ultima risposta nel ticket 25004?', /25004|risposta|agent|customer/i],
+  ['T24', 'Chi ha scritto l’ultima risposta nel ticket 25004?', /ultima risposta.*scritta da/i, body => body.intent === 'sendinitaly-support-ticket-actor' && body.data?.articles?.length <= 1],
   ['T25', 'Mostrami le info del ticket 25004.', /25004/i],
   ['T26', 'Fammi un quadro della coda assistenza da gestire.', /ticket/i],
   ['T27', 'Quanti ticket nuovi ci sono?', /ticket|new/i],
@@ -120,7 +120,7 @@ const sendInItaly = [
   ['S09', 'Mostrami le campagne Send in Italy in coda.', /campagne/i],
   ['S10', 'Controlla lo stato DNS di Webcloud su Send in Italy.', /DNS|domini mittente/i],
   ['S11', 'Quali utenti Send in Italy hanno più contatti?', /contatti/i],
-  ['S12', 'Confronta i tre clienti Send in Italy con più campagne usando anche i contatti.', /campagne[\s\S]*contatti|contatti[\s\S]*campagne/i],
+  ['S12', 'Confronta i tre clienti Send in Italy con più campagne usando anche i contatti.', /campagne[\s\S]*contatti|contatti[\s\S]*campagne/i, body => body.data?.plan?.limit === 3 && body.data?.items?.length === 3],
   ['S13', 'Calcola la media delle campagne per ogni piano Send in Italy.', /piano[\s\S]*(?:avg campaigns|media campagne)/i, body => body.data?.plan?.groupBy?.includes('plan') && !body.data.plan.filters?.some(filter => filter.field === 'plan')],
   ['S14', 'Quali utenti Send in Italy non sono collegati al CRM?', /CRM|utenti Send in Italy/i, body => body.data?.plan?.filters?.some(filter => filter.field === 'crmLinked' && filter.operator === 'falsey')],
   ['S15', 'Quanti utenti Send in Italy hanno almeno una automazione?', /utenti Send in Italy|automazioni/i],
@@ -210,7 +210,7 @@ for (let index = 0; index < selectedCases.length; index += 2) {
 }
 
 for (const result of results) {
-  console.log(`${result.ok ? 'PASS' : 'FAIL'} ${result.id} ${result.ms}ms ${result.intent || '-'} ${result.type || '-'} :: ${result.reply}`)
+  console.log(`${result.ok ? 'PASS' : 'FAIL'} ${result.id} ${result.ms}ms ${result.intent || '-'} ${result.type || '-'} ${result.source || '-'} :: ${result.reply}`)
   for (const failure of result.failures) console.log(`  - ${failure}`)
 }
 
