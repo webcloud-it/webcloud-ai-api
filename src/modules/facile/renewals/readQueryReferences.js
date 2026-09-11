@@ -137,6 +137,23 @@ function getTargetField(entityId = '') {
   return entityId === 'plan-prices' ? 'plan.name' : 'name'
 }
 
+function looksLikeCanonicalTechnicalName(value = '') {
+  const target = String(value || '').trim()
+  if (!target) return false
+
+  if (/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,}$/i.test(target)) {
+    return true
+  }
+
+  if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(target)) return true
+  if (/\s/.test(target)) return false
+
+  return (
+    /[a-z]/i.test(target) &&
+    (/[0-9]/.test(target) || /[a-z][A-Z]|[A-Z]{2,}/.test(target) || /[_-]/.test(target))
+  )
+}
+
 function getItemIdentity(item = {}, entityId = '') {
   if (item?.id !== null && item?.id !== undefined && item?.id !== '') {
     return {
@@ -195,7 +212,7 @@ export function buildReadQueryDetailReference({
     entityId,
     filter: {
       field: getTargetField(entityId),
-      operator: 'contains',
+      operator: looksLikeCanonicalTechnicalName(target) ? 'equals' : 'contains',
       value: target,
     },
     limit: 10,

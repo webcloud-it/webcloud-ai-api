@@ -36,6 +36,9 @@ function formatProvider(item) {
     pluralize(item.subscriptionCount || 0, 'sottoscrizione', 'sottoscrizioni'),
     pluralize(item.planCount || 0, 'piano', 'piani'),
   ]
+  if (item.missingPricePlanCount > 0) {
+    details.push(pluralize(item.missingPricePlanCount, 'piano senza prezzo', 'piani senza prezzo'))
+  }
   if (item.nextExpiry) details.push(`prossima scadenza ${formatDate(item.nextExpiry)}`)
   return `- ${item.name} | ${details.join(' | ')}`
 }

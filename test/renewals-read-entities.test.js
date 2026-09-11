@@ -212,6 +212,7 @@ test('planner ed executor: fornitori con piani senza prezzo verificano la relazi
   const result = executeReadQuery({plan, services, options})
   assert.deepEqual(result.items.map(item => item.name), ['MisterDomain'])
   assert.equal(result.items[0].missingPricePlanCount, 1)
+  assert.match(buildReadQueryReply(result), /1 piano senza prezzo/i)
 })
 
 test('planner: quanti fornitori abbiamo', async () => {
@@ -1230,7 +1231,7 @@ test('executor: arricchisce un prezzo di catalogo con l’uso operativo del pian
   assert.match(buildReadQueryReply(result), /300,00/i)
 })
 
-test('planner: dettaglio esplicito di un add-on applica il filtro sul nome', async () => {
+test('planner: dettaglio esplicito di un add-on tecnico applica un filtro esatto sul nome', async () => {
   const plan = await planReadQuery({
     message: 'dettagli dell’add-on SendInItalyIPDed',
     allowSemantic: false,
@@ -1239,7 +1240,20 @@ test('planner: dettaglio esplicito di un add-on applica il filtro sul nome', asy
   assert.equal(plan.entity, 'addons')
   assert.equal(plan.operation, 'detail')
   assert.deepEqual(plan.filters, [
-    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+    {field: 'name', operator: 'equals', value: 'SendInItalyIPDed'},
+  ])
+})
+
+test('planner: il dettaglio di un piano tecnico non include nomi con lo stesso prefisso', async () => {
+  const plan = await planReadQuery({
+    message: 'Mostrami i dettagli del piano DomProf25.',
+    allowSemantic: false,
+  })
+
+  assert.equal(plan.entity, 'plans')
+  assert.equal(plan.operation, 'detail')
+  assert.deepEqual(plan.filters, [
+    {field: 'name', operator: 'equals', value: 'DomProf25'},
   ])
 })
 
@@ -1279,7 +1293,7 @@ test('planner: dettaglio senza entità usa l’ultima entità del catalogo', asy
   assert.equal(plan.entity, 'addons')
   assert.equal(plan.operation, 'detail')
   assert.deepEqual(plan.filters, [
-    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+    {field: 'name', operator: 'equals', value: 'SendInItalyIPDed'},
   ])
 })
 
@@ -1380,7 +1394,7 @@ test('planner: ricostruisce il contesto entità anche da cronologia solo testual
   assert.equal(plan.entity, 'addons')
   assert.equal(plan.operation, 'detail')
   assert.deepEqual(plan.filters, [
-    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+    {field: 'name', operator: 'equals', value: 'SendInItalyIPDed'},
   ])
 })
 
@@ -1450,7 +1464,7 @@ test('planner: usa il contesto server-side quando la cronologia non conserva i d
 
   assert.equal(plan.entity, 'addons')
   assert.deepEqual(plan.filters, [
-    {field: 'name', operator: 'contains', value: 'SendInItalyIPDed'},
+    {field: 'name', operator: 'equals', value: 'SendInItalyIPDed'},
   ])
 })
 

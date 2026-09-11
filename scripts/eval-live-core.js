@@ -60,7 +60,7 @@ const renewals = [
   ['R30', 'Raggruppa i servizi per tipo.', /tip|servizi distinti/i],
   ['R31', 'Mostrami i primi cinque servizi con spazio esaurito.', /spazio/i, body => body.data?.query?.filters?.some(filter => filter.kind === 'space-full') && !body.data.query.filters.some(filter => filter.kind === 'space-usage-gte')],
   ['R32', 'Quali domini in scadenza nel 2027 sono marcati non rinnovare?', /domini?|non rinnov/i],
-  ['R33', 'Mostrami i dettagli del piano DomProf25.', /DomProf25/i],
+  ['R33', 'Mostrami i dettagli del piano DomProf25.', /DomProf25/i, body => body.data?.plan?.filters?.some(filter => filter.field === 'name' && filter.operator === 'equals' && filter.value === 'DomProf25') && body.data?.total === 1 && body.data?.items?.[0]?.name === 'DomProf25'],
   ['R34', 'Quante sottoscrizioni di MisterDomain scadono nel 2027?', /sottoscrizion|totale/i],
   ['R35', 'Quali fornitori utilizzano piani senza prezzo?', /fornitor|prezz/i, body => body.data?.plan?.filters?.some(filter => filter.field === 'missingPricePlanCount' && filter.operator === 'gte' && filter.value === 1) && body.data?.items?.every(item => item.missingPricePlanCount > 0)],
 ]
