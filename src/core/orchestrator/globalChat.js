@@ -332,7 +332,7 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
   }
 
   if (GREETING_PATTERN.test(String(message || '').trim())) {
-    return {type: 'greeting'}
+    return {type: 'conversation', source: 'greeting'}
   }
 
   const deterministicMultiModulePlan = planDeterministicMultiModuleRead(message, credentials)
@@ -421,14 +421,13 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
 export async function resolveGlobalChatPlan(options = {}, callModel = callOllamaJson) {
   const deterministicPlan = planGlobalChat(options)
 
+  // Help e comandi conversazionali puri non richiedono una seconda chiamata
+  // al planner. I comandi operativi brevi restano deterministici soltanto se
+  // il contesto li ha già ricondotti a un modulo concreto.
   if (
-    ['greeting', 'help', 'unsupported-domain'].includes(deterministicPlan.type) ||
-    deterministicPlan.type === 'multi-module' ||
-    isSemanticFastPath(options.message) ||
-    (deterministicPlan.type === 'module' &&
-      deterministicPlan.moduleId === moduleFromExplicitBrand(options.message)) ||
-    isConfidentDeterministicModulePlan(options.message, deterministicPlan) ||
-    isContextualModuleFastPath(options.message, deterministicPlan) ||
+    ['help', 'unsupported-domain'].includes(deterministicPlan.type) ||
+    deterministicPlan.type === 'conversation' ||
+    (isSemanticFastPath(options.message) && deterministicPlan.type === 'module') ||
     isHistoryContinuationFastPath(options.message, deterministicPlan) ||
     (deterministicPlan.type === 'module' &&
       deterministicPlan.source === 'active-entity' &&
@@ -438,7 +437,7 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
   }
 
   const availableModuleIds = getAvailableModuleIds({credentials: options.credentials || {}})
-  if (!availableModuleIds.length || typeof callModel !== 'function') return deterministicPlan
+  if (typeof callModel !== 'function') return deterministicPlan
 
   try {
     const semantic = await planSemanticRequest({
@@ -448,12 +447,14 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
       availableModuleIds,
     }, callModel)
 
-    if (semantic?.mode === 'conversation' && semantic.confidence >= 0.72 && deterministicPlan.type === 'clarification') {
+    // Il modello è la fonte primaria per distinguere una normale conversazione
+    // da una richiesta che necessita realmente dei dati/app Webcloud.
+    if (semantic?.mode === 'conversation' && semantic.confidence >= 0.6) {
       return {type: 'conversation', source: 'semantic', semantic}
     }
 
-    if (semantic?.mode === 'clarification' && semantic.confidence >= 0.72 && deterministicPlan.type === 'clarification') {
-      return {...deterministicPlan, type: 'clarification', availableModuleIds, source: 'semantic', semantic}
+    if (semantic?.mode === 'clarification' && semantic.confidence >= 0.72) {
+      return {type: 'clarification', availableModuleIds, source: 'semantic', semantic}
     }
 
     if (semantic?.mode === 'tool' && semantic.confidence >= 0.72) {
@@ -464,11 +465,18 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
           type: 'module',
           moduleId: semanticValidation.requiredModuleId,
           source: 'message-validation',
+          semantic,
         }
       }
 
       if (!semantic.available) {
-        return {type: 'unavailable', moduleId: semantic.moduleId, availableModuleIds, source: 'semantic', semantic}
+        return {
+          type: 'unavailable',
+          moduleId: semantic.moduleId,
+          availableModuleIds,
+          source: 'semantic',
+          semantic,
+        }
       }
 
       return {
@@ -483,7 +491,8 @@ export async function resolveGlobalChatPlan(options = {}, callModel = callOllama
       }
     }
   } catch (_) {
-    // Il percorso deterministico resta un fallback completo se Ollama non è disponibile.
+    // Se Ollama non è disponibile, il routing deterministico rimane un fallback
+    // per non interrompere le funzioni applicative già esistenti.
   }
 
   return deterministicPlan

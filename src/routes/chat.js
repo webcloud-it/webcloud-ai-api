@@ -4,8 +4,6 @@ import {asyncHandler} from '../utils/asyncHandler.js'
 import {getCredentialForModule} from '../core/capabilities/catalog.js'
 import {
   buildGlobalClarificationResponse,
-  buildGlobalConversationResponse,
-  buildGlobalGreetingResponse,
   buildGlobalHelpResponse,
   buildMultiModuleResponse,
   buildUnsupportedDomainResponse,
@@ -17,6 +15,7 @@ import {attachChatPresentation} from '../core/presentation/chatPresentation.js'
 import {env} from '../config/env.js'
 import {buildInfo} from '../config/build.js'
 import {executeMultiModuleRead} from '../core/orchestrator/multiModuleRead.js'
+import {executeGlobalConversation} from '../core/orchestrator/globalConversation.js'
 
 const router = express.Router()
 
@@ -66,12 +65,15 @@ router.post(
       return res.json(buildGlobalHelpResponse({credentials: req.auth.credentials}))
     }
 
-    if (globalPlan?.type === 'greeting') {
-      return res.json(buildGlobalGreetingResponse({credentials: req.auth.credentials}))
-    }
+    if (['conversation', 'greeting'].includes(globalPlan?.type)) {
+      const result = await executeGlobalConversation({
+        message: req.body?.message,
+        history: req.body?.history,
+        context: req.body?.context,
+        routingSource: globalPlan?.source || 'conversation',
+      })
 
-    if (globalPlan?.type === 'conversation') {
-      return res.json(buildGlobalConversationResponse())
+      return res.json(result)
     }
 
     if (globalPlan?.type === 'multi-module') {
