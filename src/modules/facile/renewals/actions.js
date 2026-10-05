@@ -1,4 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto'
+import {isProposalAuthorizationError} from '../../../core/tools/proposalGate.js'
 
 import {normalizeSearchText} from '../../../utils/text.js'
 import {buildServiceListPayload} from './serviceQueries.js'
@@ -510,7 +511,7 @@ function normalizeActionDecisionMessage(message = '') {
     .replace(/\s+/g, ' ')
 }
 
-function parseActionDecisionMessage(message = '') {
+export function parseActionDecisionMessage(message = '') {
   const normalized = normalizeActionDecisionMessage(message)
 
   if (!normalized) return null
@@ -4701,13 +4702,16 @@ export async function handleRenewalsActionDecision({action = null, actorToken = 
     proposal.finishedAt = Date.now()
 
     const staleState = /\(409\)/.test(String(error?.message || ''))
-    const code = staleState ? 'service-state-changed' : 'execution-failed'
-    const reply = staleState
+    const unauthorized = isProposalAuthorizationError(error)
+    const code = unauthorized ? 'action-authorization-denied' : staleState ? 'service-state-changed' : 'execution-failed'
+    const reply = unauthorized
+      ? 'L’adapter ha rifiutato l’autorizzazione. La proposta non verrà eseguita nuovamente.'
+      : staleState
       ? 'Lo stato del servizio è cambiato dopo l’anteprima. Nessuna modifica è stata eseguita: ripeti la richiesta.'
       : 'Non è stato possibile completare l’operazione. Nessuna ulteriore esecuzione verrà tentata con questa proposta.'
 
     auditAction('failed', proposal, {
-      error: error?.message || String(error),
+      errorName: error?.name || 'Error',
       code,
     })
 

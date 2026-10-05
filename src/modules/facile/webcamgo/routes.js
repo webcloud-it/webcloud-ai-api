@@ -10,7 +10,7 @@ import {
   pickPreviousWebcamTarget,
 } from './queries.js'
 import {getWebcams, getWebcamStatusLogs} from './service.js'
-import {extractWebcamOperationTarget, handleWebcamgoOperation} from './operations.js'
+import {extractWebcamOperationTarget, handleWebcamgoOperation, parseWebcamProposalDecision} from './operations.js'
 import {getContextEntityTarget} from '../../../core/context/pageContext.js'
 import {isOpenEntityRequest} from '../../../core/entities/entityResolver.js'
 import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
@@ -22,6 +22,15 @@ export async function summary(req, res) {
 
   res.json(payload)
 }
+
+export async function decideProposal({action, actorToken, proposal}) {
+  return handleWebcamgoOperation({
+    message: action.decision === 'confirm' ? 'confermo' : 'annulla',
+    history: [proposal], token: actorToken,
+  })
+}
+
+export const parseProposalDecision = parseWebcamProposalDecision
 
 export async function search(req, res) {
   const q = String(req.query?.q || '').trim()

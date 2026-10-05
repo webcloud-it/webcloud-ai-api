@@ -29,6 +29,10 @@ function isCancellation(message) {
   return /^\s*(annulla|cancella|no)\s*[.!]?\s*$/i.test(String(message || ''))
 }
 
+export function parseWebcamProposalDecision(message) {
+  return isConfirmation(message) ? 'confirm' : isCancellation(message) ? 'cancel' : null
+}
+
 function findProposalToken(history = []) {
   return [...history].reverse().find(item => item?.data?.type === 'action-proposal' && ['webcam-reboot', 'webcam-goto-preset'].includes(item?.data?.operation))?.data?.proposalToken || null
 }
@@ -140,6 +144,9 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
       auditAction('rejected-actor', proposal)
       return response('action-error', 'Questa proposta appartiene a un’altra sessione e non può essere eseguita.', {type: 'action-error', operation: proposal.operation, error: {code: 'action-owner-mismatch'}})
     }
+    if (proposal.status === 'executing') {
+      return response('action-error', 'Questa proposta è già in esecuzione.', {type: 'action-error', error: {code: 'action-already-finalized'}})
+    }
     if (isCancellation(message)) {
       proposals.delete(proposalToken)
       auditAction('cancelled', proposal)
@@ -150,6 +157,7 @@ export async function handleWebcamgoOperation({message, context = {}, history = 
     }
 
     let result
+    proposal.status = 'executing'
     try {
       auditAction('confirmed', proposal)
       result = proposal.operation === 'webcam-goto-preset'

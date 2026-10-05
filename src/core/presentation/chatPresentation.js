@@ -473,6 +473,7 @@ function overviewMetricLabel(sourceId, key) {
 
 function proposalPresentation(data) {
   if (!['action-proposal', 'action-preview', 'action-confirmation'].includes(data.type)) return null
+  if (data.type === 'action-confirmation' && data.status && data.status !== 'pending') return null
   const action = data.action && typeof data.action === 'object' ? data.action : data
   if (action.requiresConfirmation === false || data.confirmationRequired === false) return null
   const target = action.target || data.target || {}
@@ -485,6 +486,7 @@ function proposalPresentation(data) {
       }))
     : []
   const operation = text(data.operation || action.tool || action.kind, 'operazione')
+  const proposalId = text(action.actionId)
 
   return {
     version: 1,
@@ -494,9 +496,12 @@ function proposalPresentation(data) {
     target: targetLabel,
     changes,
     expiresAt: text(data.expiresAt || action.expiresAt),
+    ...(proposalId ? {proposalId} : {}),
     actions: [
-      {id: 'send-message', label: 'Conferma', message: 'confermo', variant: 'danger'},
-      {id: 'send-message', label: 'Annulla', message: 'annulla', variant: 'secondary'},
+      {id: 'send-message', label: 'Conferma', message: 'confermo', variant: 'danger',
+        ...(proposalId ? {action: {type: 'proposal-confirm', proposalId}} : {})},
+      {id: 'send-message', label: 'Annulla', message: 'annulla', variant: 'secondary',
+        ...(proposalId ? {action: {type: 'proposal-cancel', proposalId}} : {})},
     ],
   }
 }

@@ -96,3 +96,32 @@ Il protocollo `refine/replace/switch` aggiunge una chiamata LLM prima della nati
 tool call sui turni con stato. Questo costo resta accettato come debito tecnico;
 non viene ottimizzato nello Step D. Gli step successivi non devono aggiungere
 altri planner LLM intermedi. Il limite complessivo resta quattro chiamate modello.
+
+## Protocollo proposte — Step B (5 ottobre 2026)
+
+`POST /api/chat` gestisce le decisioni prima del routing e dell'agente. Soltanto
+anteprime realmente emesse dal backend vengono associate al principal autenticato,
+alla sessione e alla credenziale del modulo. History e `principal` nel body non
+autorizzano operazioni. Il backend sceglie l'ultima proposta della sessione; una
+nuova proposta sostituisce quella precedente anche se appartiene a un altro modulo.
+
+Restano compatibili i pulsanti testuali `confermo` / `annulla` e il payload legacy
+`action: {actionId, decision: "confirm" | "cancel"}`. Il contratto strutturato è:
+`action: {type: "proposal-confirm" | "proposal-cancel", proposalId}`.
+L'identificatore è `data.action.actionId` per rinnovi/catalogo, oppure il
+`data.proposalToken` già presente nei payload WebcamGo/assistenza. Le card rinnovi
+includono l'azione strutturata come metadato aggiuntivo; il widget attuale resta
+testuale. I token opachi non vengono copiati nella presentation.
+
+Owner, sessione, credenziale, scadenza e stato pendente vengono verificati prima
+dell'esecuzione. La proposta viene acquisita prima di ogni `await`; replay,
+annullamento e doppie conferme concorrenti non rieseguono la mutazione. Gli
+adapter mantengono i controlli sullo stato atteso e i rinnovi/catalogo mantengono
+la verifica post-operazione. Gli errori non entrano nell'agente o nel fallback.
+
+L'indice resta in memoria, come gli store applicativi: riavvii richiedono nuove
+anteprime; più processi richiederebbero uno store condiviso con acquisizione
+atomica. Le decisioni finalizzate/scadute restano riconoscibili per 30 minuti dopo
+la scadenza. Non esiste un ID chat server-side: la precedenza è per sessione
+autenticata. Un client futuro deve usare l'azione strutturata per rifiutare il
+click su una card superata. Nessun write tool agentico viene aggiunto.

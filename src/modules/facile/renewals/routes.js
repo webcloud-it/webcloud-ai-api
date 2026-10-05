@@ -102,6 +102,7 @@ import {
   parseServicePleskPlanSyncAction,
   parseServiceSubscriptionEndDateAction,
   parseServiceTransferTargetAction,
+  parseActionDecisionMessage,
 } from './actions.js'
 import {
   handleFullRenewalPreviewRequest,
@@ -502,6 +503,28 @@ async function verifyOperationResult(result) {
     queryCatalog: queryRenewalsCatalog,
     auditPlesk: getPleskRenewalsAudit,
   })
+}
+
+// Called directly by the authenticated proposal gate, before any planner/agent.
+export const parseProposalDecision = parseActionDecisionMessage
+
+export async function decideProposal({action, actorToken, proposal}) {
+  let result
+  if (['update-entity', 'undo-entity-update'].includes(proposal?.data?.action?.operation)) {
+    result = await handlePendingEntityMutationDecisionMessage({
+      message: action.decision === 'confirm' ? 'confermo' : 'annulla',
+      action, actorToken, commitFn: commitRenewalsCatalogMutation,
+    })
+  } else if (hasFullRenewalExecutionProposal(action.actionId)) {
+    result = await handleFullRenewalExecutionDecision({action, actorToken})
+  } else if (hasSupplierRenewalExecutionProposal(action.actionId)) {
+    result = await handleSupplierRenewalExecutionDecision({action, actorToken})
+  } else if (hasRenewalExecutionProposal(action.actionId)) {
+    result = await handleRenewalExecutionDecision({action, actorToken})
+  } else {
+    result = await handleRenewalsActionDecision({action, actorToken})
+  }
+  return verifyOperationResult(result)
 }
 
 export async function chat(req, res) {

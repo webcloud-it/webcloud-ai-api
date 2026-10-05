@@ -16,6 +16,7 @@ import {env} from '../config/env.js'
 import {buildInfo} from '../config/build.js'
 import {executeMultiModuleRead} from '../core/orchestrator/multiModuleRead.js'
 import {executeGlobalConversation} from '../core/orchestrator/globalConversation.js'
+import {handleProposalDecision, rememberBackendProposal} from '../core/tools/proposalGate.js'
 
 const router = express.Router()
 
@@ -23,10 +24,16 @@ router.post(
   '/',
   asyncHandler(async (req, res, next) => {
     const requestedModuleId = req.body?.moduleId || 'facile'
+    const sessionToken = req.auth?.token
+    let proposalModuleId = requestedModuleId
     const startedAt = Date.now()
     const sendJson = res.json.bind(res)
 
     res.json = rawPayload => {
+      const proposalPayload = {...rawPayload, meta: {...rawPayload?.meta,
+        moduleId: rawPayload?.meta?.moduleId || proposalModuleId}}
+      rememberBackendProposal({payload: proposalPayload, auth: req.auth, sessionToken,
+        credentialKey: getCredentialForModule(proposalPayload.meta.moduleId)})
       const payload = attachChatPresentation(rawPayload)
       payload.meta = {
         ...(payload.meta || {}),
@@ -51,6 +58,11 @@ router.post(
 
       return sendJson(payload)
     }
+    const proposalDecision = await handleProposalDecision({
+      body: req.body, auth: req.auth, getModule: getModuleById,
+    })
+    if (proposalDecision) return res.json(proposalDecision)
+
     const isGlobalRequest = ['facile', 'global', 'facile.global'].includes(requestedModuleId)
     const globalPlan = isGlobalRequest
       ? await resolveGlobalChatPlan({
@@ -97,6 +109,7 @@ router.post(
     }
 
     const moduleId = globalPlan?.moduleId || requestedModuleId
+    proposalModuleId = moduleId
     const module = getModuleById(moduleId)
 
     if (!module?.routes?.chat) {

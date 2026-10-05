@@ -9,6 +9,9 @@ const PROPOSAL_TTL_MS = 10 * 60 * 1000
 const SUPPORT_PATTERN = /\b(?:ticket|assistenza|supporto|help\s*desk|zammad)\b|\brichiest\w*[\s\S]{0,50}\brispost\w*\b/i
 const CONFIRM_PATTERN = /^\s*(?:confermo|conferma|procedi|esegui|s[iì])\s*[.!]?\s*$/i
 const CANCEL_PATTERN = /^\s*(?:annulla|cancella|no)\s*[.!]?\s*$/i
+export function parseSupportProposalDecision(message) {
+  return CONFIRM_PATTERN.test(message) ? 'confirm' : CANCEL_PATTERN.test(message) ? 'cancel' : null
+}
 const CATEGORY_ALIASES = new Map([
   ['account', 'account'],
   ['fatturazione', 'billing'],
@@ -356,6 +359,9 @@ async function handleProposalDecision({message, token, history, services}) {
     audit('rejected-actor', proposal)
     return response('action-error', 'Questa proposta appartiene a un’altra sessione.', {type: 'action-error', operation: proposal.operation})
   }
+  if (proposal.status === 'executing') {
+    return response('action-error', 'Questa proposta è già in esecuzione.', {type: 'action-error', error: {code: 'action-already-finalized'}})
+  }
   if (CANCEL_PATTERN.test(message)) {
     proposals.delete(proposalToken)
     audit('cancelled', proposal)
@@ -363,6 +369,7 @@ async function handleProposalDecision({message, token, history, services}) {
   }
 
   let result
+  proposal.status = 'executing'
   audit('confirmed', proposal)
   try {
     if (proposal.operation === 'support-reply' || proposal.operation === 'support-note') {

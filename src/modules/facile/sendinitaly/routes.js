@@ -2,6 +2,17 @@ import {httpError} from '../../../utils/httpError.js'
 import {composeGroundedReply} from '../../../core/presentation/groundedReplyComposer.js'
 import {handleSendInItalyChat} from './chat.js'
 import {getCampaigns, getCampaignStats, getUsers} from './service.js'
+import * as supportServices from './service.js'
+import {handleSupportChat, parseSupportProposalDecision} from './supportChat.js'
+
+export const parseProposalDecision = parseSupportProposalDecision
+
+export async function decideProposal({action, actorToken, proposal}) {
+  return handleSupportChat({
+    message: action.decision === 'confirm' ? 'confermo' : 'annulla',
+    history: [proposal], token: actorToken, services: supportServices,
+  })
+}
 
 export async function summary(req, res) {
   const [campaigns, users] = await Promise.all([

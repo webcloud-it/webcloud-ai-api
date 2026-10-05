@@ -1,4 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto'
+import {isProposalAuthorizationError} from '../../../core/tools/proposalGate.js'
 
 import {getEntityMutationDefinition} from './entityMutationRegistry.js'
 import {
@@ -429,6 +430,7 @@ export async function buildEntityMutationProposal({
       type: 'action-preview',
       action: {
         actionId,
+        expiresAt: new Date(proposal.expiresAt).toISOString(),
         operation: 'update-entity',
         target: preview.target,
         changes: preview.changes,
@@ -448,6 +450,7 @@ export async function buildEntityMutationProposal({
 export async function handlePendingEntityMutationDecisionMessage({
   message = '',
   actorToken = '',
+  action = null,
   commitFn,
 } = {}) {
   const proposal = getProposal(actorToken)
@@ -455,6 +458,18 @@ export async function handlePendingEntityMutationDecisionMessage({
 
   const decision = parseDecision(message)
   if (!decision) return null
+
+  if ((action && action.actionId !== proposal.actionId) || proposal.status === 'executing') {
+    return {ok: false, intent: 'action-error', source: 'tool-fast',
+      reply: 'La proposta non è più pendente o è stata sostituita.',
+      data: {type: 'action-error', error: {code: 'action-already-finalized'}}}
+  }
+  if (proposal.expiresAt <= Date.now()) {
+    removeProposal(actorToken)
+    return {ok: false, intent: 'action-error', source: 'tool-fast',
+      reply: 'La proposta è scaduta. Richiedi una nuova anteprima.',
+      data: {type: 'action-error', error: {code: 'action-expired'}}}
+  }
 
   if (decision === 'cancel') {
     removeProposal(actorToken)
@@ -472,6 +487,7 @@ export async function handlePendingEntityMutationDecisionMessage({
     }
   }
 
+  proposal.status = 'executing'
   try {
     const result = await commitFn({
       entity: proposal.entity,
@@ -517,16 +533,19 @@ export async function handlePendingEntityMutationDecisionMessage({
       ok: true,
       intent: 'action-error',
       source: 'tool-fast',
-      reply: /stale|cambiati dopo l’anteprima/i.test(String(error?.message || ''))
+      reply: isProposalAuthorizationError(error)
+        ? 'L’adapter ha rifiutato l’autorizzazione. La proposta non verrà eseguita nuovamente.'
+        : /stale|cambiati dopo l’anteprima/i.test(String(error?.message || ''))
         ? 'I dati sono cambiati dopo l’anteprima. La modifica non è stata applicata: ripeti la richiesta per creare una nuova anteprima.'
-        : `Non è stato possibile applicare la modifica: ${error?.message || 'errore sconosciuto'}`,
+        : 'Non è stato possibile applicare la modifica. Verifica lo stato prima di richiedere una nuova anteprima.',
       data: {
         type: 'action-error',
         error: {
-          code: /stale|cambiati dopo l’anteprima/i.test(String(error?.message || ''))
+          code: isProposalAuthorizationError(error)
+            ? 'action-authorization-denied'
+            : /stale|cambiati dopo l’anteprima/i.test(String(error?.message || ''))
             ? 'entity-mutation-stale-state'
             : 'entity-mutation-failed',
-          message: error?.message || 'Errore modifica entità',
         },
       },
     }
@@ -577,6 +596,7 @@ export async function buildRecentEntityMutationUndoProposal({
   }
 
   const actionId = randomUUID()
+  const expiresAt = Date.now() + PROPOSAL_TTL_MS
   rememberProposal(actorToken, {
     actionId,
     entity: completed.entity,
@@ -587,7 +607,7 @@ export async function buildRecentEntityMutationUndoProposal({
     preview,
     undo: true,
     createdAt: Date.now(),
-    expiresAt: Date.now() + PROPOSAL_TTL_MS,
+    expiresAt,
   })
 
   return {
@@ -600,6 +620,7 @@ export async function buildRecentEntityMutationUndoProposal({
       action: {
         actionId,
         operation: 'undo-entity-update',
+        expiresAt: new Date(expiresAt).toISOString(),
         target: preview.target,
         changes: preview.changes,
         requiresConfirmation: true,
