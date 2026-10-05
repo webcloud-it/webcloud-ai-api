@@ -1,3 +1,5 @@
+import {operationalCustomer} from './customerReferences.js'
+
 function normalizeText(value = '') {
   return String(value ?? '')
     .normalize('NFD')
@@ -654,6 +656,8 @@ function buildCommunications({services = []} = {}) {
   const out = []
 
   for (const service of services) {
+    // Historical attribution remains operational until the phase-3 migration.
+    const customer = operationalCustomer(service)
     for (const communication of service?.renewalsCommunications || []) {
       out.push({
         id:
@@ -665,11 +669,11 @@ function buildCommunications({services = []} = {}) {
         communicationDate: communication?.communicationDate || null,
         year: toDateYear(communication?.communicationDate),
         service: {id: service?.id || null, name: service?.name || null},
-        customer: service?.customer
-          ? {id: service.customer.id || null, name: service.customer.name || null}
+        customer: customer
+          ? {id: customer.id || null, name: customer.name || null}
           : null,
-        group: service?.customer?.group
-          ? {id: service.customer.group.id || null, name: service.customer.group.name || null}
+        group: customer?.group
+          ? {id: customer.group.id || null, name: customer.group.name || null}
           : null,
       })
     }
@@ -804,6 +808,11 @@ function buildServices({services = []} = {}) {
   return services.map(service => ({
     id: service?.id || null,
     name: service?.name || '—',
+    ...(Object.hasOwn(service, 'commercialCustomerId') ? {
+      operationalCustomer: operationalCustomer(service)
+        ? {id: operationalCustomer(service).id || null, name: operationalCustomer(service).name || null}
+        : null,
+    } : {}),
     customer: service?.customer
       ? {id: service.customer.id || null, name: service.customer.name || null}
       : null,
@@ -842,6 +851,7 @@ const definitions = [
     fields: {
       ...COMMON_NAME_FIELDS,
       'customer.name': {type: 'string', label: 'cliente', aliases: ['cliente', 'clienti', 'azienda', 'aziende']},
+      'operationalCustomer.name': {type: 'string', label: 'cliente operativo', aliases: ['cliente operativo', 'cliente tecnico']},
       'group.name': {type: 'string', label: 'gruppo', aliases: ['gruppo', 'gruppi', 'gruppo aziendale', 'gruppi aziendali']},
       'domain.name': {type: 'string', label: 'dominio', aliases: ['dominio', 'domini', 'domain']},
       providerNames: {type: 'string-array', label: 'fornitori', aliases: ['fornitore', 'fornitori', 'provider', 'providers', 'supplier', 'suppliers']},

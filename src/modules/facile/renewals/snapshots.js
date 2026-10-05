@@ -1,3 +1,5 @@
+import {commercialCustomer, operationalCustomer} from './customerReferences.js'
+
 export function isLowOnSpace(quotaBytes, percentuale, thresholds = []) {
   if (!quotaBytes || percentuale === 0) return false
 
@@ -50,16 +52,23 @@ export function getRenewalInfo(service, analysisPeriod) {
 }
 
 export function buildServiceSnapshot(service, thresholds, analysisPeriod) {
+  const commercial = commercialCustomer(service)
+  const operational = operationalCustomer(service)
   const renewal = getRenewalInfo(service, analysisPeriod)
   const space = getServiceSpaceInfo(service, thresholds)
 
   return {
     id: service.id,
     name: service.name || '—',
-    customerId: service?.customer?.id || null,
-    customerName: service?.customer?.name || '—',
-    groupId: service?.customer?.group?.id || null,
-    groupName: service?.customer?.group?.name || null,
+    customerId: commercial?.id || null,
+    customerName: commercial?.name || '—',
+    groupId: commercial?.group?.id || null,
+    groupName: commercial?.group?.name || null,
+    ...(Object.hasOwn(service, 'commercialCustomerId') ? {
+      commercialCustomerId: service.commercialCustomerId,
+      operationalCustomerId: service.operationalCustomerId ?? operational?.id ?? null,
+      operationalCustomerName: operational?.name ?? null,
+    } : {}),
     dontRenew: service?.dontRenew === true,
     autoRenew: service?.autoRenew === true,
     toRenew: service?.toRenew === true || service?.to_renew === true,

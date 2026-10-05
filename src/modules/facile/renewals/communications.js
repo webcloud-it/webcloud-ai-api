@@ -1,11 +1,14 @@
 import {normalizeText} from '../../../utils/text.js'
+import {operationalCustomer} from './customerReferences.js'
 
 const DOMAIN_PATTERN = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/i
 
 export function buildCommunicationsIndex(services = []) {
   return services.flatMap(service => {
-    const customerName = service?.customer?.name || '—'
-    const groupName = service?.customer?.group?.name || null
+    // Phase 3 will migrate historical attribution; retain the preceding contract here.
+    const historicalCustomer = operationalCustomer(service)
+    const customerName = historicalCustomer?.name || '—'
+    const groupName = historicalCustomer?.group?.name || null
     const serviceName = service?.name || '—'
 
     return (service?.renewalsCommunications || [])
@@ -13,9 +16,9 @@ export function buildCommunicationsIndex(services = []) {
       .map(item => ({
         serviceId: service.id,
         serviceName,
-        customerId: service?.customer?.id || null,
+        customerId: historicalCustomer?.id || null,
         customerName,
-        groupId: service?.customer?.group?.id || null,
+        groupId: historicalCustomer?.group?.id || null,
         groupName,
         type: item?.type || null,
         typeLabel: item?.typeLabel || null,

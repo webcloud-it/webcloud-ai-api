@@ -4,6 +4,8 @@ export function buildRenewalsChatMessages({message, payload}) {
     'Rispondi sempre in italiano.',
     'Usa solo i dati forniti nel contesto JSON.',
     'Non inventare clienti, servizi, numeri, scadenze o comunicazioni.',
+    'Nel dominio rinnovi customer/cliente indica il cliente commerciale effettivo: offerte, contatti e prezzi appartengono a lui.',
+    'Per Send in Italy, Plesk e informazioni operative usa esclusivamente operationalCustomer/operationalCustomerId; non dedurli dal cliente commerciale.',
     'Se i dati non bastano, dichiaralo chiaramente.',
     'Sii concreto, operativo e sintetico.',
     'Quando si parla di rinnovi, considera SOLO le scadenze (expiringCount, urgentRenewalsCount, nextRenewalDate).',

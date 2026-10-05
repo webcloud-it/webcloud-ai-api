@@ -1,6 +1,7 @@
 import {env} from '../../../config/env.js'
 import {authHeaders, fetchJson, joinUrl} from '../../../utils/http.js'
 import {createMemoryCache, getCached} from '../../../utils/cache.js'
+import {normalizeRenewalsService} from './customerReferences.js'
 
 const DEFAULT_TIMEOUT_MS = Number(
   process.env.CRM_FETCH_TIMEOUT_MS || env.crmFetchTimeoutMs || 10000
@@ -37,7 +38,7 @@ const panelCountsCache = createMemoryCache()
 const serviceOptionsCache = createMemoryCache()
 
 async function fetchAllServices() {
-  return fetchJson(
+  const services = await fetchJson(
     joinUrl(env.renewalsApiBaseUrl),
     {
       headers: authHeaders(env.crmToken),
@@ -45,6 +46,7 @@ async function fetchAllServices() {
     },
     'Errore API servizi'
   )
+  return services.map(normalizeRenewalsService)
 }
 
 async function fetchSettings() {

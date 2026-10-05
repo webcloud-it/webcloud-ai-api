@@ -131,6 +131,11 @@ function buildServiceDetailItem(service, {thresholds, analysisPeriod}) {
     id: snapshot.id,
     servizio: snapshot.name,
     cliente: snapshot.customerName,
+    ...(Object.hasOwn(snapshot, 'commercialCustomerId') ? {
+      clienteOperativo: snapshot.operationalCustomerName,
+      operationalCustomerId: snapshot.operationalCustomerId,
+      commercialCustomerId: snapshot.commercialCustomerId,
+    } : {}),
     gruppo: snapshot.groupName,
     tipologie: buildServiceTypes(service),
     dominio: buildDomainInfo(service),

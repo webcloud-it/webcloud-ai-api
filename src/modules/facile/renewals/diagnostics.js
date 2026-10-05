@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto'
+import {operationalCustomer} from './customerReferences.js'
 
 import {normalizeSearchText} from '../../../utils/text.js'
 import {buildServiceListPayload} from './serviceQueries.js'
@@ -481,6 +482,10 @@ function applyScope(services = [], {customerId = null, groupId = null, serviceId
 
 function toReferenceItem(service = {}) {
   return {
+    ...(Object.hasOwn(service, 'operationalCustomerId') ? {
+      operationalCustomerId: service.operationalCustomerId,
+      operationalCustomerName: operationalCustomer(service)?.name ?? null,
+    } : {}),
     id: service?.id || null,
     ids: service?.id ? [service.id] : [],
     servizio: service?.name || null,

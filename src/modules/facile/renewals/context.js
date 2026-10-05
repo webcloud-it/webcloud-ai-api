@@ -84,6 +84,11 @@ export function buildChatContextFromSnapshots({
     }))
 
   return {
+    ...(snapshots.some(s => Object.hasOwn(s, 'operationalCustomerId')) ? {
+      operationalCustomers: snapshots.map(s => ({serviceId: s.id,
+        operationalCustomerId: s.operationalCustomerId ?? null,
+        operationalCustomerName: s.operationalCustomerName ?? null})),
+    } : {}),
     scope: {
       customerId: customerId || null,
       groupId: groupId || null,
