@@ -325,7 +325,7 @@ test('Step C: scope esplicito del modulo viene mantenuto e non espande il catalo
   await turn(S, {}, 'replace', historyFor({customerOrGroup: 'Zilio Group'}), {toolModuleId: 'facile.renewals'})
   assert.deepEqual(requests[0].tools.map(tool => tool.function.name), [S, C])
   const missing = await turn(S, {}, 'replace', [], {toolModuleId: 'facile.webcamgo'})
-  assert.equal(missing, null)
+  assert.equal(missing.meta.toolErrors[0].code, 'TOOL_UNAVAILABLE')
 })
 
 test('Step C: lo snapshot compatto sostituisce il transcript delle query senza replicare le liste client', async () => {
@@ -493,10 +493,11 @@ test('errore di esecuzione non abilita fallback e non espone dettagli interni', 
   assert.doesNotMatch(JSON.stringify(result), /secret upstream detail/)
 })
 
-test('fallback resta disponibile per modulo senza tool e prima di qualsiasi errore', async () => {
+test('Step E: assenza di tool o risposta testuale non attivano fallback implicito', async () => {
   const {run} = fixture()
-  assert.equal(await run({}, {listTools: () => []}), null)
-  assert.equal(await run({}, {callModel: async () => noCall}), null)
+  const withoutTools = await run({}, {listTools: () => [], callModel: async () => noCall})
+  assert.equal(withoutTools.data.type, 'conversation')
+  assert.equal((await run({}, {callModel: async () => noCall})).data.type, 'conversation')
 })
 
 test('registry filtra per credenziale ma permette di distinguere tool indisponibili da non migrati', () => {

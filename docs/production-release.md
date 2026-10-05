@@ -125,3 +125,71 @@ atomica. Le decisioni finalizzate/scadute restano riconoscibili per 30 minuti do
 la scadenza. Non esiste un ID chat server-side: la precedenza è per sessione
 autenticata. Un client futuro deve usare l'azione strutturata per rifiutare il
 click su una card superata. Nessun write tool agentico viene aggiunto.
+
+## Agent-first e adapter legacy — Step E (5 ottobre 2026)
+
+Il percorso della POST è auth → proposalGate → executeAgentRequest →
+presentation/audit. Globale ed esplicito usano lo stesso orchestrator; il modulo
+esplicito limita il registry mediante ID, mai mediante il testo della richiesta.
+Il registry validato e la policy Step A definiscono i tool nativi autorizzati.
+Registrare un ulteriore tool conforme lo rende visibile senza regole linguistiche.
+
+Il confine restituisce `{outcome, response}`. Gli outcome sono HANDLED (tool o
+conversazione generale), CAPABILITY_NOT_MIGRATED (unico ingresso legacy), ERROR
+(contratto, provider, policy, autorizzazione, esecuzione, stato o limite passaggi).
+Una risposta conversazionale strutturata è HANDLED; testo fuori protocollo o
+una risposta vuota sono ERROR. Errori
+precedenti restano ERROR anche se il modello corregge la chiamata successiva.
+
+Il control tool interno `agent_report_outcome` viene esposto nella medesima
+inferenza dei tool nativi. GENERAL_CONVERSATION richiede reply e nessuna
+capability; CAPABILITY_NOT_MIGRATED richiede capabilityIds e nessuna reply.
+La risposta generale è prodotta dall'LLM nello stesso segnale, senza executor
+applicativi, legacy o inferenze aggiuntive. Non è registrato come tool
+applicativo e non esegue dati/azioni. Enum e descrizioni provengono dal catalogo
+backend filtrato per credenziali e scope esplicito, senza esporre adapter
+indisponibili. Il backend valida schema, scope, principal e credenziali. Non sono
+ammesse decisioni miste con altri tool o segnali dopo esecuzioni/errori. Nessuna
+frase magica, regex o inferenza preliminare viene aggiunta. La scelta semantica
+della copertura resta responsabilità del modello, osservabile nei meta.
+
+Solo dopo questo segnale si usa globalChat per localizzare un adapter temporaneo.
+Il router non può espandere i moduli autorizzati dal segnale. Se non riconosce la
+frase, il modulo strutturato individua comunque l'handler; richieste multi-area
+non localizzabili richiedono chiarimento. Il multi-module legacy resta disponibile
+con gli stessi controlli read-only: l'agente segnala tutte le capability prima
+di eseguire tool se una parte non è migrata. In futuro più tool nativi potranno
+sostituire questi adapter senza cambiare il router. Non si redesignano ora le
+risposte terminali multi-tool.
+
+Il budget principale conserva i 300 token della risposta conversazionale; le
+domande semplici richiedono poche frasi complete. Non si cambia il timeout o
+il provider. Le prove reali iniziali hanno esposto risposte troncate/timeout
+e richieste interne trattate come testo conversazionale: il protocollo richiede
+ora un esito strutturato per non dedurre l'intento dalla sola assenza di tool.
+
+I meta e l'audit esistente espongono agentAttempted, agentHandled, agentOutcome,
+generalConversation, legacyFallback e fallbackReason; il fallback usa
+`routingSource: agent`, `fallbackReason: capability-not-migrated` e conserva
+legacyRoutingSource. Le metriche Ollama/tempi restano agentTimings. Non vengono
+aggiunti log di token, identità, frasi o contenuti delle comunicazioni.
+
+Step A/B/C/D restano attivi. Il planner di stato C usa ancora una chiamata quando
+esiste uno snapshot e rimane debito tecnico; il limite complessivo è quattro.
+I test B adattano solo il provider simulato per creare anteprime attraverso il
+segnale di migrazione; stores, executor e verifiche B restano quelli reali.
+I due vecchi assert sul ritorno null dell'agente sono sostituiti dal contratto
+E esplicito. Le funzioni help/conversation/unsupported di globalChat restano
+per compatibilità, ma non sono gate del percorso nativo.
+
+Debiti residui: classificazione semantica del control signal affidata al modello;
+granularità delle capability più ampia dei singoli tool (la copertura di ogni
+richiesta non è dimostrabile solo dal capabilityId); adapter linguistici legacy
+e future risposte multi-tool; latenza dello Step C; store proposte in memoria e
+precedenza per sessione già documentati nello Step B. Nessun nuovo write tool.
+
+La prova aggiuntiva "lista dei fornitori presenti" riproduce anche nel checkpoint
+39a88a1 una selezione errata di renewals_search_services con limit oltre lo schema,
+seguita da una ricerca servizi. Resta un debito di copertura semantica del modello;
+Step E lo dichiara ERROR e non usa fallback per recuperarlo. Il fallback reale
+verificato usa la capability esistente facile.webcloud.chat-audit.read.

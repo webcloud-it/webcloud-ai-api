@@ -15,7 +15,8 @@ import {attachChatPresentation} from '../core/presentation/chatPresentation.js'
 import {env} from '../config/env.js'
 import {buildInfo} from '../config/build.js'
 import {executeMultiModuleRead} from '../core/orchestrator/multiModuleRead.js'
-import {executeGlobalConversation} from '../core/orchestrator/globalConversation.js'
+import {executeAgentRequest} from '../core/orchestrator/globalConversation.js'
+import {AGENT_OUTCOME} from '../core/orchestrator/agentOutcome.js'
 import {handleProposalDecision, rememberBackendProposal} from '../core/tools/proposalGate.js'
 
 const router = express.Router()
@@ -26,6 +27,7 @@ router.post(
     const requestedModuleId = req.body?.moduleId || 'facile'
     const sessionToken = req.auth?.token
     let proposalModuleId = requestedModuleId
+    let agentMeta = null
     const startedAt = Date.now()
     const sendJson = res.json.bind(res)
 
@@ -37,6 +39,7 @@ router.post(
       const payload = attachChatPresentation(rawPayload)
       payload.meta = {
         ...(payload.meta || {}),
+        ...(agentMeta || {}),
         requestId: req.requestId,
         model: env.ollamaChatModel,
         buildId: buildInfo.id,
@@ -50,6 +53,12 @@ router.post(
         ok: payload?.ok === true,
         source: payload?.source || null,
         routingSource: payload?.meta?.routingSource || null,
+        agentAttempted: payload?.meta?.agentAttempted,
+        agentHandled: payload?.meta?.agentHandled,
+        agentOutcome: payload?.meta?.agentOutcome,
+        generalConversation: payload?.meta?.generalConversation,
+        legacyFallback: payload?.meta?.legacyFallback,
+        fallbackReason: payload?.meta?.fallbackReason,
         durationMs: Date.now() - startedAt,
         availableCredentials: Object.entries(req.auth?.credentials || {})
           .filter(([, value]) => Boolean(value))
@@ -64,7 +73,25 @@ router.post(
     if (proposalDecision) return res.json(proposalDecision)
 
     const isGlobalRequest = ['facile', 'global', 'facile.global'].includes(requestedModuleId)
-    const globalPlan = isGlobalRequest
+    const {outcome, response: agentResponse} = await executeAgentRequest({
+      message: req.body?.message,
+      history: req.body?.history,
+      context: req.body?.context,
+      credentials: req.auth?.credentials || {},
+      principal: req.auth?.principal || null,
+      requestId: req.requestId,
+      toolModuleId: isGlobalRequest ? null : requestedModuleId,
+    })
+    if (outcome !== AGENT_OUTCOME.CAPABILITY_NOT_MIGRATED) return res.json(agentResponse)
+    agentMeta = {routingSource: 'agent', agentAttempted: true, agentHandled: false,
+      agentOutcome: outcome, generalConversation: false, legacyFallback: true,
+      fallbackReason: 'capability-not-migrated',
+      capabilityNotMigrated: agentResponse.meta.capabilityNotMigrated,
+      agentTimings: agentResponse.meta.agentTimings}
+    const migration = agentResponse.meta.capabilityNotMigrated
+    // The linguistic router is now only a temporary legacy adapter locator.
+    // Its result can never expand the model's validated structured scope.
+    let globalPlan = isGlobalRequest
       ? await resolveGlobalChatPlan({
           message: req.body?.message,
           context: req.body?.context,
@@ -73,22 +100,18 @@ router.post(
         })
       : null
 
-    if (globalPlan?.type === 'help') {
-      return res.json(buildGlobalHelpResponse({credentials: req.auth.credentials}))
+    const plannedModules = globalPlan?.type === 'multi-module'
+      ? globalPlan.tasks.map(task => task.moduleId) : [globalPlan?.moduleId].filter(Boolean)
+    if (!plannedModules.length || plannedModules.some(id => !migration.moduleIds.includes(id)) ||
+        migration.moduleIds.some(id => !plannedModules.includes(id)) ||
+        (migration.moduleIds.length > 1 && globalPlan?.type !== 'multi-module')) {
+      globalPlan = migration.moduleIds.length === 1
+        ? {type: 'module', moduleId: migration.moduleIds[0], source: 'agent-control'}
+        : {type: 'clarification', availableModuleIds: migration.moduleIds, source: 'agent-control'}
     }
 
-    if (['conversation', 'greeting'].includes(globalPlan?.type)) {
-      const result = await executeGlobalConversation({
-        message: req.body?.message,
-        history: req.body?.history,
-        context: req.body?.context,
-        credentials: req.auth?.credentials || {},
-        principal: req.auth?.principal || null,
-        routingSource: globalPlan?.source || 'conversation',
-        requestId: req.requestId,
-      })
-
-      return res.json(result)
+    if (globalPlan?.type === 'help') {
+      return res.json(buildGlobalHelpResponse({credentials: req.auth.credentials}))
     }
 
     if (globalPlan?.type === 'multi-module') {
@@ -119,26 +142,6 @@ router.post(
       })
     }
 
-    // Migrazione agent-first: se il modulo selezionato espone tool nativi,
-    // lasciamo che sia Qwen a scegliere quale usare. Se non sceglie alcun
-    // tool (o il modulo non ne espone ancora), executeGlobalConversation
-    // restituisce null e preserviamo il vecchio handler come fallback.
-    if (globalPlan?.type === 'module') {
-      const agentResult = await executeGlobalConversation({
-        message: req.body?.message,
-        history: req.body?.history,
-        context: req.body?.context,
-        credentials: req.auth?.credentials || {},
-        principal: req.auth?.principal || null,
-        routingSource: globalPlan?.source || 'module',
-        requestId: req.requestId,
-        toolModuleId: moduleId,
-        fallbackOnNoTool: true,
-      })
-
-      if (agentResult) return res.json(agentResult)
-    }
-
     if (globalPlan) {
       const credentialKey = getCredentialForModule(moduleId)
       const credential = req.auth.credentials?.[credentialKey]
@@ -161,7 +164,7 @@ router.post(
             ...payload.meta,
             moduleId,
             orchestrator: 'global-v1',
-            routingSource: globalPlan.source,
+            legacyRoutingSource: globalPlan.source,
             semanticIntent: globalPlan.semantic?.intent || null,
             semanticConfidence: globalPlan.semantic?.confidence || null,
             semanticRelation: globalPlan.semantic?.relationToPrevious || null,

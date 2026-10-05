@@ -25,6 +25,12 @@ export function recordChatAudit(entry = {}) {
     ok: entry.ok === true,
     source: entry.source || null,
     routingSource: entry.routingSource || null,
+    agentAttempted: entry.agentAttempted === true,
+    agentHandled: entry.agentHandled === true,
+    agentOutcome: ['HANDLED', 'CAPABILITY_NOT_MIGRATED', 'ERROR'].includes(entry.agentOutcome) ? entry.agentOutcome : null,
+    generalConversation: entry.generalConversation === true,
+    legacyFallback: entry.legacyFallback === true,
+    fallbackReason: entry.fallbackReason === 'capability-not-migrated' ? entry.fallbackReason : null,
     durationMs: Number(entry.durationMs) || 0,
     availableCredentials: Array.isArray(entry.availableCredentials)
       ? entry.availableCredentials.sort()

@@ -79,8 +79,18 @@ before(async () => {
   })
   adapter.listen(0, '127.0.0.1'); await once(adapter, 'listening')
   env.renewalsApiBaseUrl = env.crmDirectusBaseUrl = `http://127.0.0.1:${adapter.address().port}`
-  model = http.createServer((_req, res) => {
-    modelCalls++; res.setHeader('Content-Type', 'application/json')
+  model = http.createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk
+    const input = JSON.parse(raw)
+    res.setHeader('Content-Type', 'application/json')
+    // Step E: proposal generation explicitly requests its unmigrated preview
+    // adapter; subsequent decisions must still bypass the model entirely.
+    if (input.messages.at(-1)?.content === 'fixture:propose') {
+      return res.end(JSON.stringify({message: {role: 'assistant', content: '', tool_calls: [{function: {
+        name: 'agent_report_outcome', arguments: {outcome: 'CAPABILITY_NOT_MIGRATED', capabilityIds: ['facile.renewals.preview']},
+      }}]}}))
+    }
+    modelCalls++
     res.end(JSON.stringify({message: {role: 'assistant', content: '', tool_calls: [{function: {
       name: 'renewals_search_services', arguments: {},
     }}]}}))

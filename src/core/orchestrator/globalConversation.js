@@ -1,5 +1,6 @@
 import {callOllamaChatMessage} from '../providers/ollamaProvider.js'
 import {getRegisteredTools} from '../../modules/registry.js'
+import {AGENT_OUTCOME, AGENT_CONTROL, agentOutcome, createAgentOutcomeControl, validateAgentOutcomeControl} from './agentOutcome.js'
 import {
   assertAutomaticToolPolicy,
   parseToolArguments,
@@ -12,6 +13,27 @@ import {
 } from '../tools/agentState.js'
 
 const MAX_AGENT_ITERATIONS = 4
+
+// Stable route boundary: only the explicit migration outcome permits legacy.
+// Provider/registry failures cannot be mistaken for a missing native capability.
+export async function executeAgentRequest(options = {}) {
+  let response
+  try {
+    response = await executeGlobalConversation({...options, routingSource: 'agent', agentFirst: true})
+  } catch (error) {
+    const code = error instanceof ToolContractError ? error.code
+      : error?.name === 'OllamaProviderError' ? 'AGENT_PROVIDER_ERROR' : 'AGENT_CONTRACT_ERROR'
+    response = {ok: false, intent: 'agent', source: 'agent',
+      reply: 'Non ho potuto completare la richiesta in modo verificato. Riprova tra poco.',
+      data: {type: 'tool-error', code}, meta: {toolErrors: [{code}], toolCalls: []}}
+  }
+  const outcome = agentOutcome(response)
+  response.ok = outcome !== AGENT_OUTCOME.ERROR
+  response.meta = {...response.meta, moduleId: response.meta?.moduleId || options.toolModuleId || 'facile',
+    routingSource: 'agent', agentAttempted: true, agentHandled: outcome === AGENT_OUTCOME.HANDLED,
+    agentOutcome: outcome, generalConversation: outcome === AGENT_OUTCOME.HANDLED && response.data?.type === 'conversation'}
+  return {outcome, response}
+}
 
 function cleanContent(value, maxLength = 4000) {
   const content = String(value ?? '').trim()
@@ -156,7 +178,7 @@ export async function executeGlobalConversation({
   routingSource = 'semantic',
   requestId = null,
   toolModuleId = null,
-  fallbackOnNoTool = false,
+  agentFirst = false,
   callModel = callOllamaChatMessage,
   listTools = getRegisteredTools,
 } = {}) {
@@ -168,11 +190,10 @@ export async function executeGlobalConversation({
   const contextHint = buildContextHint(context)
   const previousAgentState = extractAgentState(history)
   const allRegisteredTools = listTools({credentials, includeUnavailable: true})
-  const generalWithoutTools = ['greeting', 'general'].includes(routingSource)
   const scopedRegisteredTools = toolModuleId
     ? allRegisteredTools.filter(tool => tool.moduleId === toolModuleId)
     : allRegisteredTools
-  const candidateTools = generalWithoutTools ? [] : scopedRegisteredTools
+  const candidateTools = scopedRegisteredTools
   const availabilityErrors = []
   const registeredTools = candidateTools.filter(tool => {
     try { assertAutomaticToolPolicy(tool, {credentials, principal}); return true }
@@ -184,11 +205,9 @@ export async function executeGlobalConversation({
   })
   const toolDefinitions = registeredTools.map(tool => tool.definition)
   const toolsByName = new Map(candidateTools.map(tool => [tool.name, tool]))
-
-  // Nei moduli in migrazione proviamo prima i tool nativi. Se il modulo non ne
-  // espone ancora, torniamo subito al relativo handler legacy senza chiamare Ollama.
-  if (fallbackOnNoTool && !candidateTools.length) return null
-  if (candidateTools.length && !toolDefinitions.length) {
+  if (agentFirst && allRegisteredTools.some(tool => tool.name === AGENT_CONTROL)) throw new TypeError('Nome control tool riservato')
+  const outcomeControl = agentFirst ? createAgentOutcomeControl({credentials, toolModuleId, tools: registeredTools}) : null
+  if (candidateTools.length && !toolDefinitions.length && !agentFirst) {
     const denied = availabilityErrors[0]
     return {
       ok: true,
@@ -216,7 +235,7 @@ export async function executeGlobalConversation({
   const modelPasses = []
   const agentStartedAt = Date.now()
   let turnState = {stateMode: 'replace', entityReference: ''}
-  if (previousAgentState && toolDefinitions.length) {
+  if (previousAgentState && registeredTools.length) {
     const started = Date.now()
     const stateMessage = await callModel({
       format: AGENT_STATE_SCHEMA,
@@ -246,10 +265,15 @@ export async function executeGlobalConversation({
   }
   const queryContext = ['refine', 'switch'].includes(turnState.stateMode) ? stateHint
     : turnState.entityReference ? `La richiesta corrente riguarda l’entità ${JSON.stringify(turnState.entityReference)}: specifica esplicitamente questa entità nel parametro appropriato del tool scelto. Gli altri argomenti della query precedente non sono disponibili né da ereditare.` : null
+  if (outcomeControl) toolDefinitions.push(outcomeControl.definition)
+  const migrationInstruction = outcomeControl
+    ? 'Scegli un tool applicativo se copre la richiesta, altrimenti chiama agent_report_outcome. Per conversazione generale usa GENERAL_CONVERSATION e reply; per dati interni non coperti usa CAPABILITY_NOT_MIGRATED e capabilityIds, senza reply. Non rispondere con testo libero: usa il protocollo strutturato nella stessa inferenza. Usa un tool applicativo SOLO se produce esattamente il tipo di risultato richiesto: un parametro di filtro per una entità NON consente di elencare quella entità. Per richieste miste con una parte non migrata segnala tutte le capability prima di eseguire tool. Non usare il segnale di migrazione per errori o permessi mancanti.'
+    : null
   const systemContent = toolDefinitions.length
     ? [
         "Sei l'Assistente AI di Webcloud. Rispondi nella lingua dell'utente.",
         'Per dati privati o operativi Webcloud usa i tool disponibili e non inventare dati interni.',
+        ...(migrationInstruction ? [migrationInstruction] : []),
         'Negli argomenti dei tool usa solo i vincoli richiesti. Ometti parametri invariati o non necessari.',
         'Rispetta il significato delle negazioni: escludere una categoria significa rimuoverla dai risultati, non selezionare soltanto quella categoria. Scegli i valori enumerati secondo le descrizioni dello schema.',
         turnState.stateMode === 'switch'
@@ -260,6 +284,7 @@ export async function executeGlobalConversation({
         'Chiama un tool per aggiornare dati o filtri. Ometti limit a meno che l’utente fornisca una dimensione numerica della pagina. Una ricerca completa riguarda il totale, non una pagina illimitata. Non superare il massimo nello schema. Per paginare usa offset=nextOffset; cambiando filtri azzera offset=0.',
         ...(queryContext ? [queryContext] : []),
         ...(contextHint ? [`UI: ${contextHint}.`] : []),
+        ...(agentFirst ? ['Concludi con una tool call. Se scegli agent_report_outcome con GENERAL_CONVERSATION, per una domanda semplice scrivi reply in massimo 60 parole e una frase completa. Per dati interni non coperti usa CAPABILITY_NOT_MIGRATED: non sostituire il risultato richiesto con altri dati o una spiegazione di come cercarli.'] : []),
       ].join('\n')
     : [
         "Sei l'Assistente AI di Webcloud. Rispondi nella lingua dell'utente.",
@@ -270,7 +295,7 @@ export async function executeGlobalConversation({
     {role: 'system', content: systemContent},
     // The latest query snapshot replaces the table/reply transcript for tool turns.
     // Keeping older query requests here makes independent turns inherit entity scope.
-    ...(previousAgentState && toolDefinitions.length ? [] : normalizeHistory(history)).filter((item, index, items) =>
+    ...(previousAgentState && registeredTools.length ? [] : normalizeHistory(history)).filter((item, index, items) =>
       !(index === items.length - 1 && item.role === 'user' && item.content === userMessage)),
     {role: 'user', content: userMessage},
   ]
@@ -286,7 +311,9 @@ export async function executeGlobalConversation({
       ...(toolDefinitions.length ? {tools: toolDefinitions} : {}),
       options: {
         temperature: 0,
-        num_predict: toolDefinitions.length ? 120 : 300,
+        // Agent-first can answer general conversation in this same inference.
+        // Preserve the former direct-conversation budget instead of truncating it.
+        num_predict: agentFirst || !toolDefinitions.length ? 300 : 120,
       },
     })
 
@@ -317,11 +344,11 @@ export async function executeGlobalConversation({
     )
 
     if (!toolCalls.length) {
-      // Se questa esecuzione è il tentativo agent-first di un modulo legacy e
-      // il modello non ha scelto alcun tool, lasciamo che la route usi il
-      // vecchio handler invece di trasformare una mancata tool call in risposta.
-      if (fallbackOnNoTool && executedTools.length === 0 && toolErrors.length === 0) return null
-
+      if (agentFirst) return {ok: false, intent: 'agent', source: 'agent',
+        reply: 'Il modello non ha indicato un esito strutturato valido. Nessun risultato verificato da mostrare.',
+        data: {type: 'tool-error', code: 'AGENT_OUTCOME_REQUIRED'},
+        meta: {moduleId: toolModuleId || 'facile', toolCalls: executedTools,
+          toolErrors: [...toolErrors, {code: 'AGENT_OUTCOME_REQUIRED'}], agentTimings: {totalMs: Date.now() - agentStartedAt, modelPasses}}}
       if (toolErrors.length && !lastToolData) {
         return {
           ok: true,
@@ -340,7 +367,10 @@ export async function executeGlobalConversation({
         }
       }
 
-      const reply = cleanContent(assistantMessage?.content, 12000) || 'Nessuna risposta generata.'
+      const reply = cleanContent(assistantMessage?.content, 12000)
+      if (!reply) return {ok: false, intent: 'agent', source: 'agent', reply: 'Il modello non ha prodotto una risposta valida.',
+        data: {type: 'tool-error', code: 'AGENT_EMPTY_RESPONSE'},
+        meta: {moduleId: toolModuleId || 'facile', toolErrors: [{code: 'AGENT_EMPTY_RESPONSE'}]}}
 
       const hasAgentContext = executedTools.length > 0 || Boolean(currentAgentState)
 
@@ -372,6 +402,26 @@ export async function executeGlobalConversation({
       const tool = toolsByName.get(name)
       let executionStarted = false
       try {
+        if (outcomeControl && toolCalls.length > 1 && toolCalls.some(call => call?.function?.name === AGENT_CONTROL)) {
+          throw new ToolContractError('AGENT_MIGRATION_CONFLICT', 'Decisione mista di migrazione e tool non consentita.')
+        }
+        if (outcomeControl && name === AGENT_CONTROL) {
+          if (toolCalls.length !== 1 || toolErrors.length) {
+            throw new ToolContractError('AGENT_MIGRATION_CONFLICT', 'Il fallback non è consentito dopo tool, errori o decisioni miste.')
+          }
+          const decision = validateAgentOutcomeControl(outcomeControl, toolCall?.function?.arguments, {credentials, principal})
+          if (decision.generalReply) return {ok: true, intent: lastToolData ? 'agent' : 'conversation', source: lastToolData ? 'agent' : 'llm',
+            reply: cleanContent(decision.generalReply, 12000), data: lastToolData || {type: 'conversation'},
+            meta: {moduleId: lastToolModuleId || toolModuleId || 'facile', orchestrator: lastToolData ? 'agent-v1' : 'global-llm', routingSource,
+              toolCalls: executedTools, ...(currentAgentState ? {agentState: currentAgentState} : {}),
+              agentTimings: {totalMs: Date.now() - agentStartedAt, modelPasses}}}
+          if (executedTools.length) throw new ToolContractError('AGENT_MIGRATION_CONFLICT', 'Il fallback non è consentito dopo esecuzioni.')
+          return {ok: true, intent: 'capability-not-migrated', source: 'agent', reply: '',
+            data: {type: 'capability-not-migrated'},
+            meta: {moduleId: toolModuleId || 'facile', orchestrator: 'agent-v1', routingSource,
+              capabilityNotMigrated: decision, toolCalls: [],
+              agentTimings: {totalMs: Date.now() - agentStartedAt, modelPasses}}}
+        }
         if (!tool) throw new ToolContractError('TOOL_UNAVAILABLE', 'Tool non disponibile.')
         assertAutomaticToolPolicy(tool, {credentials, principal})
         const args = parseToolArguments(toolCall?.function?.arguments)
@@ -387,6 +437,9 @@ export async function executeGlobalConversation({
           history,
         })
         const toolDurationMs = Date.now() - toolStartedAt
+        if (result?.ok === false) {
+          throw new ToolContractError('TOOL_EXECUTION_ERROR', 'Il tool non ha restituito un risultato verificato.')
+        }
 
         executedTools.push({
           name,

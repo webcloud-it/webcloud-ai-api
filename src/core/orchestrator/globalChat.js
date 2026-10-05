@@ -481,6 +481,8 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
 }
 
 export async function resolveGlobalChatPlan(options = {}) {
+  // POST /api/chat invokes this only after CAPABILITY_NOT_MIGRATED.
+  // These legacy linguistic rules never select or hide native agent tools.
   // Manteniamo la firma async per compatibilità con la route, ma non viene
   // eseguita alcuna inferenza di planning: una richiesta conversazionale
   // comporta una sola chiamata LLM, quella che genera la risposta.
