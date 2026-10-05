@@ -70,7 +70,10 @@ router.post(
         message: req.body?.message,
         history: req.body?.history,
         context: req.body?.context,
+        credentials: req.auth?.credentials || {},
+        principal: req.auth?.principal || null,
         routingSource: globalPlan?.source || 'conversation',
+        requestId: req.requestId,
       })
 
       return res.json(result)
@@ -101,6 +104,26 @@ router.post(
         ok: false,
         error: `Modulo AI non trovato o non conversazionale: ${moduleId}`,
       })
+    }
+
+    // Migrazione agent-first: se il modulo selezionato espone tool nativi,
+    // lasciamo che sia Qwen a scegliere quale usare. Se non sceglie alcun
+    // tool (o il modulo non ne espone ancora), executeGlobalConversation
+    // restituisce null e preserviamo il vecchio handler come fallback.
+    if (globalPlan?.type === 'module') {
+      const agentResult = await executeGlobalConversation({
+        message: req.body?.message,
+        history: req.body?.history,
+        context: req.body?.context,
+        credentials: req.auth?.credentials || {},
+        principal: req.auth?.principal || null,
+        routingSource: globalPlan?.source || 'module',
+        requestId: req.requestId,
+        toolModuleId: moduleId,
+        fallbackOnNoTool: true,
+      })
+
+      if (agentResult) return res.json(agentResult)
     }
 
     if (globalPlan) {

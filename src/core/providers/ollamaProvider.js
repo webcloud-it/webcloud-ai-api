@@ -17,11 +17,12 @@ function isConnectionError(error) {
   return ['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'ETIMEDOUT'].includes(code)
 }
 
-export async function callOllamaChat({
+async function callOllamaApi({
   messages,
   timeoutMs = null,
   format = null,
   options = null,
+  tools = null,
   fetchImpl = fetch,
 }) {
   const model = env.ollamaChatModel
@@ -47,6 +48,7 @@ export async function callOllamaChat({
         think: env.ollamaThink,
         keep_alive: env.ollamaKeepAlive,
         messages,
+        ...(Array.isArray(tools) && tools.length ? {tools} : {}),
         ...(format ? {format} : {}),
         ...(options ? {options} : {}),
       }),
@@ -61,8 +63,7 @@ export async function callOllamaChat({
       })
     }
 
-    const json = await res.json()
-    return json?.message?.content?.trim() || 'Nessuna risposta generata.'
+    return await res.json()
   } catch (error) {
     if (error instanceof OllamaProviderError) {
       throw error
@@ -89,6 +90,72 @@ export async function callOllamaChat({
   } finally {
     clearTimeout(timeout)
   }
+}
+
+function durationNsToMs(value) {
+  const ns = Number(value)
+  return Number.isFinite(ns) ? Math.round(ns / 1_000_000) : null
+}
+
+function buildOllamaResponseMeta(json = {}) {
+  return {
+    model: json?.model || null,
+    totalDurationMs: durationNsToMs(json?.total_duration),
+    loadDurationMs: durationNsToMs(json?.load_duration),
+    promptEvalCount: Number.isFinite(Number(json?.prompt_eval_count))
+      ? Number(json.prompt_eval_count)
+      : null,
+    promptEvalDurationMs: durationNsToMs(json?.prompt_eval_duration),
+    evalCount: Number.isFinite(Number(json?.eval_count)) ? Number(json.eval_count) : null,
+    evalDurationMs: durationNsToMs(json?.eval_duration),
+    doneReason: json?.done_reason || null,
+  }
+}
+
+export async function callOllamaChatMessage({
+  messages,
+  timeoutMs = null,
+  format = null,
+  options = null,
+  tools = null,
+  fetchImpl = fetch,
+}) {
+  const json = await callOllamaApi({
+    messages,
+    timeoutMs,
+    format,
+    options,
+    tools,
+    fetchImpl,
+  })
+
+  const message = json?.message
+  if (!message || typeof message !== 'object') {
+    throw new OllamaProviderError('Ollama non ha restituito un messaggio valido')
+  }
+
+  return {
+    ...message,
+    _ollama: buildOllamaResponseMeta(json),
+  }
+}
+
+export async function callOllamaChat({
+  messages,
+  timeoutMs = null,
+  format = null,
+  options = null,
+  fetchImpl = fetch,
+}) {
+  const message = await callOllamaChatMessage({
+    messages,
+    timeoutMs,
+    format,
+    options,
+    fetchImpl,
+  })
+
+  return String(message?.content || '').trim() || 'Nessuna risposta generata.'
 }
 
 export async function checkOllamaReadiness({

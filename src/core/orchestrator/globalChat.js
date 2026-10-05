@@ -1,8 +1,6 @@
 import {buildCapabilitySummary, getAvailableModuleIds} from '../capabilities/catalog.js'
 import {normalizeSearchText, normalizeText} from '../../utils/text.js'
-import {callOllamaJson} from '../providers/ollamaProvider.js'
 import {getEntityModuleId} from '../context/pageContext.js'
-import {isSemanticFastPath, planSemanticRequest} from '../planner/semanticRequestPlanner.js'
 
 const DOMAIN_PATTERNS = {
   'facile.webcloud': [
@@ -94,6 +92,18 @@ const GREETING_PATTERN = /^\s*(?:ciao|salve|buongiorno|buonasera|hey|ehi)\s*[!,.
 const HISTORY_COMMAND_PATTERN = /^\s*(?:(?:mostra|mostrami|fammi\s+vedere)\s+)?(?:(?:gli|le|i)\s+)?(?:altr[ei]|successiv[ei]|prossim[ei]|precedent[ei])(?:\s+(?:\d{1,2}|[a-z]+))?\s*[?!.]?\s*$/i
 const CROSS_MODULE_WRITE_PATTERN = /\b(?:invia|manda|rispondi|pubblica|crea|aggiungi|modifica|aggiorna|imposta|elimina|cancella|chiudi|riapri|assegna|rinnova|riavvia|reboot|spegni|accendi|attiva|disattiva|sposta|lancia|pulisci|svuota|confermo)\b/i
 
+// Fase transitoria: il routing applicativo resta deterministico solo quando
+// la richiesta esprime chiaramente una consultazione/azione sui dati Webcloud.
+// Tutto il resto va direttamente alla conversazione LLM, senza un planner LLM preliminare.
+const GENERAL_CONVERSATION_PATTERN = /^\s*(?:chi\s+sei|cosa\s+sei|cos[’']?è|che\s+cos[’']?è|cosa\s+significa|spieg(?:a|ami)|come\s+funziona|perch[eé]|come\s+si\b|scriv(?:i|imi)|riscriv(?:i|imi)|corregg(?:i|imi)|traduc(?:i|imi)|genera|fammi\s+(?:un|una)|dammi\s+un\s+esempio|aiutami\s+a\s+(?:scrivere|capire|spiegare))\b/i
+const APPLICATION_LOOKUP_PATTERN = /\b(?:quali?|quante?|quanti?|quanto|mostra(?:mi)?|elenca(?:mi)?|cerca|trova|conta|dimmi|dammi|controlla|verifica|analizza|riepiloga|riassumi|dettagli?|stato|situazione|ultimo|ultima|ultimi|ultime|offline|scad(?:e|ono|r[aà]|ranno|ut[oaie])|in\s+scadenza)\b/i
+const INTERNAL_RELATION_PATTERN = /\b(?:servizi?|domini?|rinnovi?|scadenze?|fatture?|piani?|fornitori?|clienti?|gruppi?|webcam|telecamere?|campagne?|newsletter|ticket|mittenti?|eventi?|minisiti?|redirects?|assenze?|ferie|malattie|automazioni?)\b.{0,72}\b(?:di|del|della|dei|degli|delle|cliente|gruppo|account|utente)\b/i
+
+function hasClearApplicationIntent(message = '') {
+  const text = String(message || '')
+  return APPLICATION_LOOKUP_PATTERN.test(text) || CROSS_MODULE_WRITE_PATTERN.test(text) || INTERNAL_RELATION_PATTERN.test(text)
+}
+
 const EXPLICIT_MODULE_PATTERNS = [
   ['facile.sendinitaly', /\bsend\s*in\s*italy\b/i],
   ['facile.webcamgo', /\bwebcamgo\b/i],
@@ -153,6 +163,20 @@ function moduleFromHistory(history = []) {
 
   return null
 }
+
+function agentModuleFromHistory(history = []) {
+  for (const item of (Array.isArray(history) ? history : []).slice(-6).reverse()) {
+    const meta = item?.meta || item?.data?.meta || {}
+    const source = item?.source || item?.data?.source || null
+    const moduleId = meta?.moduleId || null
+    const isAgentTurn = source === 'agent' || meta?.orchestrator === 'agent-v1'
+
+    if (isAgentTurn && moduleId) return moduleId
+  }
+
+  return null
+}
+
 
 function scoreModules(message = '') {
   const text = normalizeSearchText(message)
@@ -320,6 +344,7 @@ function isHistoryContinuationFastPath(message = '', plan = {}) {
 export function planGlobalChat({message = '', context = {}, history = [], credentials = {}} = {}) {
   const availableModuleIds = getAvailableModuleIds({credentials})
   const text = normalizeSearchText(message)
+  const rawMessage = String(message || '').trim()
 
   const unsupportedDomain = UNSUPPORTED_DOMAINS.find(domain => domain.pattern.test(text))
 
@@ -331,171 +356,135 @@ export function planGlobalChat({message = '', context = {}, history = [], creden
     return {type: 'help', capabilities: buildCapabilitySummary({credentials})}
   }
 
-  if (GREETING_PATTERN.test(String(message || '').trim())) {
+  if (GREETING_PATTERN.test(rawMessage)) {
     return {type: 'conversation', source: 'greeting'}
   }
 
-  const deterministicMultiModulePlan = planDeterministicMultiModuleRead(message, credentials)
-  if (deterministicMultiModulePlan) return deterministicMultiModulePlan
-
-  const entityModuleId = moduleFromActiveEntityRequest(text, context)
-  const explicitBrandModuleId = moduleFromExplicitBrand(message)
-  const contextualRequestModuleId = moduleFromContextualRequest(text, context)
-  const strongDomainModuleId = moduleFromStrongDomain(text)
-  const preferContextualRequest = Boolean(
-    contextualRequestModuleId &&
-    (
-      !strongDomainModuleId ||
-      strongDomainModuleId === contextualRequestModuleId ||
-      (
-        contextualRequestModuleId === 'facile.sendinitaly' &&
-        /\b(?:utent[ei]?|account|client[ei])\b[\s\S]{0,60}\bpian[oi]\b/i.test(text)
-      )
-    )
-  )
-  const historyCommandModuleId = HISTORY_COMMAND_PATTERN.test(String(message || ''))
-    ? moduleFromHistory(history)
-    : null
-  const scores = scoreModules(text)
-  const best = scores[0]
-  const second = scores[1]
-
-  let moduleId = null
-  let source = null
-
-  if (historyCommandModuleId) {
-    moduleId = historyCommandModuleId
-    source = 'history'
-  } else if (explicitBrandModuleId) {
-    moduleId = explicitBrandModuleId
-    source = 'message'
-  } else if (preferContextualRequest) {
-    moduleId = contextualRequestModuleId
-    source = 'context'
-  } else if (strongDomainModuleId && strongDomainModuleId !== entityModuleId) {
-    moduleId = strongDomainModuleId
-    source = 'message'
-  } else if (entityModuleId) {
-    moduleId = entityModuleId
-    source = 'active-entity'
-  } else if (best?.score > 0 && best.score > (second?.score || 0)) {
-    moduleId = best.moduleId
-    source = 'message'
-  } else {
-    moduleId = moduleFromHistory(history)
-    source = moduleId ? 'history' : null
+  // Le richieste chiaramente generali (spiegazioni, scrittura, conoscenza)
+  // non devono essere trascinate in un modulo solo per una parola coincidente.
+  if (GENERAL_CONVERSATION_PATTERN.test(rawMessage)) {
+    return {type: 'conversation', source: 'general'}
   }
 
-  if (!moduleId) {
-    moduleId = moduleFromContext(context)
-    source = moduleId ? 'context' : null
-  }
+  // Se il turno precedente è stato gestito dall'agente, i follow-up restano
+  // nello stesso percorso agentico. Si esce solo davanti a un riferimento
+  // inequivocabile a un altro modulo ancora gestito dal routing legacy.
+  const agentHistoryModuleId = agentModuleFromHistory(history)
 
-  if (!moduleId && availableModuleIds.length === 1) {
-    moduleId = availableModuleIds[0]
-    source = 'only-available'
-  }
+  if (agentHistoryModuleId) {
+    const explicitBrandModuleId = moduleFromExplicitBrand(rawMessage)
+    const strongDomainModuleId = moduleFromStrongDomain(text)
+    const activeEntityModuleId = hasExplicitActiveEntityReference(rawMessage)
+      ? getEntityModuleId(context)
+      : null
+    const requestedOtherModuleId = [
+      explicitBrandModuleId,
+      strongDomainModuleId,
+      activeEntityModuleId,
+    ].find(moduleId => moduleId && moduleId !== agentHistoryModuleId)
 
-  if (!moduleId) {
-    const contextDomain = unsupportedDomainFromContext(context)
-
-    if (contextDomain) {
-      return {type: 'unsupported-domain', domain: contextDomain}
-    }
-
-    return {type: 'clarification', reason: 'domain-required', availableModuleIds}
-  }
-
-  if (!availableModuleIds.includes(moduleId)) {
-    return {
-      type: 'unavailable',
-      reason: 'credential-unavailable',
-      moduleId,
-      availableModuleIds,
-    }
-  }
-
-  return {type: 'module', moduleId, source}
-}
-
-export async function resolveGlobalChatPlan(options = {}, callModel = callOllamaJson) {
-  const deterministicPlan = planGlobalChat(options)
-
-  // Help e comandi conversazionali puri non richiedono una seconda chiamata
-  // al planner. I comandi operativi brevi restano deterministici soltanto se
-  // il contesto li ha già ricondotti a un modulo concreto.
-  if (
-    ['help', 'unsupported-domain'].includes(deterministicPlan.type) ||
-    deterministicPlan.type === 'conversation' ||
-    (isSemanticFastPath(options.message) && deterministicPlan.type === 'module') ||
-    isHistoryContinuationFastPath(options.message, deterministicPlan) ||
-    (deterministicPlan.type === 'module' &&
-      deterministicPlan.source === 'active-entity' &&
-      hasExplicitActiveEntityReference(options.message))
-  ) {
-    return deterministicPlan
-  }
-
-  const availableModuleIds = getAvailableModuleIds({credentials: options.credentials || {}})
-  if (typeof callModel !== 'function') return deterministicPlan
-
-  try {
-    const semantic = await planSemanticRequest({
-      message: options.message,
-      context: options.context,
-      history: options.history,
-      availableModuleIds,
-    }, callModel)
-
-    // Il modello è la fonte primaria per distinguere una normale conversazione
-    // da una richiesta che necessita realmente dei dati/app Webcloud.
-    if (semantic?.mode === 'conversation' && semantic.confidence >= 0.6) {
-      return {type: 'conversation', source: 'semantic', semantic}
-    }
-
-    if (semantic?.mode === 'clarification' && semantic.confidence >= 0.72) {
-      return {type: 'clarification', availableModuleIds, source: 'semantic', semantic}
-    }
-
-    if (semantic?.mode === 'tool' && semantic.confidence >= 0.72) {
-      const semanticValidation = validateSemanticModuleSelection(options.message, semantic)
-
-      if (!semanticValidation.valid) {
-        return {
-          type: 'module',
-          moduleId: semanticValidation.requiredModuleId,
-          source: 'message-validation',
-          semantic,
-        }
-      }
-
-      if (!semantic.available) {
+    if (!requestedOtherModuleId) {
+      if (!availableModuleIds.includes(agentHistoryModuleId)) {
         return {
           type: 'unavailable',
-          moduleId: semantic.moduleId,
+          reason: 'credential-unavailable',
+          moduleId: agentHistoryModuleId,
           availableModuleIds,
-          source: 'semantic',
-          semantic,
         }
       }
 
-      return {
-        type: semantic.secondaryModuleIds.length ? 'multi-module' : 'module',
-        moduleId: semantic.moduleId,
-        secondaryModuleIds: semantic.secondaryModuleIds,
-        tasks: semantic.tasks,
-        canonicalMessage: semantic.canonicalMessage,
-        source: 'semantic',
-        confidence: semantic.confidence,
-        semantic,
-      }
+      return {type: 'conversation', source: 'agent-history'}
     }
-  } catch (_) {
-    // Se Ollama non è disponibile, il routing deterministico rimane un fallback
-    // per non interrompere le funzioni applicative già esistenti.
   }
 
-  return deterministicPlan
+  // I follow-up operativi molto brevi devono continuare sul modulo precedente.
+  const historyCommandModuleId = HISTORY_COMMAND_PATTERN.test(rawMessage)
+    ? moduleFromHistory(history)
+    : null
+
+  if (historyCommandModuleId) {
+    if (!availableModuleIds.includes(historyCommandModuleId)) {
+      return {
+        type: 'unavailable',
+        reason: 'credential-unavailable',
+        moduleId: historyCommandModuleId,
+        availableModuleIds,
+      }
+    }
+
+    return {type: 'module', moduleId: historyCommandModuleId, source: 'history'}
+  }
+
+  // Un riferimento esplicito all'entità aperta è anch'esso un follow-up applicativo.
+  const entityModuleId = moduleFromActiveEntityRequest(text, context)
+  if (entityModuleId && hasExplicitActiveEntityReference(rawMessage)) {
+    if (!availableModuleIds.includes(entityModuleId)) {
+      return {
+        type: 'unavailable',
+        reason: 'credential-unavailable',
+        moduleId: entityModuleId,
+        availableModuleIds,
+      }
+    }
+
+    return {type: 'module', moduleId: entityModuleId, source: 'active-entity'}
+  }
+
+  // Finché il tool calling nativo non è attivo, preserviamo le richieste
+  // applicative inequivocabili con il routing esistente. Non usiamo però
+  // l'LLM come classificatore separato.
+  if (hasClearApplicationIntent(rawMessage)) {
+    const deterministicMultiModulePlan = planDeterministicMultiModuleRead(message, credentials)
+    if (deterministicMultiModulePlan) return deterministicMultiModulePlan
+
+    const explicitBrandModuleId = moduleFromExplicitBrand(rawMessage)
+    const contextualRequestModuleId = moduleFromContextualRequest(text, context)
+    const strongDomainModuleId = moduleFromStrongDomain(text)
+    const scores = scoreModules(text)
+    const best = scores[0]
+    const second = scores[1]
+
+    let moduleId = null
+    let source = null
+
+    if (explicitBrandModuleId) {
+      moduleId = explicitBrandModuleId
+      source = 'message'
+    } else if (contextualRequestModuleId) {
+      moduleId = contextualRequestModuleId
+      source = 'context'
+    } else if (strongDomainModuleId) {
+      moduleId = strongDomainModuleId
+      source = 'message'
+    } else if (best?.score > 0 && best.score > (second?.score || 0)) {
+      moduleId = best.moduleId
+      source = 'message'
+    }
+
+    if (moduleId) {
+      if (!availableModuleIds.includes(moduleId)) {
+        return {
+          type: 'unavailable',
+          reason: 'credential-unavailable',
+          moduleId,
+          availableModuleIds,
+        }
+      }
+
+      return {type: 'module', moduleId, source}
+    }
+  }
+
+  // Default fondamentale del nuovo flusso: se non abbiamo una richiesta
+  // applicativa inequivocabile, parla direttamente con Qwen.
+  return {type: 'conversation', source: 'default'}
+}
+
+export async function resolveGlobalChatPlan(options = {}) {
+  // Manteniamo la firma async per compatibilità con la route, ma non viene
+  // eseguita alcuna inferenza di planning: una richiesta conversazionale
+  // comporta una sola chiamata LLM, quella che genera la risposta.
+  return planGlobalChat(options)
 }
 
 export function buildGlobalConversationResponse() {

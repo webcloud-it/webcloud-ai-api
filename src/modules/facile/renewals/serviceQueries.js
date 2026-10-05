@@ -1941,3 +1941,222 @@ export function buildServiceListPayload({
     items,
   }
 }
+
+
+function parseStructuredDate(value, {endOfDayValue = false} = {}) {
+  if (!value) return null
+
+  const text = String(value).trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null
+
+  const date = new Date(`${text}T${endOfDayValue ? '23:59:59.999' : '00:00:00.000'}`)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function buildStructuredDateRange({
+  year = null,
+  from = null,
+  to = null,
+  label = null,
+} = {}) {
+  const normalizedYear = Number(year)
+
+  if (Number.isInteger(normalizedYear) && normalizedYear >= 2000 && normalizedYear <= 2100) {
+    return {
+      start: new Date(normalizedYear, 0, 1, 0, 0, 0, 0),
+      end: new Date(normalizedYear, 11, 31, 23, 59, 59, 999),
+      label: label || String(normalizedYear),
+    }
+  }
+
+  const start = parseStructuredDate(from)
+  const end = parseStructuredDate(to, {endOfDayValue: true})
+
+  if (!start && !end) return null
+
+  return {
+    start: start || new Date(2000, 0, 1, 0, 0, 0, 0),
+    end: end || new Date(2100, 11, 31, 23, 59, 59, 999),
+    label: label || [from, to].filter(Boolean).join(' - '),
+  }
+}
+
+const STRUCTURED_SERVICE_FLAG_FILTERS = new Set([
+  'to-renew',
+  'to-transfer',
+  'auto-renew',
+  'no-auto-renew',
+  'has-plesk',
+  'no-plesk',
+  'plesk-sync',
+  'no-plesk-sync',
+  'has-domain-record',
+  'no-domain-record',
+  'has-auth-code',
+  'no-auth-code',
+  'has-communications',
+  'no-communications',
+  'has-traffic',
+  'space-full',
+  'space-low',
+])
+
+
+function normalizeStructuredDontRenewMode(value = 'any') {
+  const mode = String(value || '').trim().toLowerCase()
+  return ['any', 'exclude', 'only'].includes(mode) ? mode : 'any'
+}
+
+
+/**
+ * Esegue una query strutturata sui servizi senza reinterpretare linguaggio naturale.
+ * È il contratto dati usato dai tool AI: l'LLM sceglie gli argomenti, mentre
+ * il backend applica filtri e regole già esistenti in serviceQueries.
+ */
+export function buildStructuredServiceListPayload({
+  services = [],
+  settings = {},
+  customerOrGroup = null,
+  serviceType = null,
+  plan = null,
+  supplier = null,
+  expiresYear = null,
+  expiresFrom = null,
+  expiresTo = null,
+  supplierExpiresYear = null,
+  supplierExpiresFrom = null,
+  supplierExpiresTo = null,
+  flags = [],
+  spaceUsageGte = null,
+  dontRenewMode = 'any',
+  limit = DEFAULT_LIMIT,
+  offset = 0,
+  customerId = null,
+  groupId = null,
+  serviceId = null,
+  now = new Date(),
+} = {}) {
+  const filters = []
+
+  const pushTermFilter = (kind, term, labelPrefix) => {
+    const cleaned = compactText(term || '')
+    if (!cleaned) return
+    filters.push({
+      kind,
+      term: cleaned,
+      label: `${labelPrefix} "${cleaned}"`,
+    })
+  }
+
+  pushTermFilter('customer-or-group', customerOrGroup, 'di cliente/gruppo contenente')
+  pushTermFilter('service-type', serviceType, 'di tipo')
+  pushTermFilter('plan', plan, 'con piano contenente')
+  pushTermFilter('supplier', supplier, 'con fornitore contenente')
+
+  const expiryRange = buildStructuredDateRange({
+    year: expiresYear,
+    from: expiresFrom,
+    to: expiresTo,
+    label: expiresYear ? String(expiresYear) : null,
+  })
+
+  if (expiryRange) {
+    filters.push({
+      kind: 'expires-in-range',
+      dateRange: expiryRange,
+      label: `con scadenza ${expiryRange.label}`,
+    })
+  }
+
+  const supplierExpiryRange = buildStructuredDateRange({
+    year: supplierExpiresYear,
+    from: supplierExpiresFrom,
+    to: supplierExpiresTo,
+    label: supplierExpiresYear ? String(supplierExpiresYear) : null,
+  })
+
+  if (supplierExpiryRange) {
+    filters.push({
+      kind: 'supplier-expires-in-range',
+      dateRange: supplierExpiryRange,
+      label: `con scadenza fornitore ${supplierExpiryRange.label}`,
+    })
+  }
+
+  for (const flag of Array.isArray(flags) ? flags : []) {
+    if (!STRUCTURED_SERVICE_FLAG_FILTERS.has(flag)) continue
+    filters.push({
+      kind: flag,
+      label: flag,
+    })
+  }
+
+  const hasSpaceUsageThreshold =
+    spaceUsageGte !== null &&
+    spaceUsageGte !== undefined &&
+    String(spaceUsageGte).trim() !== ''
+
+  if (hasSpaceUsageThreshold) {
+    const threshold = Number(spaceUsageGte)
+
+    if (Number.isFinite(threshold) && threshold >= 0 && threshold <= 100) {
+      filters.push({
+        kind: 'space-usage-gte',
+        threshold,
+        label: `con spazio utilizzato almeno al ${threshold}%`,
+      })
+    }
+  }
+
+  const safeDontRenewMode = normalizeStructuredDontRenewMode(dontRenewMode)
+
+  if (safeDontRenewMode === 'only') {
+    filters.push({
+      kind: 'dont-renew',
+      label: 'marcati NON RINNOVARE',
+    })
+  }
+
+  if (!filters.length) {
+    filters.push({kind: 'all', label: 'servizi'})
+  }
+
+  const safeLimit = clampLimit(limit, DEFAULT_LIMIT)
+  const safeOffset = Math.max(Number.parseInt(String(offset ?? 0), 10) || 0, 0)
+  const safeIncludeDontRenew = safeDontRenewMode !== 'exclude'
+
+  const previousQuery = {
+    type: 'service-list-query',
+    label: describeFilters(filters),
+    filters,
+    limit: safeLimit,
+    offset: safeOffset,
+    includeDontRenew: safeIncludeDontRenew,
+    sourceMessage: 'agent-tool',
+  }
+
+  const data = buildServiceListPayload({
+    services,
+    settings,
+    message: '',
+    previousQuery,
+    pagination: {
+      direction: 'current',
+      limit: safeLimit,
+      offset: safeOffset,
+    },
+    includeDontRenewOverride: safeIncludeDontRenew,
+    customerId,
+    groupId,
+    serviceId,
+    now,
+  })
+
+  return {
+    ...data,
+    query: {
+      ...(data.query || {}),
+      dontRenewMode: safeDontRenewMode,
+    },
+  }
+}
