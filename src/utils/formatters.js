@@ -25,6 +25,22 @@ export function formatDateTime(value) {
   })
 }
 
+// Directus communication_date is a wall-clock ISO value without an offset.
+// Preserve that recorded time; convert explicitly zoned instants to Europe/Rome.
+export function formatRecordedDateTime(value) {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const input = value.trim()
+  const dateOnly = input.length === 10
+  const time = input.slice(10)
+  const zoned = input.endsWith('Z') || time.includes('+') || time.includes('-')
+  const date = new Date(zoned || dateOnly ? input : `${input}Z`)
+  if (Number.isNaN(date.getTime())) return null
+  const options = {dateStyle: 'long', timeZone: zoned ? 'Europe/Rome' : 'UTC'}
+  const day = new Intl.DateTimeFormat('it-IT', options).format(date)
+  if (dateOnly) return day
+  return `${day} alle ${new Intl.DateTimeFormat('it-IT', {hour: '2-digit', minute: '2-digit', timeZone: options.timeZone}).format(date)}`
+}
+
 export function formatBytes(value) {
   const bytes = Number(value || 0)
 

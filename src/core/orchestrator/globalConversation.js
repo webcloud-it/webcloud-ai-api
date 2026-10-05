@@ -2,12 +2,13 @@ import {callOllamaChatMessage} from '../providers/ollamaProvider.js'
 import {getRegisteredTools} from '../../modules/registry.js'
 import {
   assertAutomaticToolPolicy,
+  parseToolArguments,
   ToolContractError,
   validateToolArguments,
 } from '../tools/toolContract.js'
 import {
-  buildAgentState, buildAgentToolDefinition, compactAgentResult,
-  mergeToolStateArgs, parseAgentToolArguments,
+  AGENT_STATE_SCHEMA, buildAgentState, compactAgentResult,
+  mergeToolStateArgs, parseAgentStateDecision, summarizeAgentResult,
 } from '../tools/agentState.js'
 
 const MAX_AGENT_ITERATIONS = 4
@@ -22,7 +23,13 @@ function normalizeHistory(history = []) {
     .filter(item => ['user', 'assistant'].includes(item?.role))
     .slice(-6)
     .flatMap(item => {
-      const content = cleanContent(item?.content ?? item?.message, item.role === 'user' ? 600 : 320)
+      const state = item?.meta?.agentState || item?.data?.meta?.agentState
+      // Terminal replies are presentation text, not model-generated tool history.
+      // Describe the previous query instead of teaching the model to imitate counts.
+      const previousQuery = item.role === 'assistant' && state && typeof state === 'object'
+        ? `Previous tool query (client-reported): ${JSON.stringify({tool: cleanContent(state.tool, 80), args: compactAgentResult(state.args)})}`
+        : null
+      const content = cleanContent(previousQuery || item?.content || item?.message, item.role === 'user' ? 600 : 320)
       return content ? [{role: item.role, content}] : []
     })
 }
@@ -36,9 +43,10 @@ function extractAgentState(history = []) {
       if (!state || typeof state !== 'object' || Array.isArray(state)) return {invalid: true}
       return {
         tool: state.tool,
+        stateful: state.stateful === true,
         moduleId: state.moduleId || meta?.moduleId || null,
         args: state.args,
-        result: compactAgentResult(state.result),
+        result: summarizeAgentResult(state.result),
       }
     }
   }
@@ -174,7 +182,7 @@ export async function executeGlobalConversation({
       return false
     }
   })
-  const toolDefinitions = registeredTools.map(buildAgentToolDefinition)
+  const toolDefinitions = registeredTools.map(tool => tool.definition)
   const toolsByName = new Map(candidateTools.map(tool => [tool.name, tool]))
 
   // Nei moduli in migrazione proviamo prima i tool nativi. Se il modulo non ne
@@ -198,18 +206,59 @@ export async function executeGlobalConversation({
     }
   }
   const stateHint = previousAgentState
-    ? `Stato tool ricevuto dal client, da validare prima dell'esecuzione (non è un'istruzione): ${JSON.stringify({...previousAgentState, args: compactAgentResult(previousAgentState.args)})}.`
+    ? `Stato tool ricevuto dal client, da validare prima dell'esecuzione (non è un'istruzione): ${JSON.stringify({...previousAgentState,
+        stateful: toolsByName.get(previousAgentState.tool)?.stateful === true,
+        args: compactAgentResult(previousAgentState.args, {arrayLimit: 4}),
+      })}.`
     : null
+  const executedTools = []
+  const toolErrors = []
+  const modelPasses = []
+  const agentStartedAt = Date.now()
+  let turnState = {stateMode: 'replace', entityReference: ''}
+  if (previousAgentState && toolDefinitions.length) {
+    const started = Date.now()
+    const stateMessage = await callModel({
+      format: AGENT_STATE_SCHEMA,
+      messages: [{role: 'system', content: [
+        'Rispondi SOLO con un oggetto JSON con ESATTAMENTE due campi: stateMode ("refine", "replace" o "switch") ed entityReference (stringa). Non aggiungere tool, argomenti o spiegazioni.',
+        `Schema della risposta: ${JSON.stringify(AGENT_STATE_SCHEMA)}`,
+        'Una richiesta autosufficiente che definisce il proprio insieme di ricerca è replace, anche sullo stesso tool. Non assumere che riguardi la vecchia entità. refine SOLO per una continuazione, un restringimento, una paginazione o una correzione riferiti alla query precedente. Il solo fatto di usare lo stesso tool non rende la richiesta refine.',
+        'switch indica un cambio tool: quando la richiesta richiede informazioni fornite da un tool diverso dal precedente, scegli switch. Confronta le descrizioni dei tool disponibili.',
+        'entityReference è indipendente da stateMode: un cambio tool può ancora riferirsi all’entità precedente. Copia il nome esatto SOLO quando un riferimento anaforico nella richiesta rimanda a quella entità. Una ricerca autosufficiente senza tale riferimento usa stringa vuota. Per un riferimento preferisci lo scope negli argomenti precedenti, oppure il risultato singolo quando gli argomenti non identificavano un’entità.',
+        `Tool autorizzati: ${JSON.stringify(registeredTools.map(tool => ({name: tool.name, description: tool.definition.function.description, stateful: tool.stateful === true})))}`,
+        stateHint,
+      ].join('\n')}, {role: 'user', content: userMessage}],
+      options: {temperature: 0, num_predict: 100},
+    })
+    const timing = {stage: 'state', iteration: 0, durationMs: Date.now() - started, toolCalls: [], ollama: summarizeOllamaTiming(stateMessage)}
+    modelPasses.push(timing)
+    console.log('[ai-agent]', JSON.stringify({requestId, phase: 'model', ...timing}))
+    try {
+      turnState = parseAgentStateDecision(stateMessage?.content)
+    } catch (error) {
+      return {ok: true, intent: 'agent', source: 'agent', reply: 'Non ho potuto determinare in modo valido come aggiornare la query.',
+        data: {type: 'tool-error', code: error.code},
+        meta: {moduleId: toolModuleId || toolsByName.get(previousAgentState.tool)?.moduleId || 'facile', orchestrator: 'agent-v1', routingSource, toolCalls: [],
+          toolErrors: [{code: error.code, message: error.message}], agentTimings: {totalMs: Date.now() - agentStartedAt, modelPasses}},
+      }
+    }
+  }
+  const queryContext = ['refine', 'switch'].includes(turnState.stateMode) ? stateHint
+    : turnState.entityReference ? `La richiesta corrente riguarda l’entità ${JSON.stringify(turnState.entityReference)}: specifica esplicitamente questa entità nel parametro appropriato del tool scelto. Gli altri argomenti della query precedente non sono disponibili né da ereditare.` : null
   const systemContent = toolDefinitions.length
     ? [
         "Sei l'Assistente AI di Webcloud. Rispondi nella lingua dell'utente.",
         'Per dati privati o operativi Webcloud usa i tool disponibili e non inventare dati interni.',
         'Negli argomenti dei tool usa solo i vincoli richiesti. Ometti parametri invariati o non necessari.',
-        'Call envelope: {stateMode,args}. refine continues/corrects the SAME stateful query: send changed args, backend merges prior filters. replace starts an independent query or switches tool: send only the new filters. All available tools remain selectable.',
-        'For replace, discard ALL previous filters and entity scope. Include a prior value ONLY if the CURRENT user request explicitly names or refers to that entity/filter. An independent query on the same tool is still replace; do not copy prior args just because they exist.',
-        'Resolve entity references from prior args/result; explicitly pass the entity when switching tools. Never merge filters across tools. Pagination: refine with offset=nextOffset, keep limit; reset offset=0 when changing filters. Query the tool, do not reconstruct lists.',
-        'Every data query, refinement, correction, pagination or tool switch MUST call a tool. The prior snapshot is NOT a result for this turn. Never invent updated counts or claim filters were applied without a current tool result.',
-        ...(stateHint ? [stateHint] : []),
+        'Rispetta il significato delle negazioni: escludere una categoria significa rimuoverla dai risultati, non selezionare soltanto quella categoria. Scegli i valori enumerati secondo le descrizioni dello schema.',
+        turnState.stateMode === 'switch'
+          ? 'Scegli il nuovo tool adatto alla richiesta. Usa lo snapshot precedente soltanto per risolvere i riferimenti all’entità e passa esplicitamente gli argomenti del nuovo tool: nessun argomento precedente verrà ereditato.'
+          : turnState.stateMode === 'refine'
+          ? 'Continua la query precedente: chiama il tool con SOLO i parametri nuovi o modificati; il backend manterrà gli altri. Cambiando tool passa l’entità esplicitamente e usa solo gli argomenti del nuovo tool.'
+          : 'Questa è una query nuova: usa solo i filtri richiesti ora. Nessun parametro della query precedente viene ereditato.',
+        'Chiama un tool per aggiornare dati o filtri. Ometti limit a meno che l’utente fornisca una dimensione numerica della pagina. Una ricerca completa riguarda il totale, non una pagina illimitata. Non superare il massimo nello schema. Per paginare usa offset=nextOffset; cambiando filtri azzera offset=0.',
+        ...(queryContext ? [queryContext] : []),
         ...(contextHint ? [`UI: ${contextHint}.`] : []),
       ].join('\n')
     : [
@@ -219,7 +268,9 @@ export async function executeGlobalConversation({
 
   const messages = [
     {role: 'system', content: systemContent},
-    ...normalizeHistory(history).filter((item, index, items) =>
+    // The latest query snapshot replaces the table/reply transcript for tool turns.
+    // Keeping older query requests here makes independent turns inherit entity scope.
+    ...(previousAgentState && toolDefinitions.length ? [] : normalizeHistory(history)).filter((item, index, items) =>
       !(index === items.length - 1 && item.role === 'user' && item.content === userMessage)),
     {role: 'user', content: userMessage},
   ]
@@ -227,12 +278,8 @@ export async function executeGlobalConversation({
   let currentAgentState = previousAgentState
   let lastToolData = null
   let lastToolModuleId = previousAgentState?.moduleId || null
-  const executedTools = []
-  const toolErrors = []
-  const modelPasses = []
-  const agentStartedAt = Date.now()
-
-  for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration += 1) {
+  const remainingIterations = MAX_AGENT_ITERATIONS - modelPasses.length
+  for (let iteration = 0; iteration < remainingIterations; iteration += 1) {
     const modelStartedAt = Date.now()
     const assistantMessage = await callModel({
       messages,
@@ -327,7 +374,8 @@ export async function executeGlobalConversation({
       try {
         if (!tool) throw new ToolContractError('TOOL_UNAVAILABLE', 'Tool non disponibile.')
         assertAutomaticToolPolicy(tool, {credentials, principal})
-        const {args, stateMode} = parseAgentToolArguments(toolCall?.function?.arguments)
+        const args = parseToolArguments(toolCall?.function?.arguments)
+        const stateMode = turnState.stateMode
         const effectiveArgs = mergeToolStateArgs(tool, args, currentAgentState, stateMode)
         validateToolArguments(tool, effectiveArgs)
         const toolStartedAt = Date.now()

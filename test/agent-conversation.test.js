@@ -10,17 +10,12 @@ import {renewalsTools} from '../src/modules/facile/renewals/tools.js'
 import {createAuthTokenMiddleware} from '../src/middlewares/authToken.js'
 import chatRouter from '../src/routes/chat.js'
 import {env} from '../src/config/env.js'
-import {buildAgentToolDefinition, compactAgentResult} from '../src/core/tools/agentState.js'
+import {AGENT_STATE_SCHEMA, compactAgentResult, buildAgentState} from '../src/core/tools/agentState.js'
 
 const credentials = {crm: 'crm-session'}
 const principal = {id: 'operator-1', roleId: 'operator', roleName: null, source: 'crm'}
 const toolCall = (name, args, stateMode = 'replace') => {
-  let payload = {stateMode, args}
-  if (typeof args === 'string') {
-    try { payload = JSON.stringify({stateMode, args: JSON.parse(args)}) }
-    catch (_) { payload = args }
-  }
-  return {role: 'assistant', content: '', tool_calls: [{function: {name, arguments: payload}}]}
+  return {role: 'assistant', content: '', tool_calls: [{function: {name, arguments: args}}], testStateMode: stateMode}
 }
 const noCall = {role: 'assistant', content: 'Non posso completare la richiesta.'}
 
@@ -37,15 +32,20 @@ function fixture(overrides = {}) {
   const requests = []
   async function run(args, options = {}, corrections = []) {
     const responses = [toolCall(tool.name, args, options.history ? 'refine' : 'replace'), ...corrections, noCall]
+    const nativeModel = options.callModel || (async request => {
+      requests.push(structuredClone(request))
+      return responses.shift() || noCall
+    })
+    const {callModel, ...coreOptions} = options
     return executeGlobalConversation({
       message: 'Richiesta di test', credentials, principal,
       fallbackOnNoTool: true,
       listTools: () => [tool],
       callModel: async request => {
-        requests.push(structuredClone(request))
-        return responses.shift() || noCall
+        if (request.format) return {content: JSON.stringify({stateMode: 'refine', entityReference: ''})}
+        return nativeModel(request)
       },
-      ...options,
+      ...coreOptions,
     })
   }
   return {tool, calls, requests, run}
@@ -166,6 +166,7 @@ function historyFor(args) {
 function stateFixture() {
   const calls = []
   const requests = []
+  const stateRequests = []
   const tools = renewalsTools.map(tool => ({...tool, execute: async args => {
     calls.push({name: tool.name, args})
     return {ok: true, reply: 'Risultato verificato.', moduleId: tool.moduleId,
@@ -175,15 +176,23 @@ function stateFixture() {
   }}))
   async function turn(name, args, stateMode = 'replace', history = [], options = {}) {
     const responses = [toolCall(name, args, stateMode), noCall]
+    const nativeModel = options.callModel || (async request => { requests.push(structuredClone(request)); return responses.shift() || noCall })
+    const {callModel, decision, ...coreOptions} = options
     return executeGlobalConversation({
       message: 'Turno di test', credentials, principal, history,
       routingSource: 'agent-history', fallbackOnNoTool: true,
       listTools: () => tools,
-      callModel: async request => { requests.push(structuredClone(request)); return responses.shift() || noCall },
-      ...options,
+      callModel: async request => {
+        if (request.format) {
+          stateRequests.push(structuredClone(request))
+          return {content: typeof decision === 'string' ? decision : JSON.stringify(decision || {stateMode, entityReference: args?.customerOrGroup || ''})}
+        }
+        return nativeModel(request)
+      },
+      ...coreOptions,
     })
   }
-  return {calls, requests, tools, turn}
+  return {calls, requests, stateRequests, tools, turn}
 }
 
 const S = 'renewals_search_services'
@@ -237,6 +246,22 @@ test('Step C: cambio tool non copia argomenti nemmeno se il modello indica refin
   assert.deepEqual(calls[1].args, {latest: true})
 })
 
+test('Step C: switch espone il contesto entità anche senza entityReference e non fonde filtri', async () => {
+  const {turn, calls, requests} = stateFixture()
+  const history = historyFor({customerOrGroup: 'Zilio Group', expiresYear: 2026, dontRenewMode: 'exclude'})
+  await turn(C, {customerOrGroup: 'Zilio Group', latest: true}, 'switch', history,
+    {decision: {stateMode: 'switch', entityReference: ''}})
+  assert.match(requests[0].messages[0].content, /Zilio Group/)
+  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), [S, C])
+  assert.deepEqual(calls[0].args, {customerOrGroup: 'Zilio Group', latest: true})
+})
+
+test('Step C: switch non fonde lo stato neppure se la chiamata nativa sceglie lo stesso tool', async () => {
+  const {turn, calls} = stateFixture()
+  await turn(S, {expiresYear: 2027}, 'switch', historyFor({customerOrGroup: 'Zilio Group', dontRenewMode: 'exclude'}))
+  assert.deepEqual(calls[0].args, {expiresYear: 2027})
+})
+
 test('Step C: comunicazioni → servizi usa il risultato compatto per il riferimento e non fonde latest', async () => {
   const {turn, calls, requests} = stateFixture()
   const prior = await turn(C, {latest: true})
@@ -277,24 +302,21 @@ test('Step C: validation dopo merge resta vincolante; replace può abbandonare l
   assert.deepEqual(calls[0].args, {expiresYear: 2027})
 })
 
-for (const payload of [{args: {}}, {stateMode: 'guess', args: {}}, {stateMode: 'replace'}, {stateMode: 'refine', args: {}, extra: true}]) {
+for (const payload of [{}, {stateMode: 'guess', entityReference: ''}, {stateMode: 'refine', entityReference: null}, {stateMode: 'refine', entityReference: '', extra: true}]) {
   test(`Step C: protocollo invalido non esegue e non causa fallback ${JSON.stringify(payload)}`, async () => {
-    const {turn, calls, requests} = stateFixture()
-    let iteration = 0
-    const result = await turn(S, {}, 'replace', [], {callModel: async request => {
-      requests.push(structuredClone(request))
-      return iteration++ === 0 ? {role: 'assistant', tool_calls: [{function: {name: S, arguments: payload}}]} : noCall
-    }})
+    const {turn, calls, stateRequests, requests} = stateFixture()
+    const result = await turn(S, {}, 'replace', historyFor({}), {decision: payload})
     assertDenied(result, calls, 'AGENT_STATE_PROTOCOL_ERROR')
-    assert.equal(requests[1].messages.at(-1).role, 'tool')
+    assert.deepEqual(stateRequests[0].format, AGENT_STATE_SCHEMA)
+    assert.equal(requests.length, 0)
   })
 }
 
-test('Step C: refine senza uno stato precedente viene corretto con replace nella stessa conversazione', async () => {
-  const {turn, calls} = stateFixture()
-  const responses = [toolCall(S, {expiresYear: 2027}, 'refine'), toolCall(S, {expiresYear: 2027}, 'replace')]
-  const result = await turn(S, {}, 'replace', [], {callModel: async () => responses.shift()})
-  assert.equal(result.meta.toolErrors[0].code, 'AGENT_STATE_INVALID')
+test('Step C: senza stato non serve una decisione di relazione e la query è nuova', async () => {
+  const {turn, calls, stateRequests} = stateFixture()
+  const result = await turn(S, {expiresYear: 2027})
+  assert.equal(result.meta.toolErrors, undefined)
+  assert.equal(stateRequests.length, 0)
   assert.equal(calls.length, 1)
 })
 
@@ -306,7 +328,7 @@ test('Step C: scope esplicito del modulo viene mantenuto e non espande il catalo
   assert.equal(missing, null)
 })
 
-test('Step C: history resta compatta, comprende user e assistant e non replica le liste client', async () => {
+test('Step C: lo snapshot compatto sostituisce il transcript delle query senza replicare le liste client', async () => {
   const {turn, requests} = stateFixture()
   const history = [
     {role: 'user', content: 'Che servizi ha Zilio Group?'},
@@ -316,21 +338,20 @@ test('Step C: history resta compatta, comprende user e assistant e non replica l
   ]
   await turn(C, {customerOrGroup: 'Zilio Group', latest: true}, 'replace', history)
   const messages = requests[0].messages
-  assert.deepEqual(messages.map(item => item.role), ['system', 'user', 'assistant', 'user'])
-  assert.equal(messages[2].content.length, 320)
+  assert.deepEqual(messages.map(item => item.role), ['system', 'user'])
+  assert.equal(messages[1].content, 'Turno di test')
+  assert.match(messages[0].content, /Zilio Group/)
+  assert.doesNotMatch(JSON.stringify(messages), /Risultato precedente/)
   assert.doesNotMatch(JSON.stringify(messages), /FULL_TABLE/)
   assert.ok(JSON.stringify(messages).length < 4000)
   assert.ok(JSON.stringify(compactAgentResult(history[1].meta.agentState.result)).length < 3500)
 })
 
-test('Step C: projection del protocollo non muta o duplica gli schemi business', () => {
-  for (const tool of renewalsTools) {
-    const before = structuredClone(tool.definition)
-    const projection = buildAgentToolDefinition(tool)
-    assert.equal(projection.function.parameters.properties.args, tool.definition.function.parameters)
-    assert.deepEqual(tool.definition, before)
-    assert.equal(Object.hasOwn(tool.definition.function.parameters.properties, 'stateMode'), false)
-  }
+test('Step C: il protocollo resta separato e i tool nativi mantengono gli schemi originali', async () => {
+  const {turn, requests} = stateFixture()
+  await turn(S, {})
+  assert.deepEqual(requests[0].tools, renewalsTools.map(tool => tool.definition))
+  assert.equal(Object.hasOwn(requests[0].tools[0].function.parameters.properties, 'stateMode'), false)
 })
 
 test('Step C: paginazione refine conserva limit/offset nello stato, replace li abbandona', async () => {
@@ -347,13 +368,13 @@ test('Step C: offset invalido ereditato è validato dopo merge e non esegue', as
   assertDenied(await turn(S, {}, 'refine', historyFor({offset: -1})), calls, 'TOOL_VALIDATION_ERROR')
 })
 
-test('Step C: JSON annidato come stringa non aggira il tipo object del protocollo', async () => {
+test('Step C: un falso involucro args non aggira il contratto business piatto', async () => {
   const {turn, calls} = stateFixture()
   const responses = [{role: 'assistant', tool_calls: [{function: {name: S,
-    arguments: {stateMode: 'replace', args: '{"expiresYear":2027}'},
+    arguments: {args: '{"expiresYear":2027}'},
   }}]}, noCall]
   const result = await turn(S, {}, 'replace', [], {callModel: async () => responses.shift()})
-  assertDenied(result, calls, 'INVALID_TOOL_ARGUMENTS')
+  assertDenied(result, calls, 'TOOL_VALIDATION_ERROR')
 })
 
 test('Step C: riepilogo resta strutturato e limitato anche con campi e liste enormi', () => {
@@ -364,6 +385,51 @@ test('Step C: riepilogo resta strutturato e limitato anche con campi e liste eno
   assert.ok(JSON.stringify(compact).length < 2200)
   assert.equal(compact.items.length, 1)
   assert.deepEqual(compactAgentResult(compact), compact)
+})
+
+test('Step C: il campione di una lista non restringe lo scope al primo cliente', () => {
+  const tool = renewalsTools[0]
+  const state = buildAgentState(tool, {customerOrGroup: 'Zilio Group'}, {
+    modelContent: {total: 24, shown: 20, nextOffset: 20, items: [{customerName: 'Zilio Environment'}]},
+  })
+  assert.equal(state.args.customerOrGroup, 'Zilio Group')
+  assert.equal(state.result.items, undefined)
+  assert.equal(state.result.nextOffset, 20)
+})
+
+test('Step C: gli argomenti array restano visibili per intero nel contesto della query', async () => {
+  const {turn, requests} = stateFixture()
+  await turn(S, {expiresYear: 2027}, 'refine', historyFor({flags: ['to-renew', 'has-plesk']}))
+  assert.match(requests[0].messages[0].content, /to-renew/)
+  assert.match(requests[0].messages[0].content, /has-plesk/)
+})
+
+test('Step C: replace non espone la vecchia query alla fase di costruzione degli argomenti', async () => {
+  const {turn, requests, stateRequests} = stateFixture()
+  const history = historyFor({customerOrGroup: 'Zilio Group', expiresYear: 2026, dontRenewMode: 'exclude'})
+  await turn(S, {expiresYear: 2027}, 'replace', history)
+  assert.match(stateRequests[0].messages[0].content, /Zilio Group/)
+  assert.doesNotMatch(JSON.stringify(requests[0].messages), /Zilio Group|2026|exclude/)
+  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), [S, C])
+})
+
+test('Step C: decisione di stato con JSON malformato non esegue tool né fallback', async () => {
+  const {turn, calls, requests} = stateFixture()
+  const result = await turn(S, {}, 'replace', historyFor({}), {decision: '{broken'})
+  assertDenied(result, calls, 'AGENT_STATE_PROTOCOL_ERROR')
+  assert.equal(requests.length, 0)
+})
+
+test('Step C: decisione e tentativi business rispettano insieme il budget di quattro chiamate modello', async () => {
+  const {turn, calls, requests, stateRequests} = stateFixture()
+  const result = await turn(S, {}, 'refine', historyFor({}), {callModel: async request => {
+    requests.push(structuredClone(request))
+    return toolCall(S, {limit: 0})
+  }})
+  assert.equal(calls.length, 0)
+  assert.equal(stateRequests.length + requests.length, 4)
+  assert.equal(result.meta.maxIterationsReached, true)
+  assert.notEqual(result, null)
 })
 
 test('valida agentState non fidato dopo il merge, senza eseguire', async () => {

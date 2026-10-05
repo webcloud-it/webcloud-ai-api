@@ -3,6 +3,62 @@ import assert from 'node:assert/strict'
 
 import {attachChatPresentation, buildChatPresentation} from '../src/core/presentation/chatPresentation.js'
 
+test('Step D: card comunicazione con data registrata, label e tutti i metadati verificati', () => {
+  const payload = attachChatPresentation({data: {type: 'renewals-communications', total: 380, latest: true,
+    items: [{id: 'm1', communicationDate: '2026-10-02T15:22:47', serviceName: 'servizio.it',
+      customerName: 'Zilio Group Srl', groupName: ' Zilio Group Srl ', type: '1', typeLabel: 'Inviato richiesta rinnovo',
+      to: 'admin@example.it', subject: 'Rinnovo servizio', sentAutomatically: false,
+      html_content: 'PRIVATE_BODY', generation_context: 'PRIVATE_CONTEXT'}],
+  }})
+  const presentation = payload.data.presentation
+  assert.equal(presentation.version, 1)
+  assert.equal(presentation.kind, 'list')
+  assert.equal(presentation.cards.length, 1)
+  const card = presentation.cards[0]
+  assert.equal(card.subtitle, 'Zilio Group Srl')
+  assert.equal(card.badge, 'Inviato richiesta rinnovo')
+  assert.deepEqual(card.details, [
+    {label: 'Data', value: '2 ottobre 2026 alle 15:22'},
+    {label: 'Servizio', value: 'servizio.it'},
+    {label: 'Cliente / gruppo', value: 'Zilio Group Srl'},
+    {label: 'Tipo', value: 'Inviato richiesta rinnovo'},
+    {label: 'Destinatario', value: 'admin@example.it'},
+    {label: 'Oggetto', value: 'Rinnovo servizio'},
+    {label: 'Invio', value: 'Manuale'},
+  ])
+  assert.doesNotMatch(JSON.stringify(presentation), /PRIVATE_BODY|PRIVATE_CONTEXT/)
+  assert.equal(payload.data.actions[0].path, '/crm/renewals/panel')
+})
+
+test('Step D: card scarna omette destinatario, oggetto, tipo numerico e modalità sconosciuta', () => {
+  const card = buildChatPresentation({type: 'renewals-communications', items: [{id: 'm1', type: '1'}]}).cards[0]
+  assert.equal(Object.hasOwn(card, 'badge'), false)
+  assert.equal(Object.hasOwn(card, 'subtitle'), false)
+  assert.deepEqual(card.details, [])
+  assert.doesNotMatch(JSON.stringify(card), /null|undefined/)
+})
+
+test('Step D: lista comunicazioni mostra fino a venti card coerenti con il limite del tool', () => {
+  const presentation = buildChatPresentation({type: 'renewals-communications', total: 40,
+    items: Array.from({length: 30}, (_, i) => ({id: `m${i}`, sentAutomatically: true})),
+  })
+  assert.equal(presentation.cards.length, 20)
+  assert.equal(presentation.total, 40)
+  assert.deepEqual(presentation.cards[0].details, [{label: 'Invio', value: 'Automatico'}])
+})
+
+test('Step D: istante con fuso e data senza ora vengono formattati senza usare dateCreated', () => {
+  const data = {type: 'renewals-communications', items: [
+    {id: 'zoned', communicationDate: '2026-10-02T13:22:47Z', dateCreated: '2027-01-01'},
+    {id: 'day', communicationDate: '2026-10-02'},
+    {id: 'missing', dateCreated: '2027-01-01'},
+  ]}
+  const cards = buildChatPresentation(data).cards
+  assert.deepEqual(cards[0].details, [{label: 'Data', value: '2 ottobre 2026 alle 15:22'}])
+  assert.deepEqual(cards[1].details, [{label: 'Data', value: '2 ottobre 2026'}])
+  assert.deepEqual(cards[2].details, [])
+})
+
 test('builds navigable Send in Italy user cards without copying raw fields', () => {
   const presentation = buildChatPresentation({
     type: 'sendinitaly-users',

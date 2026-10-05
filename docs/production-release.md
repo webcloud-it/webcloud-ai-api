@@ -89,3 +89,10 @@ Ordine di rilascio:
 5. pubblicare widget e integrazione Facile;
 6. eseguire smoke test su letture, disambiguazione e una proposta con conferma,
    senza confermare operazioni reali durante il collaudo.
+
+## Debito tecnico approvato — Step C (5 ottobre 2026)
+
+Il protocollo `refine/replace/switch` aggiunge una chiamata LLM prima della native
+tool call sui turni con stato. Questo costo resta accettato come debito tecnico;
+non viene ottimizzato nello Step D. Gli step successivi non devono aggiungere
+altri planner LLM intermedi. Il limite complessivo resta quattro chiamate modello.

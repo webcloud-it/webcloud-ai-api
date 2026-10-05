@@ -1,5 +1,7 @@
 import {getAllServices, getSettings} from './service.js'
 import {buildStructuredServiceListPayload} from './serviceQueries.js'
+import {formatRecordedDateTime} from '../../../utils/formatters.js'
+import {ToolContractError} from '../../../core/tools/toolContract.js'
 
 const RENEWALS_SEARCH_SERVICES_NAME = 'renewals_search_services'
 const RENEWALS_SEARCH_COMMUNICATIONS_NAME = 'renewals_search_communications'
@@ -70,14 +72,14 @@ const communicationToolDefinition = {
   function: {
     name: RENEWALS_SEARCH_COMMUNICATIONS_NAME,
     description:
-      'Cerca comunicazioni o email di rinnovo già inviate. Restituisce data, destinatario, oggetto, servizio e cliente/gruppo.',
+      'Consulta le comunicazioni di rinnovo registrate e i loro metadati verificati: data, tipo, destinatario, oggetto, modalità di invio, servizio e cliente/gruppo. Per consultare i metadati della comunicazione più recente usa latest; sentAutomatically è soltanto un filtro di ricerca.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         customerOrGroup: {type: 'string', description: 'Cliente o gruppo.'},
         service: {type: 'string', description: 'Nome servizio.'},
-        sentAutomatically: {type: 'boolean', description: 'Invio automatico sì/no.'},
+        sentAutomatically: {type: 'boolean', description: 'Filtro: cerca soltanto invii automatici (true) o manuali (false). Omettilo per consultare la modalità di una comunicazione.'},
         latest: {type: 'boolean', description: 'true per la comunicazione più recente.'},
         limit: {
           type: 'integer',
@@ -100,19 +102,9 @@ function normalizeComparable(value = '') {
 }
 
 function normalizeCommunicationText(value) {
-  if (value === null || value === undefined) return null
-
-  if (Array.isArray(value)) {
-    const items = value.map(normalizeCommunicationText).filter(Boolean)
-    return items.length ? items.join(', ') : null
-  }
-
-  if (typeof value === 'object') {
-    return normalizeCommunicationText(value.email || value.address || value.name || value.id)
-  }
-
+  if (!['string', 'number'].includes(typeof value)) return undefined
   const normalized = String(value).trim()
-  return normalized || null
+  return normalized || undefined
 }
 
 function parseCommunicationDate(value) {
@@ -149,28 +141,22 @@ function matchesCommunicationScope(
 }
 
 function normalizeRenewalCommunication(service = {}, communication = {}) {
-  const sentAutomatically =
-    communication?.sentAutomatically ?? communication?.sent_automatically
-
-  return {
-    id: communication?.id || null,
-    communicationDate:
-      communication?.communicationDate ?? communication?.communication_date ?? null,
-    dateCreated: communication?.dateCreated ?? communication?.date_created ?? null,
+  const fields = {
+    id: normalizeCommunicationText(communication?.id),
+    communicationDate: normalizeCommunicationText(communication?.communicationDate),
     type: normalizeCommunicationText(communication?.type),
-    sentAutomatically:
-      typeof sentAutomatically === 'boolean' ? sentAutomatically : null,
+    typeLabel: normalizeCommunicationText(communication?.typeLabel),
+    sentAutomatically: typeof communication?.sentAutomatically === 'boolean' ? communication.sentAutomatically : undefined,
     to: normalizeCommunicationText(communication?.to),
     subject: normalizeCommunicationText(communication?.subject),
-    description: normalizeCommunicationText(communication?.description),
-    serviceId: service?.id || null,
-    serviceName: service?.name || null,
-    customerId: service?.customer?.id || null,
-    customerName:
-      service?.customer?.name || service?.customer?.businessName || null,
-    groupId: service?.customer?.group?.id || null,
-    groupName: service?.customer?.group?.name || null,
+    serviceId: normalizeCommunicationText(service?.id),
+    serviceName: normalizeCommunicationText(service?.name),
+    customerId: normalizeCommunicationText(service?.customer?.id),
+    customerName: normalizeCommunicationText(service?.customer?.name || service?.customer?.businessName),
+    groupId: normalizeCommunicationText(service?.customer?.group?.id),
+    groupName: normalizeCommunicationText(service?.customer?.group?.name),
   }
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
 }
 
 async function searchRenewalCommunications({
@@ -182,15 +168,19 @@ async function searchRenewalCommunications({
 } = {}) {
   const services = await getAllServices()
   const matches = []
+  let completeHistory = true
+  let missingSendingMode = false
 
   for (const item of Array.isArray(services) ? services : []) {
     if (!matchesCommunicationScope(item, {customerOrGroup, serviceName: service})) continue
 
-    const communications =
-      item?.renewalsCommunications || item?.renewals_communications || []
+    const hasHistory = Array.isArray(item?.renewalsCommunicationsHistory)
+    if (!hasHistory) completeHistory = false
+    const communications = hasHistory ? item.renewalsCommunicationsHistory : item?.renewalsCommunications || []
 
     for (const communication of Array.isArray(communications) ? communications : []) {
       const normalized = normalizeRenewalCommunication(item, communication)
+      if (typeof normalized.sentAutomatically !== 'boolean') missingSendingMode = true
 
       if (
         typeof sentAutomatically === 'boolean' &&
@@ -203,6 +193,10 @@ async function searchRenewalCommunications({
     }
   }
 
+  if (typeof sentAutomatically === 'boolean' && missingSendingMode) {
+    throw new ToolContractError('COMMUNICATIONS_FIELD_UNAVAILABLE', 'Il datasource non fornisce la modalità di invio per tutte le comunicazioni: il filtro automatico/manuale non è verificabile.')
+  }
+
   matches.sort((left, right) => {
     const leftCommunication = parseCommunicationDate(left.communicationDate)?.getTime() || 0
     const rightCommunication = parseCommunicationDate(right.communicationDate)?.getTime() || 0
@@ -211,10 +205,8 @@ async function searchRenewalCommunications({
       return rightCommunication - leftCommunication
     }
 
-    const leftCreated = parseCommunicationDate(left.dateCreated)?.getTime() || 0
-    const rightCreated = parseCommunicationDate(right.dateCreated)?.getTime() || 0
-
-    return rightCreated - leftCreated
+    return String(left.id || '').localeCompare(String(right.id || '')) ||
+      String(left.serviceId || '').localeCompare(String(right.serviceId || ''))
   })
 
   const requestedLimit = Math.max(
@@ -229,39 +221,20 @@ async function searchRenewalCommunications({
     total: matches.length,
     shown: items.length,
     latest: latest === true,
+    coverage: completeHistory ? 'history' : 'latest-per-service-type',
     query: {
-      customerOrGroup: normalizeCommunicationText(customerOrGroup),
-      service: normalizeCommunicationText(service),
-      sentAutomatically:
-        typeof sentAutomatically === 'boolean' ? sentAutomatically : null,
+      ...(normalizeCommunicationText(customerOrGroup) ? {customerOrGroup: normalizeCommunicationText(customerOrGroup)} : {}),
+      ...(normalizeCommunicationText(service) ? {service: normalizeCommunicationText(service)} : {}),
+      ...(typeof sentAutomatically === 'boolean' ? {sentAutomatically} : {}),
       limit: effectiveLimit,
     },
     items,
   }
 }
 
-function formatCommunicationDate(value) {
-  if (!value) return null
-
-  const text = String(value)
-
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-    const [year, month, day] = text.split('-')
-    return `${day}/${month}/${year}`
-  }
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return text
-
-  return new Intl.DateTimeFormat('it-IT', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-    timeZone: 'Europe/Rome',
-  }).format(date)
-}
-
 function buildCommunicationScopeLabel(item = {}) {
-  return [item.customerName, item.groupName].filter(Boolean).join(' / ')
+  return [...new Map([item.customerName, item.groupName].filter(Boolean)
+    .map(value => [normalizeComparable(value), value])).values()].join(' / ')
 }
 
 function buildSearchCommunicationsReply(data = {}) {
@@ -274,39 +247,40 @@ function buildSearchCommunicationsReply(data = {}) {
 
   if (data.latest === true) {
     const item = items[0]
+    const date = formatRecordedDateTime(item.communicationDate)
     const details = [
-      item.communicationDate ? `del ${formatCommunicationDate(item.communicationDate)}` : null,
       item.serviceName ? `per ${item.serviceName}` : null,
-      buildCommunicationScopeLabel(item) || null,
+      buildCommunicationScopeLabel(item) ? `cliente/gruppo ${buildCommunicationScopeLabel(item)}` : null,
       item.to ? `a ${item.to}` : null,
-      item.subject ? `oggetto "${item.subject}"` : null,
-      item.type ? `tipo ${item.type}` : null,
-      typeof item.sentAutomatically === 'boolean'
-        ? item.sentAutomatically
-          ? 'invio automatico'
-          : 'invio manuale'
-        : null,
     ].filter(Boolean)
-
-    return `L'ultima comunicazione di rinnovo trovata è ${details.join(' · ')}.`
+    return [
+      `${date ? `L'ultima comunicazione di rinnovo è del ${date}` : 'La comunicazione di rinnovo trovata non ha una data disponibile'}${details.length ? `, ${details.join(', ')}` : ''}.`,
+      item.typeLabel ? `Tipo: ${item.typeLabel}.` : null,
+      !item.to ? 'Destinatario non disponibile nei dati.' : null,
+      item.subject ? `Oggetto: «${item.subject}».` : 'Oggetto non disponibile nei dati.',
+      typeof item.sentAutomatically === 'boolean' ? `Invio ${item.sentAutomatically ? 'automatico' : 'manuale'}.` : 'Modalità di invio non disponibile nei dati.',
+    ].filter(Boolean).join(' ')
   }
 
   const lines = items.slice(0, 5).map(item => {
     const details = [
-      formatCommunicationDate(item.communicationDate),
+      formatRecordedDateTime(item.communicationDate),
       item.serviceName,
       buildCommunicationScopeLabel(item),
       item.to ? `a ${item.to}` : null,
       item.subject ? `oggetto "${item.subject}"` : null,
+      item.typeLabel,
+      typeof item.sentAutomatically === 'boolean' ? `invio ${item.sentAutomatically ? 'automatico' : 'manuale'}` : null,
     ].filter(Boolean)
 
     return `- ${details.join(' · ')}`
   })
 
   return [
-    `Ho trovato ${total} comunicazioni di rinnovo. Ti mostro le ${Math.min(items.length, 5)} più recenti.`,
+    `Ho trovato ${total} comunicazioni di rinnovo. Ti mostro le ${items.length} più recenti; ecco un riepilogo delle prime ${Math.min(items.length, 5)}.`,
+    data.coverage === 'latest-per-service-type' ? 'Il datasource contiene solo la comunicazione più recente per tipo e servizio, non lo storico completo.' : null,
     ...lines,
-  ].join('\n')
+  ].filter(Boolean).join('\n')
 }
 
 async function executeSearchCommunications(args = {}) {
@@ -328,6 +302,7 @@ async function executeSearchCommunications(args = {}) {
       total: data.total,
       shown: data.shown,
       latest: data.latest,
+      coverage: data.coverage,
       query: data.query,
       items: (data.items || []).slice(0, 10),
     },

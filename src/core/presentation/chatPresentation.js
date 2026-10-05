@@ -1,3 +1,5 @@
+import {formatRecordedDateTime} from '../../utils/formatters.js'
+
 const RENEWALS_LIST_TYPES = new Set([
   'search',
   'space-full',
@@ -345,6 +347,30 @@ function asiagoPresentation(data) {
 }
 
 function renewalsPresentation(data) {
+  if (data.type === 'renewals-communications' && Array.isArray(data.items)) {
+    const cards = data.items.slice(0, 20).map((item, index) => {
+      const scope = [...new Map(compact([item.customerName, item.groupName])
+        .map(value => [value.toLocaleLowerCase('it'), value])).values()].join(' / ')
+      const typeLabel = text(item.typeLabel)
+      return {
+        id: text(item.id || `communication-${index + 1}`),
+        title: text(item.serviceName, 'Comunicazione di rinnovo'),
+        ...(scope ? {subtitle: scope} : {}),
+        ...(typeLabel ? {badge: typeLabel} : {}),
+        details: [
+          detail('Data', formatRecordedDateTime(item.communicationDate)),
+          detail('Servizio', item.serviceName),
+          detail('Cliente / gruppo', scope),
+          detail('Tipo', typeLabel),
+          detail('Destinatario', item.to),
+          detail('Oggetto', item.subject),
+          typeof item.sentAutomatically === 'boolean'
+            ? detail('Invio', item.sentAutomatically ? 'Automatico' : 'Manuale') : null,
+        ].filter(Boolean),
+      }
+    })
+    return {...list(data.latest ? 'Ultima comunicazione di rinnovo' : 'Comunicazioni di rinnovo', cards, data.total), cards}
+  }
   if (!RENEWALS_LIST_TYPES.has(data.type) || !Array.isArray(data.items)) return null
   const filterKinds = new Set(
     (Array.isArray(data.query?.filters) ? data.query.filters : [])
@@ -502,7 +528,7 @@ export function attachChatPresentation(payload = null) {
   if (!presentation) return payload
   const actions = Array.isArray(payload.data.actions)
     ? payload.data.actions
-    : RENEWALS_LIST_TYPES.has(payload.data.type)
+    : RENEWALS_LIST_TYPES.has(payload.data.type) || payload.data.type === 'renewals-communications'
       ? [{id: 'navigate', label: 'Apri pannello rinnovi', path: '/crm/renewals/panel'}]
       : null
   return {...payload, data: {...payload.data, presentation, ...(actions ? {actions} : {})}}
