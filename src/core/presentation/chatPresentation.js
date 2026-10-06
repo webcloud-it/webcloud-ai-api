@@ -1,4 +1,5 @@
 import {formatRecordedDateTime} from '../../utils/formatters.js'
+import {planPriceLabel, planResourceLabel} from '../../modules/facile/renewals/planDetail.js'
 
 const RENEWALS_LIST_TYPES = new Set([
   'search',
@@ -347,6 +348,17 @@ function asiagoPresentation(data) {
 }
 
 function renewalsPresentation(data) {
+  if (data.type === 'renewals-plan') {
+    const details = [detail('Fornitore', data.supplier?.name), detail('Descrizione', data.description),
+      detail('Durata', data.durationMonths !== undefined ? `${data.durationMonths} mesi` : null),
+      ...(data.resources || []).map(item => detail('Risorsa', planResourceLabel(item))),
+      ...(data.serviceTypesIn || []).map(item => detail('Servizio in ingresso', item.name)),
+      ...(data.serviceTypesOut || []).map(item => detail('Servizio in uscita', item.name)),
+      data.pricing?.missing ? detail('Prezzi', 'Prezzo non disponibile nel catalogo.') : null,
+      data.pricing?.entries?.length > 1 ? detail('Prezzi', 'Più voci per listino/versione; nessun prezzo unico applicabile.') : null,
+      ...(data.pricing?.entries || []).map(item => detail('Listino', planPriceLabel(item)))].filter(Boolean)
+    return list(`Piano ${text(data.name)}`, [{id: text(data.id), title: text(data.name), details}], 1)
+  }
   if (data.type === 'renewals-plans' && Array.isArray(data.items)) {
     const cards = data.items.map((item, index) => {
       const details = [detail('Fornitore', item.supplier?.name)].filter(Boolean)
