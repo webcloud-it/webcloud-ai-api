@@ -348,10 +348,14 @@ function asiagoPresentation(data) {
 
 function renewalsPresentation(data) {
   if (data.type === 'renewals-entity-list' && Array.isArray(data.items)) {
-    const cards = data.items.map((item, index) => ({
-      id: text(item.id || `${data.entityType}-${data.offset + index}`),
-      title: text(item.name),
-    }))
+    const cards = data.items.map((item, index) => {
+      const details = [detail('Categoria', item.category), detail('Unità', item.unit)].filter(Boolean)
+      return {
+        id: text(item.id || `${data.entityType}-${data.offset + index}`),
+        title: text(item.name),
+        ...(details.length ? {details} : {}),
+      }
+    })
     return {...list(`${text(data.entityLabel, 'Entità')} trovati: ${data.total}`, cards, data.total), cards}
   }
   if (data.type === 'renewals-communications' && Array.isArray(data.items)) {

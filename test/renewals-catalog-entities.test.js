@@ -18,27 +18,34 @@ const principal = {id: 'operator', source: 'crm'}, credentials = {crm: 'fixture'
 const rows = [{id: 'b', name: ' Webcloud '}, {id: 'a', name: 'Aruba'},
   {id: 'b', name: 'Webcloud'}, {name: '  WEBcloud '}, {name: ' Register.it '},
   {name: 'register.it'}, {id: 'c', label: 'Zeta'}, {name: null}, null]
-let model, datasource, appServer, url, requests, reads, legacy, mode, fixtureRows
+const resourceRows = Array.from({length: 15}, (_, index) => ({id: `r${index}`,
+  name: `Risorsa ${String(index).padStart(2, '0')}`, key: `key${index}`,
+  ...(index % 3 ? {category: 'hosting'} : {category: null}),
+  ...(index % 4 ? {unitOfMeasurement: 'GB'} : {unitOfMeasurement: null}),
+})).reverse()
+let model, datasource, appServer, url, requests, reads, legacy, mode, fixtureRows, entityType
 const originalEnv = {ollamaBaseUrl: env.ollamaBaseUrl, renewalsApiBaseUrl: env.renewalsApiBaseUrl, crmToken: env.crmToken}
 const module = getModuleById('facile.renewals'), originalRoutes = module.routes
-const argumentsForMode = () => mode === 'extra' ? {entityType: 'supplier', filter: 'arbitrary'}
+const argumentsForMode = () => mode === 'extra' ? {entityType, filter: 'arbitrary'}
   : mode === 'invalid' ? {entityType: 'invented'} : mode === 'missing' ? {}
-    : mode === 'json' ? '{broken' : {entityType: 'supplier'}
+    : mode === 'json' ? '{broken' : {entityType}
 
 before(async () => {
   datasource = http.createServer(async (req, res) => {
     let raw = ''; for await (const chunk of req) raw += chunk
     const query = JSON.parse(raw); reads.push(query)
     res.setHeader('Content-Type', 'application/json')
+    // Error responses must not leave a pooled fixture socket for the next test.
+    res.setHeader('Connection', 'close')
     if (mode === 'execution') {res.statusCode = 500; return res.end(JSON.stringify({error: 'PRIVATE_DATASOURCE'}))}
     assert.equal(req.url, '/catalog/query')
-    assert.equal(query.entity, 'providers'); assert.equal(query.operation, 'list')
+    assert.equal(query.entity, entityType === 'resourceType' ? 'resources' : 'providers'); assert.equal(query.operation, 'list')
     assert.deepEqual(query.filters, [])
     assert.deepEqual(query.sort, [{field: 'name', direction: 'asc'}, {field: 'id', direction: 'asc'}])
     assert.equal(query.limit, 50)
     const items = fixtureRows.slice(query.offset, query.offset + query.limit)
     res.end(JSON.stringify({ok: true, source: 'catalog', sourceScope: 'complete-master-data',
-      entity: 'providers', total: fixtureRows.length, items, offset: query.offset,
+      entity: query.entity, total: fixtureRows.length, items, offset: query.offset,
       nextOffset: query.offset + items.length, hasMore: query.offset + items.length < fixtureRows.length}))
   })
   datasource.listen(0, '127.0.0.1'); await once(datasource, 'listening')
@@ -60,7 +67,7 @@ before(async () => {
   appServer = app.listen(0, '127.0.0.1'); await once(appServer, 'listening')
   url = `http://127.0.0.1:${appServer.address().port}`
 })
-beforeEach(() => {requests = []; reads = []; legacy = 0; mode = 'valid'; fixtureRows = rows})
+beforeEach(() => {requests = []; reads = []; legacy = 0; mode = 'valid'; fixtureRows = rows; entityType = 'supplier'})
 after(async () => {
   Object.assign(env, originalEnv); module.routes = originalRoutes
   for (const server of [model, datasource, appServer]) {server.closeAllConnections(); await new Promise(resolve => server.close(resolve))}
@@ -187,4 +194,133 @@ test('F1: nessuna modifica al router linguistico o al core agentico', () => {
     'src/core/tools/toolContract.js', 'src/core/providers/ollamaProvider.js']) {
     assert.deepEqual(readFileSync(new URL(`../${path}`, import.meta.url)), execFileSync('git', ['show', `HEAD:${path}`]))
   }
+})
+
+test('F2: resourceType è accettato dallo stesso schema; altre anagrafiche restano escluse', () => {
+  assert.deepEqual(tool.definition.function.parameters.properties.entityType.enum, ['supplier', 'resourceType'])
+  validateToolArguments(tool, {entityType: 'resourceType', limit: 50, offset: 0})
+  for (const entityType of ['plan', 'customer', 'group', 'resources', '__proto__']) {
+    assert.throws(() => validateToolArguments(tool, {entityType}), error => error.code === 'TOOL_VALIDATION_ERROR')
+  }
+})
+test('F2: supplier conserva esattamente id/name anche se il datasource ha altri campi', () => {
+  assert.deepEqual(normalizeCatalogEntities([{id: 's', name: 'Nome', category: 'hosting', unitOfMeasurement: 'GB'}]),
+    [{id: 's', name: 'Nome'}])
+  const payload = {data: {type: 'renewals-entity-list', entityType: 'supplier', entityLabel: 'Fornitori',
+    total: 1, offset: 0, items: [{id: 's', name: 'Nome'}]}}
+  assert.deepEqual(attachChatPresentation(payload).data.presentation, {
+    version: 1, kind: 'list', title: 'Fornitori trovati: 1', total: 1, cards: [{id: 's', title: 'Nome'}],
+  })
+})
+test('F2: resourceType normalizza 15 entità, categoria/unità opzionali e ignora key', async () => {
+  entityType = 'resourceType'; fixtureRows = resourceRows
+  const data = await listRenewalsEntities({entityType})
+  assert.equal(data.total, 15); assert.equal(data.entityLabel, 'Tipi di risorsa')
+  assert.deepEqual(data.items.map(item => item.id), Array.from({length: 15}, (_, i) => `r${i}`))
+  assert.deepEqual(data.items[0], {id: 'r0', name: 'Risorsa 00'})
+  assert.deepEqual(data.items[1], {id: 'r1', name: 'Risorsa 01', category: 'hosting', unit: 'GB'})
+  assert.deepEqual(data.items[3], {id: 'r3', name: 'Risorsa 03', unit: 'GB'})
+  assert.deepEqual(data.items[4], {id: 'r4', name: 'Risorsa 04', category: 'hosting'})
+  assert.ok(data.items.every(item => Object.values(item).every(value => typeof value === 'string' && value)))
+  assert.equal(reads[0].entity, 'resources')
+})
+test('F2: deduplica risorse per ID/nome con metadata deterministici e ordine stabile', () => {
+  const input = [{id: 'r', name: ' Zeta ', category: ' hosting ', unitOfMeasurement: null},
+    {id: 'r', name: 'Zeta', unitOfMeasurement: ' GB '},
+    {name: '  zeta ', category: 'hosting', unitOfMeasurement: 'GB'},
+    {name: ' Alfa ', category: 'mail'}, {name: 'alfa', unitOfMeasurement: 'caselle'}]
+  const expected = [{name: 'alfa', category: 'mail', unit: 'caselle'},
+    {id: 'r', name: 'Zeta', category: 'hosting', unit: 'GB'}]
+  assert.deepEqual(normalizeCatalogEntities(input, 'resourceType'), expected)
+  assert.deepEqual(normalizeCatalogEntities(input.toReversed(), 'resourceType'), expected)
+})
+test('F2: metadata risorse contraddittori restano valori reali scelti deterministicamente', () => {
+  const input = [{id: 'r', name: 'Nome', category: 'mail', unitOfMeasurement: 'MB'},
+    {id: 'r', name: 'Nome', category: 'hosting', unitOfMeasurement: 'GB'}]
+  const result = normalizeCatalogEntities(input, 'resourceType')
+  assert.deepEqual(result, [{id: 'r', name: 'Nome', category: 'hosting', unit: 'GB'}])
+  assert.deepEqual(result, normalizeCatalogEntities(input.toReversed(), 'resourceType'))
+})
+test('F2: metadata null, vuoti o non testuali non diventano dettagli', () => {
+  assert.deepEqual(normalizeCatalogEntities([{id: 'r', name: 'Nome', category: ' ', unitOfMeasurement: null},
+    {id: 'r2', name: 'Secondo', category: {}, unitOfMeasurement: 12}], 'resourceType'),
+  [{id: 'r', name: 'Nome'}, {id: 'r2', name: 'Secondo'}])
+})
+test('F2: metadata presenti solo sulla riga senza ID non vengono persi nel merge', () => {
+  assert.deepEqual(normalizeCatalogEntities([{id: 'r', name: 'Nome'},
+    {name: ' nome ', category: 'mail', unitOfMeasurement: 'caselle'}], 'resourceType'),
+  [{id: 'r', name: 'Nome', category: 'mail', unit: 'caselle'}])
+})
+test('F2: paginazione pubblica risorse dopo lettura completa e deduplica', async () => {
+  entityType = 'resourceType'; fixtureRows = [...resourceRows, {...resourceRows[0]}]
+  const data = await listRenewalsEntities({entityType, limit: 5, offset: 5})
+  assert.equal(data.total, 15); assert.equal(data.sourceTotal, 16); assert.equal(data.shown, 5)
+  assert.equal(data.items[0].id, 'r5'); assert.equal(data.hasMore, true); assert.equal(data.nextOffset, 10)
+})
+test('F2: tutte le pagine datasource resources sono lette prima di dichiarare il totale', async () => {
+  entityType = 'resourceType'
+  fixtureRows = Array.from({length: 55}, (_, i) => ({id: `r${i}`, name: `Risorsa ${String(i).padStart(2, '0')}`}))
+  const data = await listRenewalsEntities({entityType, limit: 5, offset: 50})
+  assert.equal(reads.length, 2); assert.equal(reads[1].offset, 50)
+  assert.equal(data.total, 55); assert.equal(data.shown, 5); assert.equal(data.hasMore, false)
+})
+test('F2: catalogue incompleto o entità datasource sbagliata non restituisce risultati risorse', async () => {
+  for (const result of [{ok: true, source: 'catalog', sourceScope: 'complete-master-data', entity: 'resources',
+    offset: 0, total: 15, items: resourceRows.slice(0, 2), hasMore: false},
+  {ok: true, source: 'catalog', sourceScope: 'complete-master-data', entity: 'providers',
+    offset: 0, total: 15, items: resourceRows, hasMore: false}]) {
+    await assert.rejects(listRenewalsEntities({entityType: 'resourceType'}, {queryCatalog: async () => result}))
+  }
+})
+test('F2: presentation risorse include solo categoria/unità realmente disponibili', () => {
+  const presentation = attachChatPresentation({data: {type: 'renewals-entity-list', entityType: 'resourceType',
+    entityLabel: 'Tipi di risorsa', total: 3, offset: 0, items: [
+      {id: 'r1', name: 'Spazio', category: 'hosting', unit: 'GB'},
+      {id: 'r2', name: 'Risorsa', category: null, unit: undefined},
+      {id: 'r3', name: 'Caselle', category: 'mail'},
+    ]}}).data.presentation
+  assert.equal(presentation.title, 'Tipi di risorsa trovati: 3')
+  assert.deepEqual(presentation.cards[0].details, [{label: 'Categoria', value: 'hosting'}, {label: 'Unità', value: 'GB'}])
+  assert.deepEqual(presentation.cards[1], {id: 'r2', title: 'Risorsa'})
+  assert.deepEqual(presentation.cards[2].details, [{label: 'Categoria', value: 'mail'}])
+  assert.doesNotMatch(JSON.stringify(presentation), /null|undefined/)
+})
+for (const moduleId of ['facile', 'facile.renewals']) {
+  test(`F2: POST ${moduleId} sceglie stesso tool con resourceType, zero servizi/legacy`, async () => {
+    entityType = 'resourceType'; fixtureRows = resourceRows
+    const result = await post('richiesta gestita dal modello', moduleId)
+    assert.equal(result.ok, true); assert.equal(result.meta.agentOutcome, 'HANDLED')
+    assert.equal(result.meta.terminalTool, tool.name); assert.equal(result.data.entityType, 'resourceType')
+    assert.equal(result.data.total, 15); assert.equal(result.data.presentation.cards.length, 15)
+    assert.equal(result.meta.agentState.args.entityType, 'resourceType')
+    assert.deepEqual(result.meta.toolCalls.map(item => item.name), [tool.name])
+    assert.ok(!result.meta.toolErrors?.length); assert.notEqual(result.meta.legacyFallback, true)
+    assert.equal(legacy, 0); assert.equal(reads[0].entity, 'resources')
+    assert.deepEqual(requests[0].tools.find(item => item.function.name === tool.name).function.parameters.properties.entityType.enum,
+      ['supplier', 'resourceType'])
+  })
+}
+for (const failure of ['extra', 'invalid', 'execution']) {
+  test(`F2: ${failure} per risorse è ERROR, senza fallback`, async () => {
+    entityType = 'resourceType'; fixtureRows = resourceRows; mode = failure
+    const result = await post('risorse')
+    assert.equal(result.ok, false); assert.equal(result.meta.agentOutcome, 'ERROR'); assert.equal(legacy, 0)
+    if (failure !== 'execution') assert.equal(reads.length, 0)
+    assert.ok(result.meta.toolErrors.length)
+  })
+}
+test('F2: resourceType mantiene credential/principal/capability e non permette write/high', async () => {
+  entityType = 'resourceType'; fixtureRows = resourceRows
+  assert.throws(() => assertAutomaticToolPolicy({...tool, risk: 'high'}, {credentials, principal}))
+  assert.throws(() => assertAutomaticToolPolicy({...tool, mode: 'write'}, {credentials, principal}))
+  const result = await post('risorse', 'facile', '')
+  assert.equal(result.meta.agentOutcome, 'ERROR'); assert.equal(reads.length, 0)
+  assert.equal(tool.capabilityId, 'facile.renewals.read')
+})
+test('F2: stesso tool già registrato, con il contratto esteso e limiti generici', () => {
+  const registered = getRegisteredTools({credentials}).filter(item => item.name === tool.name)
+  assert.equal(registered.length, 1)
+  assert.deepEqual(registered[0].definition, tool.definition)
+  assert.match(tool.definition.function.description, /ranking/)
+  assert.match(tool.definition.function.description, /aggregazioni o join/)
 })
