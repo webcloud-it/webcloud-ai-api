@@ -102,7 +102,7 @@ for (const moduleId of ['facile', 'global', 'facile.global', 'facile.renewals'])
       assert.equal(result.meta.terminalTool, tool); assert.equal(result.meta.agentOutcome, 'HANDLED')
       assert.equal(result.meta.routingSource, 'agent'); assert.equal(legacy.length, 0)
       assert.equal(requests.length, 1)
-      assert.deepEqual(requests[0].tools.filter(item => item.function.name !== AGENT_CONTROL).map(item => item.function.name), [S, C])
+      assert.deepEqual(requests[0].tools.filter(item => item.function.name !== AGENT_CONTROL).map(item => item.function.name), savedTools.map(tool => tool.name))
     })
   }
 }

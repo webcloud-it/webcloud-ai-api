@@ -235,7 +235,7 @@ test('Step C: servizi → comunicazioni espone entrambi i tool e passa il client
   const result = await turn(C, {customerOrGroup: 'Zilio Group', latest: true}, 'replace', stateHistory(prior))
   assert.equal(result.meta.terminalTool, C)
   assert.deepEqual(calls[1].args, {customerOrGroup: 'Zilio Group', latest: true})
-  assert.deepEqual(requests[1].tools.map(tool => tool.function.name), [S, C])
+  assert.deepEqual(requests[1].tools.map(tool => tool.function.name), renewalsTools.map(tool => tool.name))
   assert.equal(result.meta.agentState.tool, C, 'Il tool terminale stateless sostituisce lo snapshot precedente')
 })
 
@@ -252,7 +252,7 @@ test('Step C: switch espone il contesto entità anche senza entityReference e no
   await turn(C, {customerOrGroup: 'Zilio Group', latest: true}, 'switch', history,
     {decision: {stateMode: 'switch', entityReference: ''}})
   assert.match(requests[0].messages[0].content, /Zilio Group/)
-  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), [S, C])
+  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), renewalsTools.map(tool => tool.name))
   assert.deepEqual(calls[0].args, {customerOrGroup: 'Zilio Group', latest: true})
 })
 
@@ -323,7 +323,7 @@ test('Step C: senza stato non serve una decisione di relazione e la query è nuo
 test('Step C: scope esplicito del modulo viene mantenuto e non espande il catalogo', async () => {
   const {turn, requests} = stateFixture()
   await turn(S, {}, 'replace', historyFor({customerOrGroup: 'Zilio Group'}), {toolModuleId: 'facile.renewals'})
-  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), [S, C])
+  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), renewalsTools.map(tool => tool.name))
   const missing = await turn(S, {}, 'replace', [], {toolModuleId: 'facile.webcamgo'})
   assert.equal(missing.meta.toolErrors[0].code, 'TOOL_UNAVAILABLE')
 })
@@ -410,7 +410,7 @@ test('Step C: replace non espone la vecchia query alla fase di costruzione degli
   await turn(S, {expiresYear: 2027}, 'replace', history)
   assert.match(stateRequests[0].messages[0].content, /Zilio Group/)
   assert.doesNotMatch(JSON.stringify(requests[0].messages), /Zilio Group|2026|exclude/)
-  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), [S, C])
+  assert.deepEqual(requests[0].tools.map(tool => tool.function.name), renewalsTools.map(tool => tool.name))
 })
 
 test('Step C: decisione di stato con JSON malformato non esegue tool né fallback', async () => {
@@ -502,8 +502,8 @@ test('Step E: assenza di tool o risposta testuale non attivano fallback implicit
 
 test('registry filtra per credenziale ma permette di distinguere tool indisponibili da non migrati', () => {
   assert.equal(getRegisteredTools().length, 0)
-  assert.equal(getRegisteredTools({includeUnavailable: true}).length, 2)
-  assert.equal(getRegisteredTools({credentials}).length, 2)
+  assert.equal(getRegisteredTools({includeUnavailable: true}).length, renewalsTools.length)
+  assert.equal(getRegisteredTools({credentials}).length, renewalsTools.length)
 })
 
 for (const [label, change] of [

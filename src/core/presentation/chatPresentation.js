@@ -347,6 +347,13 @@ function asiagoPresentation(data) {
 }
 
 function renewalsPresentation(data) {
+  if (data.type === 'renewals-entity-list' && Array.isArray(data.items)) {
+    const cards = data.items.map((item, index) => ({
+      id: text(item.id || `${data.entityType}-${data.offset + index}`),
+      title: text(item.name),
+    }))
+    return {...list(`${text(data.entityLabel, 'Entità')} trovati: ${data.total}`, cards, data.total), cards}
+  }
   if (data.type === 'renewals-communications' && Array.isArray(data.items)) {
     const cards = data.items.slice(0, 20).map((item, index) => {
       const scope = [...new Map(compact([item.customerName, item.groupName])
