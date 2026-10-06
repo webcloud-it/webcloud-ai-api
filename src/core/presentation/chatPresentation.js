@@ -347,6 +347,14 @@ function asiagoPresentation(data) {
 }
 
 function renewalsPresentation(data) {
+  if (data.type === 'renewals-plans' && Array.isArray(data.items)) {
+    const cards = data.items.map((item, index) => {
+      const details = [detail('Fornitore', item.supplier?.name)].filter(Boolean)
+      return {id: text(item.id || `plan-${data.offset + index}`), title: text(item.name),
+        ...(details.length ? {details} : {})}
+    })
+    return {...list(`Piani trovati: ${data.total}`, cards, data.total), cards}
+  }
   if (data.type === 'renewals-entity-list' && Array.isArray(data.items)) {
     const cards = data.items.map((item, index) => {
       const details = [detail('Categoria', item.category), detail('Unità', item.unit),

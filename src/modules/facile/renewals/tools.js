@@ -3,6 +3,7 @@ import {buildStructuredServiceListPayload} from './serviceQueries.js'
 import {formatRecordedDateTime} from '../../../utils/formatters.js'
 import {ToolContractError} from '../../../core/tools/toolContract.js'
 import {renewalsListEntitiesTool} from './catalogEntities.js'
+import {renewalsSearchPlansTool} from './planSearch.js'
 
 const RENEWALS_SEARCH_SERVICES_NAME = 'renewals_search_services'
 const RENEWALS_SEARCH_COMMUNICATIONS_NAME = 'renewals_search_communications'
@@ -430,4 +431,5 @@ export const renewalsTools = [
     execute: executeSearchCommunications,
   },
   renewalsListEntitiesTool,
+  renewalsSearchPlansTool,
 ]
