@@ -23,6 +23,13 @@ const resourceRows = Array.from({length: 15}, (_, index) => ({id: `r${index}`,
   ...(index % 3 ? {category: 'hosting'} : {category: null}),
   ...(index % 4 ? {unitOfMeasurement: 'GB'} : {unitOfMeasurement: null}),
 })).reverse()
+const planRows = Array.from({length: 199}, (_, index) => ({id: `p${String(index).padStart(3, '0')}`,
+  name: `Piano ${String(index).padStart(3, '0')}`, type: '1', kind: 'base', isAddon: false,
+  supplier: index % 3 ? {id: 's1', name: ' Fornitore ', internal: 'excluded'} : null,
+  resources: [{name: 'Spazio', amount: '10', unitOfMeasurement: 'GB'}],
+  resourceNames: ['Spazio'], priceEntries: [{price: 100, priceListVersion: {name: 'Privato'}}],
+  prices: [100], priceListVersionNames: ['Privato'], description: 'excluded', duration: 12,
+})).reverse()
 let model, datasource, appServer, url, requests, reads, legacy, mode, fixtureRows, entityType
 const originalEnv = {ollamaBaseUrl: env.ollamaBaseUrl, renewalsApiBaseUrl: env.renewalsApiBaseUrl, crmToken: env.crmToken}
 const module = getModuleById('facile.renewals'), originalRoutes = module.routes
@@ -39,7 +46,7 @@ before(async () => {
     res.setHeader('Connection', 'close')
     if (mode === 'execution') {res.statusCode = 500; return res.end(JSON.stringify({error: 'PRIVATE_DATASOURCE'}))}
     assert.equal(req.url, '/catalog/query')
-    assert.equal(query.entity, entityType === 'resourceType' ? 'resources' : 'providers'); assert.equal(query.operation, 'list')
+    assert.equal(query.entity, {supplier: 'providers', resourceType: 'resources', plan: 'plans'}[entityType]); assert.equal(query.operation, 'list')
     assert.deepEqual(query.filters, [])
     assert.deepEqual(query.sort, [{field: 'name', direction: 'asc'}, {field: 'id', direction: 'asc'}])
     assert.equal(query.limit, 50)
@@ -122,7 +129,7 @@ for (const invalid of [null, {ok: false}, {ok: true, source: 'catalog', sourceSc
     await assert.rejects(listRenewalsEntities({entityType: 'supplier'}, {queryCatalog: async () => invalid}))
   })
 }
-for (const args of [{}, {entityType: 'plan'}, {entityType: 'supplier', filters: []},
+for (const args of [{}, {entityType: 'invented'}, {entityType: 'supplier', filters: []},
   {entityType: 'supplier', limit: 51}, {entityType: 'supplier', limit: 0},
   {entityType: 'supplier', offset: -1}, {entityType: 'supplier', limit: '10'}]) {
   test(`F1: schema stretto rifiuta ${JSON.stringify(args)}`, () => {
@@ -197,9 +204,9 @@ test('F1: nessuna modifica al router linguistico o al core agentico', () => {
 })
 
 test('F2: resourceType è accettato dallo stesso schema; altre anagrafiche restano escluse', () => {
-  assert.deepEqual(tool.definition.function.parameters.properties.entityType.enum, ['supplier', 'resourceType'])
+  assert.deepEqual(tool.definition.function.parameters.properties.entityType.enum, ['supplier', 'resourceType', 'plan'])
   validateToolArguments(tool, {entityType: 'resourceType', limit: 50, offset: 0})
-  for (const entityType of ['plan', 'customer', 'group', 'resources', '__proto__']) {
+  for (const entityType of ['addon', 'customer', 'group', 'resources', '__proto__']) {
     assert.throws(() => validateToolArguments(tool, {entityType}), error => error.code === 'TOOL_VALIDATION_ERROR')
   }
 })
@@ -297,7 +304,7 @@ for (const moduleId of ['facile', 'facile.renewals']) {
     assert.ok(!result.meta.toolErrors?.length); assert.notEqual(result.meta.legacyFallback, true)
     assert.equal(legacy, 0); assert.equal(reads[0].entity, 'resources')
     assert.deepEqual(requests[0].tools.find(item => item.function.name === tool.name).function.parameters.properties.entityType.enum,
-      ['supplier', 'resourceType'])
+      ['supplier', 'resourceType', 'plan'])
   })
 }
 for (const failure of ['extra', 'invalid', 'execution']) {
@@ -323,4 +330,125 @@ test('F2: stesso tool già registrato, con il contratto esteso e limiti generici
   assert.deepEqual(registered[0].definition, tool.definition)
   assert.match(tool.definition.function.description, /ranking/)
   assert.match(tool.definition.function.description, /aggregazioni o join/)
+})
+
+test('F3: plan accettato nello stesso schema stretto, senza filtri aggiuntivi', () => {
+  validateToolArguments(tool, {entityType: 'plan', limit: 1, offset: 0})
+  validateToolArguments(tool, {entityType: 'plan', limit: 50, offset: 100})
+  for (const args of [{entityType: 'addon'}, {entityType: 'unknown'},
+    {entityType: 'plan', supplier: 'Fornitore'}, {entityType: 'plan', resource: 'mail'},
+    {entityType: 'plan', price: 100}, {entityType: 'plan', limit: 0},
+    {entityType: 'plan', limit: 51}, {entityType: 'plan', limit: 1.5}, {entityType: 'plan', offset: -1}]) {
+    assert.throws(() => validateToolArguments(tool, args), error => error.code === 'TOOL_VALIDATION_ERROR')
+  }
+})
+test('F3: 199 piani base, quattro pagine backend e pagina pubblica di 50', async () => {
+  entityType = 'plan'; fixtureRows = planRows
+  const data = await listRenewalsEntities({entityType})
+  assert.equal(data.total, 199); assert.equal(data.sourceTotal, 199); assert.equal(data.shown, 50)
+  assert.equal(data.entityLabel, 'Piani base'); assert.equal(data.limit, 50); assert.equal(data.offset, 0)
+  assert.equal(data.hasMore, true); assert.equal(data.nextOffset, 50)
+  assert.deepEqual(reads.map(x => x.offset), [0, 50, 100, 150])
+  assert.ok(reads.every(x => x.entity === 'plans' && x.filters.length === 0))
+  assert.equal(data.items[0].id, 'p000'); assert.equal(data.items[49].id, 'p049')
+})
+test('F3: stessa entità per ID, ID distinti con lo stesso nome preservati', () => {
+  const input = [{id: 'p2', name: 'Uguale', supplier: {id: 's2', name: 'Altro'}},
+    {id: 'p1', name: 'Uguale', supplier: {id: 's1', name: 'Fornitore'}},
+    {id: 'p2', name: ' Uguale ', supplier: {id: 's2', name: ' Altro '}}]
+  const expected = [{id: 'p1', name: 'Uguale', supplier: {id: 's1', name: 'Fornitore'}},
+    {id: 'p2', name: 'Uguale', supplier: {id: 's2', name: 'Altro'}}]
+  assert.deepEqual(normalizeCatalogEntities(input, 'plan'), expected)
+  assert.deepEqual(normalizeCatalogEntities(input.toReversed(), 'plan'), expected)
+})
+test('F3: ordinamento italiano e supplier ridotto a un riferimento verificato', () => {
+  assert.deepEqual(normalizeCatalogEntities([
+    {id: 'z', name: ' Zeta ', supplier: {id: ' s1 ', name: ' Due   parole ', prices: [100]}},
+    {id: 'a', name: 'Alfa', supplier: {name: 'Solo nome', extra: true}},
+  ], 'plan'), [{id: 'a', name: 'Alfa', supplier: {name: 'Solo nome'}},
+    {id: 'z', name: 'Zeta', supplier: {id: 's1', name: 'Due parole'}}])
+})
+test('F3: fornitore assente o senza nome non inventato e senza null', () => {
+  for (const supplier of [null, undefined, {}, {id: 's'}, {name: ' '}, {name: {}}]) {
+    assert.deepEqual(normalizeCatalogEntities([{id: 'p', name: 'Piano', supplier}], 'plan'), [{id: 'p', name: 'Piano'}])
+  }
+})
+test('F3: duplicati con fornitori discordanti preservano una coppia ID/nome reale', () => {
+  const input = [{id: 'p', name: 'Piano', supplier: {id: 's2', name: 'Alfa'}},
+    {id: 'p', name: 'Piano', supplier: {id: 's1', name: 'Zeta'}},
+    {id: 'p', name: 'Piano', supplier: {name: 'A senza ID'}}]
+  const result = [{id: 'p', name: 'Piano', supplier: {id: 's1', name: 'Zeta'}}]
+  assert.deepEqual(normalizeCatalogEntities(input, 'plan'), result)
+  assert.deepEqual(normalizeCatalogEntities(input.toReversed(), 'plan'), result)
+})
+test('F3: ultimo tratto e offset oltre i piani dopo normalizzazione completa', async () => {
+  entityType = 'plan'; fixtureRows = [...planRows, {...planRows[0]}]
+  const data = await listRenewalsEntities({entityType, limit: 50, offset: 150})
+  assert.equal(data.total, 199); assert.equal(data.sourceTotal, 200); assert.equal(data.shown, 49)
+  assert.equal(data.items[0].id, 'p150'); assert.equal(data.items[48].id, 'p198')
+  assert.equal(data.hasMore, false); assert.equal(data.nextOffset, null)
+  assert.deepEqual((await listRenewalsEntities({entityType, limit: 1, offset: 199})).items, [])
+})
+test('F3: pagina plans incompleta o errata fallisce esplicitamente', async () => {
+  for (const result of [{ok: true, source: 'catalog', sourceScope: 'complete-master-data', entity: 'plans',
+    offset: 0, total: 199, items: planRows.slice(0, 50), hasMore: false},
+  {ok: true, source: 'catalog', sourceScope: 'complete-master-data', entity: 'addons',
+    offset: 0, total: 1, items: planRows.slice(0, 1), hasMore: false}]) {
+    await assert.rejects(listRenewalsEntities({entityType: 'plan'}, {queryCatalog: async () => result}))
+  }
+})
+test('F3: modelContent contiene solo 50 proiezioni compatte, nessun prezzo/risorsa/listino', async () => {
+  entityType = 'plan'; fixtureRows = planRows
+  const result = await tool.execute({entityType})
+  assert.equal(result.modelContent.items.length, 50); assert.equal(result.modelContent.total, 199)
+  assert.deepEqual(result.modelContent.items[0], {id: 'p000', name: 'Piano 000'})
+  assert.deepEqual(result.modelContent.items[1], {id: 'p001', name: 'Piano 001', supplier: {id: 's1', name: 'Fornitore'}})
+  assert.ok(result.modelContent.items.every(x => Object.keys(x).every(key => ['id', 'name', 'supplier'].includes(key))))
+  assert.doesNotMatch(JSON.stringify(result.modelContent), /price|resources|duration|description|Privato|excluded/)
+  assert.match(result.reply, /^Piani base trovati: 199\./)
+  assert.match(result.reply, /Mostro 50 risultati dalla posizione 1\./)
+  assert.match(result.reply, /Piano 001 · Fornitore/)
+})
+test('F3: presentation piani con fornitore opzionale e senza metadata pesanti', () => {
+  const presentation = attachChatPresentation({data: {type: 'renewals-entity-list', entityType: 'plan',
+    entityLabel: 'Piani base', total: 199, offset: 0, items: [
+      {id: 'p1', name: 'Piano', supplier: {id: 's1', name: 'Fornitore'}},
+      {id: 'p2', name: 'Senza fornitore'},
+    ]}}).data.presentation
+  assert.equal(presentation.title, 'Piani base trovati: 199')
+  assert.deepEqual(presentation.cards, [{id: 'p1', title: 'Piano', details: [{label: 'Fornitore', value: 'Fornitore'}]},
+    {id: 'p2', title: 'Senza fornitore'}])
+})
+for (const moduleId of ['facile', 'facile.renewals']) {
+  test(`F3: POST ${moduleId} seleziona lo stesso tool plan senza servizi/fallback`, async () => {
+    entityType = 'plan'; fixtureRows = planRows
+    const result = await post('richiesta scelta dal modello', moduleId)
+    assert.equal(result.ok, true); assert.equal(result.meta.agentOutcome, 'HANDLED')
+    assert.equal(result.meta.terminalTool, tool.name); assert.equal(result.data.entityType, 'plan')
+    assert.equal(result.data.total, 199); assert.equal(result.data.shown, 50)
+    assert.equal(result.meta.agentState.args.entityType, 'plan')
+    assert.deepEqual(result.meta.toolCalls.map(x => x.name), [tool.name])
+    assert.ok(!result.meta.toolErrors?.length); assert.notEqual(result.meta.legacyFallback, true); assert.equal(legacy, 0)
+    assert.equal(reads.length, 4); assert.equal(result.data.presentation.cards.length, 50)
+  })
+}
+for (const failure of ['extra', 'json', 'execution']) {
+  test(`F3: ${failure} per plan bloccato senza fallback`, async () => {
+    entityType = 'plan'; fixtureRows = planRows; mode = failure
+    const result = await post('piani')
+    assert.equal(result.ok, false); assert.equal(result.meta.agentOutcome, 'ERROR'); assert.equal(legacy, 0)
+    if (failure !== 'execution') assert.equal(reads.length, 0)
+    assert.ok(result.meta.toolErrors.length)
+  })
+}
+test('F3: Step A policy read/low, principal, CRM e capability invariati', async () => {
+  entityType = 'plan'; fixtureRows = planRows
+  assertAutomaticToolPolicy(tool, {credentials, principal})
+  for (const options of [{credentials: {}, principal}, {credentials}, {credentials, principal: {id: 'operator', source: 'other'}}]) {
+    assert.throws(() => assertAutomaticToolPolicy(tool, options), error => error.code === 'TOOL_AUTHORIZATION_DENIED')
+  }
+  assert.throws(() => assertAutomaticToolPolicy({...tool, mode: 'write'}, {credentials, principal}))
+  assert.throws(() => assertAutomaticToolPolicy({...tool, risk: 'high'}, {credentials, principal}))
+  const result = await post('piani', 'facile', '')
+  assert.equal(result.meta.agentOutcome, 'ERROR'); assert.equal(reads.length, 0)
 })

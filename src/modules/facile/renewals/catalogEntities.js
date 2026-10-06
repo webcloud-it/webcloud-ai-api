@@ -5,6 +5,7 @@ const ENTITY_TYPES = {
   supplier: {catalogId: 'providers', label: 'Fornitori', metadata: {}},
   resourceType: {catalogId: 'resources', label: 'Tipi di risorsa',
     metadata: {category: 'category', unit: 'unitOfMeasurement'}},
+  plan: {catalogId: 'plans', label: 'Piani base', metadata: {}, supplier: true},
 }
 const PAGE_SIZE = 50
 const MAX_PAGES = 100
@@ -27,18 +28,30 @@ function entityDefinition(entityType) {
 
 // Optional text metadata is projected from verified datasource fields only.
 // Duplicate rows retain a deterministic existing value, independently of row order.
-function mergeMetadata(left, right, fields) {
-  return Object.fromEntries(Object.keys(fields).flatMap(field => {
+function mergeMetadata(left, right, fields, withSupplier = false) {
+  const result = Object.fromEntries(Object.keys(fields).flatMap(field => {
     const value = [left?.[field], right?.[field]].filter(Boolean).sort(compare)[0]
     return value ? [[field, value]] : []
   }))
+  if (withSupplier) {
+    // Choose a complete existing reference; never combine an ID with another supplier's name.
+    const supplier = [left?.supplier, right?.supplier].filter(Boolean).sort((a, b) =>
+      Number(Boolean(b.id)) - Number(Boolean(a.id)) || compare(a.id || '', b.id || '') || compare(a.name, b.name))[0]
+    if (supplier) result.supplier = supplier
+  }
+  return result
+}
+
+function normalizeSupplier(value) {
+  const name = scalar(value?.name), id = scalar(value?.id)
+  return name ? {...(id ? {id} : {}), name} : undefined
 }
 
 // IDs are authoritative. A nameless-ID row keeps its ID as a display label.
 // Name-only rows join an identified row only when that name identifies one ID.
 // Distinct IDs with the same name remain distinct; no fuzzy matching is used.
 export function normalizeCatalogEntities(rows = [], entityType = 'supplier') {
-  const {metadata} = entityDefinition(entityType)
+  const {metadata, supplier: withSupplier} = entityDefinition(entityType)
   const identified = new Map(), anonymous = new Map()
   for (const row of rows) {
     const id = scalar(row?.id), name = scalar(row?.name ?? row?.label)
@@ -51,9 +64,10 @@ export function normalizeCatalogEntities(rows = [], entityType = 'supplier') {
       const value = typeof row?.[sourceField] === 'string' ? scalar(row[sourceField]) : ''
       return value ? [[field, value]] : []
     }))
+    if (withSupplier) projected.supplier = normalizeSupplier(row?.supplier)
     const preferred = !previous || (name && !previous.named) ||
       (candidate.named === previous.named && compare(candidate.name, previous.name) < 0) ? candidate : previous
-    map.set(key, {...preferred, ...mergeMetadata(previous, projected, metadata)})
+    map.set(key, {...preferred, ...mergeMetadata(previous, projected, metadata, withSupplier)})
   }
   const nameIds = new Map()
   for (const row of rows) {
@@ -66,7 +80,7 @@ export function normalizeCatalogEntities(rows = [], entityType = 'supplier') {
   for (const key of anonymous.keys()) {
     if (nameIds.get(key)?.size === 1) {
       const identifiedRow = identified.get(nameIds.get(key).values().next().value)
-      Object.assign(identifiedRow, mergeMetadata(identifiedRow, anonymous.get(key), metadata))
+      Object.assign(identifiedRow, mergeMetadata(identifiedRow, anonymous.get(key), metadata, withSupplier))
       anonymous.delete(key)
     }
   }
@@ -113,9 +127,9 @@ export const renewalsListEntitiesTool = {
   terminal: true, stateful: false,
   definition: {type: 'function', function: {
     name: 'renewals_list_entities',
-    description: 'Elenca esclusivamente le anagrafiche del catalogo Rinnovi/CRM, deduplicate e ordinate per nome. entityType=supplier elenca i fornitori con ID e nome; entityType=resourceType elenca i tipi di risorsa con ID, nome e, quando presenti, categoria e unità di misura. Il totale indica il numero di anagrafiche trovate. Non cerca servizi né entità associate a un cliente. Non calcola conteggi operativi, non produce ranking e non esegue aggregazioni o join: queste analisi sono capacità non migrate in questo tool.',
+    description: 'Elenca esclusivamente le anagrafiche del catalogo Rinnovi/CRM, deduplicate e ordinate per nome. entityType=supplier elenca i fornitori con ID e nome; entityType=resourceType elenca i tipi di risorsa con ID, nome e, quando presenti, categoria e unità di misura; entityType=plan elenca i piani base con ID, nome e fornitore quando disponibile, escludendo gli addon. Il totale indica il numero di anagrafiche trovate; limit e offset paginano la lista completa. Non cerca servizi né entità associate a un cliente. Non applica filtri per fornitore, risorse o prezzi e non restituisce dettagli delle risorse o dei listini. Non calcola conteggi operativi, non produce ranking e non esegue aggregazioni o join: queste analisi sono capacità non migrate in questo tool.',
     parameters: {type: 'object', additionalProperties: false, required: ['entityType'], properties: {
-      entityType: {type: 'string', enum: ['supplier', 'resourceType'], description: 'Anagrafica completa: supplier=fornitori; resourceType=tipi di risorsa.'},
+      entityType: {type: 'string', enum: ['supplier', 'resourceType', 'plan'], description: 'Anagrafica completa: supplier=fornitori; resourceType=tipi di risorsa; plan=piani base, esclusi addon.'},
       limit: {type: 'integer', minimum: 1, maximum: 50, description: 'Numero di entità da mostrare, massimo 50; predefinito 50.'},
       offset: {type: 'integer', minimum: 0, description: 'Posizione nella lista deduplicata ordinata; predefinito 0.'},
     }},
@@ -124,7 +138,7 @@ export const renewalsListEntitiesTool = {
     const data = await listRenewalsEntities(args)
     const reply = [`${data.entityLabel} trovati: ${data.total}.`,
       data.shown < data.total ? `Mostro ${data.shown} risultati dalla posizione ${data.offset + 1}.` : null,
-      ...data.items.map(item => `- ${item.name}`)].filter(Boolean).join('\n')
+      ...data.items.map(item => `- ${item.name}${item.supplier?.name ? ` · ${item.supplier.name}` : ''}`)].filter(Boolean).join('\n')
     return {ok: true, moduleId: 'facile.renewals', reply, data, modelContent: data}
   },
 }

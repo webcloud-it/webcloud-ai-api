@@ -349,7 +349,8 @@ function asiagoPresentation(data) {
 function renewalsPresentation(data) {
   if (data.type === 'renewals-entity-list' && Array.isArray(data.items)) {
     const cards = data.items.map((item, index) => {
-      const details = [detail('Categoria', item.category), detail('Unità', item.unit)].filter(Boolean)
+      const details = [detail('Categoria', item.category), detail('Unità', item.unit),
+        detail('Fornitore', item.supplier?.name)].filter(Boolean)
       return {
         id: text(item.id || `${data.entityType}-${data.offset + index}`),
         title: text(item.name),
