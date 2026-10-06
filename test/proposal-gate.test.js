@@ -87,7 +87,7 @@ before(async () => {
     // adapter; subsequent decisions must still bypass the model entirely.
     if (input.messages.at(-1)?.content === 'fixture:propose') {
       return res.end(JSON.stringify({message: {role: 'assistant', content: '', tool_calls: [{function: {
-        name: 'agent_report_outcome', arguments: {outcome: 'CAPABILITY_NOT_MIGRATED', capabilityIds: ['facile.renewals.preview']},
+        name: 'agent_report_outcome', arguments: {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['Rinnovi e CRM']},
       }}]}}))
     }
     modelCalls++

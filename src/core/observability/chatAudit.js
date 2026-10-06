@@ -31,6 +31,7 @@ export function recordChatAudit(entry = {}) {
     generalConversation: entry.generalConversation === true,
     legacyFallback: entry.legacyFallback === true,
     fallbackReason: entry.fallbackReason === 'capability-not-migrated' ? entry.fallbackReason : null,
+    fallbackModuleId: typeof entry.fallbackModuleId === 'string' ? entry.fallbackModuleId : null,
     durationMs: Number(entry.durationMs) || 0,
     availableCredentials: Array.isArray(entry.availableCredentials)
       ? entry.availableCredentials.sort()

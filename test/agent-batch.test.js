@@ -11,7 +11,7 @@ const principal = {id: 'fixture-operator', source: 'crm'}
 const S = 'renewals_search_services', P = 'renewals_get_plan', C = 'renewals_search_communications'
 const call = (name, args = {}) => ({function: {name, arguments: args}})
 const batch = calls => ({role: 'assistant', content: '', tool_calls: calls})
-const migration = call(AGENT_CONTROL, {outcome: 'CAPABILITY_NOT_MIGRATED', capabilityIds: ['facile.webcamgo.read']})
+const migration = call(AGENT_CONTROL, {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['WebcamGo']})
 const general = batch([call(AGENT_CONTROL, {outcome: 'GENERAL_CONVERSATION', reply: 'Entrambe le letture verificate.'})])
 
 function fixture(overrides = {}) {
@@ -203,17 +203,20 @@ test('F6: anche l’ingresso executeGlobalConversation rifiuta batch terminali',
   assert.equal(f.executions.length, 0)
 })
 
-test('F6: visibilità tool, prompt, stato model-facing e parametri inferenza restano identici a HEAD', () => {
+test('F6: batch, policy, stato e inferenza invariati; solo protocollo control autorizzato da F7', () => {
   const path = 'src/core/orchestrator/globalConversation.js'
   const current = readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').replaceAll('\r\n', '\n')
   const previous = execFileSync('git', ['show', `HEAD:${path}`], {encoding: 'utf8'})
   for (const [start, end] of [
     ['function normalizeHistory(', 'function compactAssistantMessage('],
-    ['  const allRegisteredTools = listTools(', '  const stateHint = previousAgentState'],
+    ['  const allRegisteredTools = listTools(', '  const outcomeControl ='],
     ['  const stateHint = previousAgentState', '  const executedTools = []'],
     ['    const stateMessage = await callModel(', "    const timing = {stage: 'state'"],
-    ["  const queryContext = ['refine', 'switch']", '  let currentAgentState = previousAgentState'],
+    ["  const queryContext = ['refine', 'switch']", '  const migrationInstruction ='],
+    ["        'Negli argomenti dei tool", '  let currentAgentState = previousAgentState'],
     ['    const assistantMessage = await callModel(', '    const modelDurationMs ='],
+    ['    const batchStartedAt = executedTools.length', '    messages.push(compactAssistantMessage(assistantMessage))'],
+    ['        const {args, stateMode, effectiveArgs}', '  return {\n    ok: false,\n    intent:'],
   ]) {
     const section = source => {
       const first = source.indexOf(start), last = source.indexOf(end, first)

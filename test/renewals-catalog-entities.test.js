@@ -190,16 +190,16 @@ test('F1: snapshot descrive lista, non contiene conteggi servizi; follow-up non 
     history: [{role: 'assistant', content: first.reply, meta: first.meta}], callModel: async request => request.format
       ? {content: JSON.stringify({stateMode: 'switch', entityReference: ''})}
       : {tool_calls: [{function: {name: 'agent_report_outcome', arguments: {
-        outcome: 'CAPABILITY_NOT_MIGRATED', capabilityIds: ['facile.renewals.read'],
+        outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['Rinnovi e CRM'],
       }}}]}})
   assert.equal(result.outcome, 'CAPABILITY_NOT_MIGRATED')
   assert.equal(result.response.meta.toolCalls.length, 0)
 })
 test('F1: router e contratti agentici protetti restano invariati', () => {
-  // F6 changes only batch execution in globalConversation; agent-batch verifies
-  // its behavior and preserves the model-facing sections against HEAD.
-  for (const path of ['src/routes/chat.js', 'src/core/orchestrator/globalChat.js',
-    'src/core/orchestrator/agentOutcome.js', 'src/core/tools/agentState.js', 'src/core/tools/proposalGate.js',
+  // F6 batch execution and F7 control projection/adapter selection have dedicated
+  // guards; business contracts, state, proposal policy and providers stay fixed.
+  for (const path of ['src/core/orchestrator/globalChat.js',
+    'src/core/tools/agentState.js', 'src/core/tools/proposalGate.js',
     'src/core/tools/toolContract.js', 'src/core/providers/ollamaProvider.js']) {
     assert.deepEqual(readFileSync(new URL(`../${path}`, import.meta.url)), execFileSync('git', ['show', `HEAD:${path}`]))
   }

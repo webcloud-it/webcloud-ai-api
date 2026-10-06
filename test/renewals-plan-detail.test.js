@@ -264,10 +264,10 @@ test('F5: POST execution error and missing CRM are ERROR without fallback', asyn
   assert.equal(reads.length, 0); assert.equal(legacy, 0)
 })
 test('F5: F1–F4 modules and protected agent/routing/provider files unchanged', () => {
-  // F6 authorizes batch execution changes, with model-facing guards in agent-batch.
+  // F6 batch and F7 control projection/adapter selection have dedicated guards.
   for (const path of ['src/modules/facile/renewals/catalogEntities.js', 'src/modules/facile/renewals/planSearch.js',
-    'src/routes/chat.js', 'src/core/orchestrator/globalChat.js',
-    'src/core/orchestrator/agentOutcome.js', 'src/core/tools/agentState.js', 'src/core/tools/proposalGate.js',
+    'src/core/orchestrator/globalChat.js',
+    'src/core/tools/agentState.js', 'src/core/tools/proposalGate.js',
     'src/core/tools/toolContract.js', 'src/core/providers/ollamaProvider.js']) {
     assert.equal(readFileSync(path, 'utf8').replaceAll('\r\n', '\n'), execFileSync('git', ['show', `HEAD:${path}`], {encoding: 'utf8'}))
   }

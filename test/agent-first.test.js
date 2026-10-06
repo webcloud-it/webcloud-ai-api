@@ -8,7 +8,10 @@ import {createAuthTokenMiddleware} from '../src/middlewares/authToken.js'
 import {getModuleById} from '../src/modules/registry.js'
 import {env} from '../src/config/env.js'
 import {executeAgentRequest} from '../src/core/orchestrator/globalConversation.js'
-import {AGENT_CONTROL} from '../src/core/orchestrator/agentOutcome.js'
+import {AGENT_CONTROL, createAgentOutcomeControl, validateAgentOutcomeControl} from '../src/core/orchestrator/agentOutcome.js'
+import {getCapabilityCatalog} from '../src/core/capabilities/catalog.js'
+import {readFileSync} from 'node:fs'
+import {execFileSync} from 'node:child_process'
 import {getChatAuditEntries} from '../src/core/observability/chatAudit.js'
 
 const principal = {id: 'operator', source: 'crm'}
@@ -35,11 +38,11 @@ function fixtureReply(request) {
   if (request.format) return {content: JSON.stringify(decision)}
   if (mode === 'general') return call(AGENT_CONTROL, {outcome: 'GENERAL_CONVERSATION', reply: 'Un record MX indica il server che riceve la posta.'})
   if (mode === 'unstructured') return {content: 'Non posso accedere a quei dati.'}
-  if (mode === 'legacy') return call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read']})
-  if (mode === 'multi') return call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read', 'facile.renewals.read']})
-  if (mode === 'bad-control') return call(AGENT_CONTROL, {capabilityIds: ['invented']})
-  if (mode === 'scope-control') return call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read']})
-  if (mode === 'mixed') return {tool_calls: [...call(S).tool_calls, ...call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read']}).tool_calls]}
+  if (mode === 'legacy') return call(AGENT_CONTROL, {legacyAreas: ['WebcamGo']})
+  if (mode === 'multi') return call(AGENT_CONTROL, {legacyAreas: ['WebcamGo', 'Rinnovi e CRM']})
+  if (mode === 'bad-control') return call(AGENT_CONTROL, {legacyAreas: ['invented']})
+  if (mode === 'scope-control') return call(AGENT_CONTROL, {legacyAreas: ['WebcamGo']})
+  if (mode === 'mixed') return {tool_calls: [...call(S).tool_calls, ...call(AGENT_CONTROL, {legacyAreas: ['WebcamGo']}).tool_calls]}
   if (mode === 'terminal-batch') return {tool_calls: [
     ...call('renewals_get_plan', {plan: 'DomAssLicBase'}).tool_calls,
     ...call('renewals_get_plan', {plan: 'Aruba-pecprem'}).tool_calls,
@@ -48,7 +51,9 @@ function fixtureReply(request) {
     ...call('renewals_get_plan', {plan: 'DomAssLicBase'}).tool_calls, ...call(C, {latest: 'yes'}).tool_calls,
   ]}
   if (mode === 'nonterminal-batch-failure') return {tool_calls: [...call(S).tool_calls, ...call(C).tool_calls]}
-  if (mode === 'error-then-legacy' && requests.filter(item => !item.format).length > 1) return call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read']})
+  if (mode === 'capability-as-callable' && requests.length === 1) return call('facile.webcamgo.read')
+  if (mode === 'capability-as-callable') return call(AGENT_CONTROL, {legacyAreas: ['WebcamGo']})
+  if (mode === 'error-then-legacy' && requests.filter(item => !item.format).length > 1) return call(AGENT_CONTROL, {legacyAreas: ['WebcamGo']})
   if (mode === 'empty') return {content: ''}
   if (mode === 'validation' || mode === 'max' || mode === 'error-then-legacy') return call(S, {limit: 0})
   if (mode === 'json') return call(S, '{invalid')
@@ -152,10 +157,10 @@ test('Step E: control tool espone solo capability con credenziale e scope validi
   mode = 'general'
   await post('ciao', 'facile', [], {}, {'X-Webcloud-Credential-Webcamgo': ''})
   const definition = requests[0].tools.find(item => item.function.name === AGENT_CONTROL)
-  assert.ok(!definition.function.parameters.properties.capabilityIds.items.enum.includes('facile.webcamgo.read'))
+  assert.ok(!definition.function.parameters.properties.legacyAreas.items.enum.includes('WebcamGo'))
   await post('ciao', 'facile.renewals')
   const scoped = requests[1].tools.find(item => item.function.name === AGENT_CONTROL)
-  assert.ok(scoped.function.parameters.properties.capabilityIds.items.enum.every(id => id.startsWith('facile.renewals.')))
+  assert.deepEqual(scoped.function.parameters.properties.legacyAreas.items.enum, ['Rinnovi e CRM'])
   assert.ok(requests[0].messages[0].content.includes('massimo 60 parole'))
 })
 test('Step E: nuovo tool nel registry è selezionabile senza modifiche a globalChat', async () => {
@@ -230,9 +235,9 @@ test('Step E: provider error del planner Step C è ERROR senza nuovo planner', a
 test('Step E: outcome conversazionale e migrazione richiedono payload distinti e validi', async () => {
   for (const args of [
     {outcome: 'GENERAL_CONVERSATION', reply: ''},
-    {outcome: 'GENERAL_CONVERSATION', reply: 'ciao', capabilityIds: ['facile.renewals.read']},
+    {outcome: 'GENERAL_CONVERSATION', reply: 'ciao', legacyAreas: ['Rinnovi e CRM']},
     {outcome: 'CAPABILITY_NOT_MIGRATED'},
-    {outcome: 'CAPABILITY_NOT_MIGRATED', capabilityIds: ['facile.renewals.read'], reply: 'non disponibile'},
+    {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['Rinnovi e CRM'], reply: 'non disponibile'},
   ]) {
     const result = await executeAgentRequest({message: 'query', credentials, principal, callModel: async () => call(AGENT_CONTROL, args)})
     assert.equal(result.outcome, 'ERROR'); assert.equal(result.response.meta.toolErrors[0].code, 'TOOL_VALIDATION_ERROR')
@@ -301,4 +306,137 @@ test('F6 POST /api/chat: secondo read fallito non presenta il primo come complet
   assert.equal(legacy.length, 0)
   assert.equal(requests.length, 1)
   assert.doesNotMatch(JSON.stringify(result), /PRIVATE_BATCH_FAILURE/)
+})
+
+test('F7: registry definitions sono le sole funzioni business; nessun ID capability nel payload modello', async () => {
+  mode = 'general'
+  await post('ciao')
+  const request = requests[0]
+  assert.deepEqual(request.tools.map(item => item.function.name), [...savedTools.map(tool => tool.name), AGENT_CONTROL])
+  assert.deepEqual(request.tools.slice(0, -1), savedTools.map(tool => tool.definition))
+  const modelFacing = JSON.stringify(request)
+  for (const capability of getCapabilityCatalog({includeUnavailable: true})) {
+    assert.equal(modelFacing.includes(capability.id), false, capability.id)
+    assert.equal(modelFacing.includes(capability.moduleId), false, capability.moduleId)
+  }
+  const control = request.tools.at(-1).function
+  assert.equal(control.parameters.properties.capabilityIds, undefined)
+  assert.equal(control.parameters.properties.moduleId, undefined)
+  assert.ok(control.parameters.properties.legacyAreas.items.enum.includes('WebcamGo'))
+  assert.ok(control.description.includes('NON CALLABLE'))
+  assert.ok(control.description.includes('CALLABLE TOOLS dal registry'))
+  assert.ok(!control.description.includes('nativeTools'))
+})
+
+test('F7: area WebcamGo valida risolve modulo e permission backend, senza router model', async () => {
+  mode = 'legacy'
+  const {result} = await post('Quante webcam sono offline?')
+  assert.equal(result.ok, true)
+  assert.equal(result.meta.agentOutcome, 'CAPABILITY_NOT_MIGRATED')
+  assert.equal(result.meta.fallbackModuleId, camera.id)
+  assert.deepEqual(result.meta.capabilityNotMigrated.moduleIds, [camera.id])
+  assert.deepEqual(result.meta.capabilityNotMigrated.capabilityIds,
+    getCapabilityCatalog({credentials}).filter(item => item.moduleId === camera.id).map(item => item.id))
+  assert.deepEqual(legacy, [camera.id])
+  assert.equal(requests.length, 1)
+  assert.equal(getChatAuditEntries({limit: 1})[0].fallbackModuleId, camera.id)
+})
+
+for (const args of [
+  {legacyAreas: ['invented']}, {legacyAreas: ['facile.webcamgo']},
+  {legacyAreas: ['facile.webcamgo.read']}, {moduleId: 'facile.webcamgo'},
+  {capabilityIds: ['facile.webcamgo.read']},
+]) {
+  test(`F7: target non previsto dal nuovo schema ${JSON.stringify(args)} → ERROR senza fallback`, async () => {
+    const result = await executeAgentRequest({message: 'query', credentials, principal,
+      callModel: async () => call(AGENT_CONTROL, args)})
+    assert.equal(result.outcome, 'ERROR')
+    assert.equal(result.response.meta.toolErrors[0].code, 'TOOL_VALIDATION_ERROR')
+    assert.notEqual(result.response.meta.legacyFallback, true)
+    assert.equal(result.response.meta.fallbackModuleId, undefined)
+    assert.equal(legacy.length, 0)
+  })
+}
+
+test('F7: nessuna area senza principal autenticato o credenziale del modulo', () => {
+  const bare = createAgentOutcomeControl({credentials, principal: null})
+  assert.deepEqual(bare.legacySummary, [])
+  assert.deepEqual(bare.definition.function.parameters.properties.outcome.enum, ['GENERAL_CONVERSATION'])
+  const control = createAgentOutcomeControl({credentials: {crm: 'crm'}, principal})
+  assert.ok(!control.legacySummary.some(item => item.area === 'WebcamGo'))
+  const scoped = createAgentOutcomeControl({credentials, principal, toolModuleId: 'facile.renewals'})
+  assert.deepEqual(scoped.legacySummary.map(item => item.area), ['Rinnovi e CRM'])
+  const secondaryOnly = createAgentOutcomeControl({credentials: {snowbulletin: 'fixture-snow'}, principal})
+  assert.deepEqual(secondaryOnly.legacySummary.map(item => item.area), ['Asiago.it e CMS'])
+  const snow = validateAgentOutcomeControl(secondaryOnly,
+    {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['Asiago.it e CMS']},
+    {credentials: {snowbulletin: 'fixture-snow'}, principal})
+  assert.deepEqual(snow, {moduleIds: ['facile.asiago'], capabilityIds: ['facile.asiago.snow.read']},
+    'Gli adapter multi-credenziale mantengono soltanto lo scope già disponibile, senza pretendere permessi CMS')
+})
+
+test('F7: credenziale/principal vengono ricontrollati al consumo del control outcome', () => {
+  const control = createAgentOutcomeControl({credentials, principal})
+  const args = {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['WebcamGo']}
+  assert.throws(() => validateAgentOutcomeControl(control, args, {credentials: {crm: 'crm'}, principal}),
+    error => error.code === 'TOOL_AUTHORIZATION_DENIED')
+  assert.throws(() => validateAgentOutcomeControl(control, args, {credentials, principal: null}),
+    error => error.code === 'TOOL_AUTHORIZATION_DENIED')
+  assert.throws(() => validateAgentOutcomeControl(control,
+    {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['Rinnovi e CRM']},
+    {credentials, principal: {...principal, source: 'untrusted'}}), error => error.code === 'TOOL_AUTHORIZATION_DENIED')
+})
+
+test('F7: il backend mantiene lo scope proiettato, anche se arrivano ulteriori credenziali', () => {
+  const control = createAgentOutcomeControl({credentials: {snowbulletin: 'fixture-snow'}, principal})
+  const result = validateAgentOutcomeControl(control,
+    {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['Asiago.it e CMS']},
+    {credentials: {snowbulletin: 'fixture-snow', cmsAsiagoIt: 'fixture-cms'}, principal})
+  assert.deepEqual(result.capabilityIds, ['facile.asiago.snow.read'])
+})
+
+test('F7: adapter reale richiesto nella proiezione e anche prima del fallback', () => {
+  const control = createAgentOutcomeControl({credentials, principal})
+  const original = camera.routes
+  try {
+    camera.routes = {}
+    assert.ok(!createAgentOutcomeControl({credentials, principal}).legacySummary.some(item => item.area === 'WebcamGo'))
+    assert.throws(() => validateAgentOutcomeControl(control,
+      {outcome: 'CAPABILITY_NOT_MIGRATED', legacyAreas: ['WebcamGo']}, {credentials, principal}),
+      error => error.code === 'TOOL_CAPABILITY_DENIED')
+  } finally {camera.routes = original}
+})
+
+test('F7: un ID capability invocato come funzione resta TOOL_UNAVAILABLE; i control successivi non aprono fallback', async () => {
+  mode = 'capability-as-callable'
+  const {result} = await post('query')
+  assert.equal(result.meta.agentOutcome, 'ERROR')
+  assert.equal(result.meta.toolErrors[0].code, 'TOOL_UNAVAILABLE')
+  assert.ok(result.meta.toolErrors.slice(1).every(error => error.code === 'AGENT_MIGRATION_CONFLICT'))
+  assert.equal(executions.length, 0)
+  assert.equal(legacy.length, 0)
+})
+
+test('F7: control di migrazione dopo un read eseguito è vietato', async () => {
+  let passes = 0
+  const tool = {...savedTools[0], terminal: false, execute: async () => {
+    executions.push(S); return {ok: true, data: {type: 'fixture'}}
+  }}
+  const result = await executeAgentRequest({message: 'query', credentials, principal, listTools: () => [tool],
+    callModel: async () => ++passes === 1 ? call(S) : call(AGENT_CONTROL, {legacyAreas: ['WebcamGo']})})
+  assert.equal(result.outcome, 'ERROR')
+  assert.equal(result.response.meta.toolErrors[0].code, 'AGENT_MIGRATION_CONFLICT')
+  assert.equal(executions.length, 1)
+  assert.equal(legacy.length, 0)
+})
+
+test('F7: business F1–F5, router, state, policy, proposta e provider invariati rispetto al checkpoint', () => {
+  for (const path of ['src/modules/facile/renewals/tools.js', 'src/modules/facile/renewals/planDetail.js',
+    'src/modules/facile/renewals/planSearch.js', 'src/modules/facile/renewals/catalogEntities.js',
+    'src/modules/facile/renewals/serviceQueries.js', 'src/core/orchestrator/globalChat.js',
+    'src/core/tools/agentState.js', 'src/core/tools/toolContract.js', 'src/core/tools/proposalGate.js',
+    'src/core/providers/ollamaProvider.js', 'src/middlewares/authToken.js', 'src/core/capabilities/catalog.js']) {
+    assert.equal(readFileSync(path, 'utf8').replaceAll('\r\n', '\n'),
+      execFileSync('git', ['show', `HEAD:${path}`], {encoding: 'utf8'}), path)
+  }
 })

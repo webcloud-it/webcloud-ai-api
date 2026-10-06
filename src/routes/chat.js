@@ -59,6 +59,7 @@ router.post(
         generalConversation: payload?.meta?.generalConversation,
         legacyFallback: payload?.meta?.legacyFallback,
         fallbackReason: payload?.meta?.fallbackReason,
+        fallbackModuleId: payload?.meta?.fallbackModuleId,
         durationMs: Date.now() - startedAt,
         availableCredentials: Object.entries(req.auth?.credentials || {})
           .filter(([, value]) => Boolean(value))
@@ -87,11 +88,14 @@ router.post(
       agentOutcome: outcome, generalConversation: false, legacyFallback: true,
       fallbackReason: 'capability-not-migrated',
       capabilityNotMigrated: agentResponse.meta.capabilityNotMigrated,
+      fallbackModuleId: agentResponse.meta.fallbackModuleId,
       agentTimings: agentResponse.meta.agentTimings}
     const migration = agentResponse.meta.capabilityNotMigrated
     // The linguistic router is now only a temporary legacy adapter locator.
     // Its result can never expand the model's validated structured scope.
-    let globalPlan = isGlobalRequest
+    let globalPlan = migration.moduleIds.length === 1
+      ? {type: 'module', moduleId: migration.moduleIds[0], source: 'agent-control'}
+      : isGlobalRequest
       ? await resolveGlobalChatPlan({
           message: req.body?.message,
           context: req.body?.context,

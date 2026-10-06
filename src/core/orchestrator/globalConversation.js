@@ -217,7 +217,7 @@ export async function executeGlobalConversation({
   const toolDefinitions = registeredTools.map(tool => tool.definition)
   const toolsByName = new Map(candidateTools.map(tool => [tool.name, tool]))
   if (agentFirst && allRegisteredTools.some(tool => tool.name === AGENT_CONTROL)) throw new TypeError('Nome control tool riservato')
-  const outcomeControl = agentFirst ? createAgentOutcomeControl({credentials, toolModuleId, tools: registeredTools}) : null
+  const outcomeControl = agentFirst ? createAgentOutcomeControl({credentials, principal, toolModuleId, tools: registeredTools}) : null
   if (candidateTools.length && !toolDefinitions.length && !agentFirst) {
     const denied = availabilityErrors[0]
     return {
@@ -278,7 +278,7 @@ export async function executeGlobalConversation({
     : turnState.entityReference ? `La richiesta corrente riguarda l’entità ${JSON.stringify(turnState.entityReference)}: specifica esplicitamente questa entità nel parametro appropriato del tool scelto. Gli altri argomenti della query precedente non sono disponibili né da ereditare.` : null
   if (outcomeControl) toolDefinitions.push(outcomeControl.definition)
   const migrationInstruction = outcomeControl
-    ? 'Scegli un tool applicativo se copre la richiesta, altrimenti chiama agent_report_outcome. Per conversazione generale usa GENERAL_CONVERSATION e reply; per dati interni non coperti usa CAPABILITY_NOT_MIGRATED e capabilityIds, senza reply. Non rispondere con testo libero: usa il protocollo strutturato nella stessa inferenza. Usa un tool applicativo SOLO se produce esattamente il tipo di risultato richiesto: un parametro di filtro per una entità NON consente di elencare quella entità. Per richieste miste con una parte non migrata segnala tutte le capability prima di eseguire tool. Non usare il segnale di migrazione per errori o permessi mancanti.'
+    ? 'Scegli un tool applicativo se copre la richiesta, altrimenti chiama agent_report_outcome. Per conversazione generale usa GENERAL_CONVERSATION e reply; per dati interni non coperti usa CAPABILITY_NOT_MIGRATED e legacyAreas, senza reply. Non rispondere con testo libero: usa il protocollo strutturato nella stessa inferenza. Usa un tool applicativo SOLO se produce esattamente il tipo di risultato richiesto: un parametro di filtro per una entità NON consente di elencare quella entità. Per richieste miste con una parte non migrata segnala tutte le aree prima di eseguire tool. Non usare il segnale di migrazione per errori o permessi mancanti.'
     : null
   const systemContent = toolDefinitions.length
     ? [
@@ -476,6 +476,7 @@ export async function executeGlobalConversation({
             data: {type: 'capability-not-migrated'},
             meta: {moduleId: toolModuleId || 'facile', orchestrator: 'agent-v1', routingSource,
               capabilityNotMigrated: decision, toolCalls: [],
+              fallbackModuleId: decision.moduleIds.length === 1 ? decision.moduleIds[0] : null,
               agentTimings: {totalMs: Date.now() - agentStartedAt, modelPasses}}}
         }
         const {args, stateMode, effectiveArgs} = preparedBatch?.[callIndex] ||
