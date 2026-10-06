@@ -1,4 +1,5 @@
 import {operationalCustomer} from './customerReferences.js'
+import {historicalCommunicationIdentity} from './communicationIdentity.js'
 
 function normalizeText(value = '') {
   return String(value ?? '')
@@ -656,9 +657,8 @@ function buildCommunications({services = []} = {}) {
   const out = []
 
   for (const service of services) {
-    // Historical attribution remains operational until the phase-3 migration.
-    const customer = operationalCustomer(service)
-    for (const communication of service?.renewalsCommunications || []) {
+    for (const communication of service?.renewalsCommunicationsHistory ?? service?.renewalsCommunications ?? []) {
+      const historical = historicalCommunicationIdentity(communication, service)
       out.push({
         id:
           communication?.id ||
@@ -669,12 +669,18 @@ function buildCommunications({services = []} = {}) {
         communicationDate: communication?.communicationDate || null,
         year: toDateYear(communication?.communicationDate),
         service: {id: service?.id || null, name: service?.name || null},
-        customer: customer
-          ? {id: customer.id || null, name: customer.name || null}
+        customer: historical.customerId || historical.customerName
+          ? {id: historical.customerId, name: historical.customerName}
           : null,
-        group: customer?.group
-          ? {id: customer.group.id || null, name: customer.group.name || null}
+        group: historical.groupId || historical.groupName
+          ? {id: historical.groupId, name: historical.groupName}
           : null,
+        ...(communication.historicalIdentity || Object.hasOwn(service, 'commercialCustomerId') ? {
+          customerSource: historical.customerSource, groupSource: historical.groupSource,
+          currentCommercialCustomer: service.customer ? {id: service.customer.id, name: service.customer.name} : null,
+          currentOperationalCustomer: operationalCustomer(service)
+            ? {id: operationalCustomer(service).id, name: operationalCustomer(service).name} : null,
+        } : {}),
       })
     }
   }
@@ -1276,6 +1282,12 @@ const definitions = [
       typeLabel: {type: 'string'},
       communicationDate: {type: 'date'},
       year: {type: 'number'},
+      customerSource: {type: 'string'},
+      groupSource: {type: 'string'},
+      'customer.id': {type: 'string', aliases: ['id cliente storico']},
+      'group.id': {type: 'string', aliases: ['id gruppo storico']},
+      'currentCommercialCustomer.name': {type: 'string', aliases: ['cliente commerciale attuale']},
+      'currentOperationalCustomer.name': {type: 'string', aliases: ['cliente operativo attuale']},
       'service.name': {type: 'string'},
       'customer.name': {type: 'string'},
       'group.name': {type: 'string'},

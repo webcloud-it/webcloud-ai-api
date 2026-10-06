@@ -141,6 +141,26 @@ const historyRows = [
 ]
 const historyService = {...services[0], customer: {...services[0].customer, name: 'Zilio Group'}, renewalsCommunicationsHistory: historyRows}
 
+test('Phase 3A: communications tool filters historical A independently of current B and returns both references', async () => {
+  const A = {id: 'A', name: 'Historical A', group: {id: 'GA', name: 'Historical GA'}}
+  const B = {id: 'B', name: 'Current B', group: {id: 'GB', name: 'Current GB'}}
+  const makeIdentity = c => ({customerId: c.id, customerName: c.name, groupId: c.group.id,
+    groupName: c.group.name, customerSource: 'snapshot', groupSource: 'snapshot'})
+  await withServices([{...services[0], customer: B, commercialCustomer: B, commercialCustomerId: 'B', operationalCustomer: A,
+    renewalsCommunicationsHistory: [
+      {...historyRows[0], id: 'old-A', historicalIdentity: makeIdentity(A)},
+      {...historyRows[1], id: 'new-B', historicalIdentity: makeIdentity(B)},
+    ]}], async () => {
+    const older = await communicationTool.execute({customerOrGroup: 'Historical A'})
+    const newer = await communicationTool.execute({customerOrGroup: 'Current B'})
+    assert.deepEqual(older.data.items.map(r => r.id), ['old-A'])
+    assert.deepEqual(newer.data.items.map(r => r.id), ['new-B'])
+    assert.equal(older.data.items[0].currentCommercialCustomer.id, 'B')
+    assert.equal(older.data.items[0].currentOperationalCustomer.id, 'A')
+    assert.match(older.reply, /Historical A/)
+  })
+})
+
 test('Step D: usa lo storico completo, ordina per communicationDate DESC e risolve le parità per ID', async () => {
   await withServices([historyService], async () => {
     const result = await communicationTool.execute({})

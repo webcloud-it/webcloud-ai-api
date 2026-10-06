@@ -1,10 +1,13 @@
 import {getAllServices, getSettings} from './service.js'
+import {historicalCommunicationIdentity, historicalAttributionNote} from './communicationIdentity.js'
+import {operationalCustomer} from './customerReferences.js'
 import {buildStructuredServiceListPayload} from './serviceQueries.js'
 import {formatRecordedDateTime} from '../../../utils/formatters.js'
 import {ToolContractError} from '../../../core/tools/toolContract.js'
 import {renewalsListEntitiesTool} from './catalogEntities.js'
 import {renewalsSearchPlansTool} from './planSearch.js'
 import {renewalsGetPlanTool} from './planDetail.js'
+import {renewalsSchedulingTool} from './scheduling.js'
 
 const RENEWALS_SEARCH_SERVICES_NAME = 'renewals_search_services'
 const RENEWALS_SEARCH_COMMUNICATIONS_NAME = 'renewals_search_communications'
@@ -144,6 +147,7 @@ function matchesCommunicationScope(
 }
 
 function normalizeRenewalCommunication(service = {}, communication = {}) {
+  const historical = historicalCommunicationIdentity(communication, service)
   const fields = {
     id: normalizeCommunicationText(communication?.id),
     communicationDate: normalizeCommunicationText(communication?.communicationDate),
@@ -154,10 +158,16 @@ function normalizeRenewalCommunication(service = {}, communication = {}) {
     subject: normalizeCommunicationText(communication?.subject),
     serviceId: normalizeCommunicationText(service?.id),
     serviceName: normalizeCommunicationText(service?.name),
-    customerId: normalizeCommunicationText(service?.customer?.id),
-    customerName: normalizeCommunicationText(service?.customer?.name || service?.customer?.businessName),
-    groupId: normalizeCommunicationText(service?.customer?.group?.id),
-    groupName: normalizeCommunicationText(service?.customer?.group?.name),
+    customerId: normalizeCommunicationText(historical.customerId),
+    customerName: normalizeCommunicationText(historical.customerName),
+    groupId: normalizeCommunicationText(historical.groupId),
+    groupName: normalizeCommunicationText(historical.groupName),
+    ...(communication.historicalIdentity || Object.hasOwn(service, 'commercialCustomerId') ? {
+      customerSource: historical.customerSource, groupSource: historical.groupSource,
+      currentCommercialCustomer: service.customer ? {id: service.customer.id, name: service.customer.name} : null,
+      currentOperationalCustomer: operationalCustomer(service)
+        ? {id: operationalCustomer(service).id, name: operationalCustomer(service).name} : null,
+    } : {}),
   }
   return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))
 }
@@ -175,14 +185,15 @@ async function searchRenewalCommunications({
   let missingSendingMode = false
 
   for (const item of Array.isArray(services) ? services : []) {
-    if (!matchesCommunicationScope(item, {customerOrGroup, serviceName: service})) continue
-
     const hasHistory = Array.isArray(item?.renewalsCommunicationsHistory)
     if (!hasHistory) completeHistory = false
     const communications = hasHistory ? item.renewalsCommunicationsHistory : item?.renewalsCommunications || []
 
     for (const communication of Array.isArray(communications) ? communications : []) {
       const normalized = normalizeRenewalCommunication(item, communication)
+      if (!matchesCommunicationScope({name: normalized.serviceName,
+        customer: {name: normalized.customerName, group: {name: normalized.groupName}}},
+        {customerOrGroup, serviceName: service})) continue
       if (typeof normalized.sentAutomatically !== 'boolean') missingSendingMode = true
 
       if (
@@ -262,6 +273,7 @@ function buildSearchCommunicationsReply(data = {}) {
       !item.to ? 'Destinatario non disponibile nei dati.' : null,
       item.subject ? `Oggetto: «${item.subject}».` : 'Oggetto non disponibile nei dati.',
       typeof item.sentAutomatically === 'boolean' ? `Invio ${item.sentAutomatically ? 'automatico' : 'manuale'}.` : 'Modalità di invio non disponibile nei dati.',
+      historicalAttributionNote(item),
     ].filter(Boolean).join(' ')
   }
 
@@ -274,6 +286,7 @@ function buildSearchCommunicationsReply(data = {}) {
       item.subject ? `oggetto "${item.subject}"` : null,
       item.typeLabel,
       typeof item.sentAutomatically === 'boolean' ? `invio ${item.sentAutomatically ? 'automatico' : 'manuale'}` : null,
+      historicalAttributionNote(item),
     ].filter(Boolean)
 
     return `- ${details.join(' · ')}`
@@ -434,4 +447,5 @@ export const renewalsTools = [
   renewalsListEntitiesTool,
   renewalsSearchPlansTool,
   renewalsGetPlanTool,
+  renewalsSchedulingTool,
 ]

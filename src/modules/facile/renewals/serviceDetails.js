@@ -1,4 +1,5 @@
 import {buildServiceSnapshot, getClientSubscriptions} from './snapshots.js'
+import {historicalCommunicationIdentity} from './communicationIdentity.js'
 import {matchesText} from '../../../utils/text.js'
 
 export function extractServiceDetailQuery(message = '') {
@@ -115,12 +116,13 @@ function buildServiceDetailItem(service, {thresholds, analysisPeriod}) {
     .sort((a, b) => new Date(a.endsOn) - new Date(b.endsOn))
     .slice(0, 10)
 
-  const communications = (service?.renewalsCommunications || [])
+  const communications = (service?.renewalsCommunicationsHistory ?? service?.renewalsCommunications ?? [])
     .filter(item => item?.communicationDate)
     .map(item => ({
       type: item?.type || null,
       typeLabel: item?.typeLabel || null,
       communicationDate: item.communicationDate,
+      ...(item.historicalIdentity ? {historicalIdentity: historicalCommunicationIdentity(item, service)} : {}),
     }))
     .sort((a, b) => {
       return new Date(b.communicationDate).getTime() - new Date(a.communicationDate).getTime()

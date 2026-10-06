@@ -1,29 +1,35 @@
 import {normalizeText} from '../../../utils/text.js'
 import {operationalCustomer} from './customerReferences.js'
+import {historicalCommunicationIdentity, historicalAttributionNote} from './communicationIdentity.js'
 
 const DOMAIN_PATTERN = /\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\b/i
 
 export function buildCommunicationsIndex(services = []) {
   return services.flatMap(service => {
-    // Phase 3 will migrate historical attribution; retain the preceding contract here.
-    const historicalCustomer = operationalCustomer(service)
-    const customerName = historicalCustomer?.name || '—'
-    const groupName = historicalCustomer?.group?.name || null
     const serviceName = service?.name || '—'
 
-    return (service?.renewalsCommunications || [])
+    return (service?.renewalsCommunicationsHistory ?? service?.renewalsCommunications ?? [])
       .filter(item => item?.communicationDate)
-      .map(item => ({
+      .map(item => {
+        const historical = historicalCommunicationIdentity(item, service)
+        return {
         serviceId: service.id,
         serviceName,
-        customerId: historicalCustomer?.id || null,
-        customerName,
-        groupId: historicalCustomer?.group?.id || null,
-        groupName,
+        customerId: historical.customerId,
+        customerName: historical.customerName || '—',
+        groupId: historical.groupId,
+        groupName: historical.groupName,
+        ...(item.historicalIdentity || Object.hasOwn(service, 'commercialCustomerId') ? {
+          customerSource: historical.customerSource, groupSource: historical.groupSource,
+          currentCommercialCustomerId: service.customer?.id ?? null,
+          currentCommercialCustomerName: service.customer?.name ?? null,
+          currentOperationalCustomerId: operationalCustomer(service)?.id ?? null,
+          currentOperationalCustomerName: operationalCustomer(service)?.name ?? null,
+        } : {}),
         type: item?.type || null,
         typeLabel: item?.typeLabel || null,
         communicationDate: item.communicationDate,
-      }))
+      }})
   })
 }
 
@@ -133,6 +139,7 @@ export function buildCommunicationsContext({
           serviceName: latest.serviceName,
           customerName: latest.customerName,
           groupName: latest.groupName,
+          ...communicationReferences(latest),
         }
       : null,
     items: ordered.slice(0, 15).map(item => ({
@@ -142,8 +149,16 @@ export function buildCommunicationsContext({
       serviceName: item.serviceName,
       customerName: item.customerName,
       groupName: item.groupName,
+      ...communicationReferences(item),
     })),
   }
+}
+
+function communicationReferences(item) {
+  return Object.fromEntries(['customerId', 'groupId', 'customerSource', 'groupSource',
+    'currentCommercialCustomerId', 'currentCommercialCustomerName',
+    'currentOperationalCustomerId', 'currentOperationalCustomerName']
+    .filter(key => Object.hasOwn(item, key)).map(key => [key, item[key]]))
 }
 
 export function buildCommunicationsReply(payload = {}, {message = ''} = {}) {
@@ -199,6 +214,7 @@ function formatLatestCommunicationReply(item = {}, {target = ''} = {}) {
     `L’ultima comunicazione inviata relativa a "${subject}" risulta del ${formatCommunicationDateTime(item?.communicationDate)}.`,
     `Tipo: ${type}.`,
     ...(details.length ? [`Riferimenti: ${details.join(' | ')}.`] : []),
+    ...(historicalAttributionNote(item) ? [historicalAttributionNote(item)] : []),
   ].join('\n')
 }
 
@@ -208,6 +224,7 @@ function formatCommunicationListItem(item = {}) {
     item?.serviceName ? `servizio ${item.serviceName}` : null,
     item?.customerName ? `cliente ${item.customerName}` : null,
     item?.groupName ? `gruppo ${item.groupName}` : null,
+    historicalAttributionNote(item),
   ].filter(Boolean)
 
   return `- ${formatCommunicationDateTime(item?.communicationDate)} | ${type}${

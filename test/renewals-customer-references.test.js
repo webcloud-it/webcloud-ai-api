@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {normalizeRenewalsService, operationalCustomer} from '../src/modules/facile/renewals/customerReferences.js'
+import {normalizeRenewalsService, operationalCustomer, commercialCustomer} from '../src/modules/facile/renewals/customerReferences.js'
 import {buildServiceSnapshot} from '../src/modules/facile/renewals/snapshots.js'
 import {buildCommunicationsIndex} from '../src/modules/facile/renewals/communications.js'
 import {buildRenewalsChatMessages} from '../src/modules/facile/renewals/prompt.js'
@@ -8,6 +8,20 @@ import {buildReadEntityRecords} from '../src/modules/facile/renewals/readEntityR
 
 const A = {id: 'A', name: 'Operativo', group: {id: 'GA', name: 'GA'}}
 const B = {id: 'B', name: 'Commerciale', group: {id: 'GB', name: 'GB'}}
+test('incomplete or unreadable separated contracts reject A instead of commercial fallback', () => {
+  for (const partial of [
+    {commercialCustomerId: 'B'}, {explicitCommercialCustomerId: 'B'},
+    {commercialCustomerId: 'B', commercialCustomer: null},
+    {commercialCustomerId: 'B', commercialCustomer: A},
+    {commercialCustomerId: 'B', explicitCommercialCustomerId: 'C', commercialCustomer: B},
+    {operationalCustomer: A},
+  ]) {
+    const service = {id: 's', customer: A, ...partial}
+    assert.throws(() => normalizeRenewalsService(service), error => error.statusCode === 403)
+    assert.throws(() => commercialCustomer(service), /non leggibile/)
+  }
+  assert.equal(commercialCustomer({customer: A, commercialCustomer: A, commercialCustomerId: 'A', explicitCommercialCustomerId: null}), A)
+})
 test('AI current renewals context treats customer as B and exposes operational A', () => {
   const input = {id: 's1', customer: A, commercialCustomer: B, commercialCustomerId: 'B',
     operationalCustomer: A, operationalCustomerId: 'A', subscriptions: []}
