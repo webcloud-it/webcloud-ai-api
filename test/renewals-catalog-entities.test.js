@@ -195,8 +195,10 @@ test('F1: snapshot descrive lista, non contiene conteggi servizi; follow-up non 
   assert.equal(result.outcome, 'CAPABILITY_NOT_MIGRATED')
   assert.equal(result.response.meta.toolCalls.length, 0)
 })
-test('F1: nessuna modifica al router linguistico o al core agentico', () => {
-  for (const path of ['src/routes/chat.js', 'src/core/orchestrator/globalChat.js', 'src/core/orchestrator/globalConversation.js',
+test('F1: router e contratti agentici protetti restano invariati', () => {
+  // F6 changes only batch execution in globalConversation; agent-batch verifies
+  // its behavior and preserves the model-facing sections against HEAD.
+  for (const path of ['src/routes/chat.js', 'src/core/orchestrator/globalChat.js',
     'src/core/orchestrator/agentOutcome.js', 'src/core/tools/agentState.js', 'src/core/tools/proposalGate.js',
     'src/core/tools/toolContract.js', 'src/core/providers/ollamaProvider.js']) {
     assert.deepEqual(readFileSync(new URL(`../${path}`, import.meta.url)), execFileSync('git', ['show', `HEAD:${path}`]))

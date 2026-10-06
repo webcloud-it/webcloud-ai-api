@@ -169,6 +169,17 @@ function serializeToolContent(value) {
   }
 }
 
+function prepareApplicationToolCall(toolCall, {toolsByName, credentials, principal, state, stateMode}) {
+  const name = String(toolCall?.function?.name || '').trim()
+  const tool = toolsByName.get(name)
+  if (!tool) throw new ToolContractError('TOOL_UNAVAILABLE', 'Tool non disponibile.')
+  assertAutomaticToolPolicy(tool, {credentials, principal})
+  const args = parseToolArguments(toolCall?.function?.arguments)
+  const effectiveArgs = mergeToolStateArgs(tool, args, state, stateMode)
+  validateToolArguments(tool, effectiveArgs)
+  return {name, tool, args, stateMode, effectiveArgs}
+}
+
 export async function executeGlobalConversation({
   message,
   history = [],
@@ -395,16 +406,61 @@ export async function executeGlobalConversation({
       }
     }
 
+    const batchStartedAt = executedTools.length
+    let preparedBatch = null
+    const batchFailure = (status, errors) => ({
+      ok: false, intent: 'agent', source: 'agent',
+      reply: status === 'rejected'
+        ? 'Non posso completare questo batch di tool in modo verificato. Nessun tool del batch è stato eseguito.'
+        : 'Il batch di tool non è stato completato. Nessun risultato completo verificato da mostrare.',
+      data: {type: 'tool-error', code: errors[0].code},
+      meta: {
+        moduleId: lastToolModuleId || toolModuleId || 'facile', orchestrator: 'agent-v1', routingSource,
+        toolCalls: executedTools, toolErrors: [...toolErrors, ...errors],
+        toolBatch: {
+          iteration: iteration + 1, status, requested: toolCalls.length,
+          attempted: executedTools.length - batchStartedAt,
+          completed: executedTools.slice(batchStartedAt).filter(item => !item.error).length,
+          calls: toolCalls.map(item => String(item?.function?.name || '').trim()),
+        },
+        agentTimings: {totalMs: Date.now() - agentStartedAt, modelPasses},
+      },
+    })
+    if (toolCalls.length > 1) {
+      // Control decisions are exclusive. Terminal replies have no composition
+      // contract: never execute a prefix and silently discard the other calls.
+      if (outcomeControl && toolCalls.some(call => call?.function?.name === AGENT_CONTROL)) {
+        return batchFailure('rejected', [{code: 'AGENT_MIGRATION_CONFLICT',
+          message: 'Una decisione di controllo deve essere l’unica chiamata del passaggio.'}])
+      }
+      const batchErrors = []
+      preparedBatch = toolCalls.map((toolCall, callIndex) => {
+        try {
+          // Sibling calls use the same validated input state, not state produced
+          // by an earlier call that was absent from the model's batch request.
+          return prepareApplicationToolCall(toolCall, {toolsByName, credentials, principal,
+            state: currentAgentState, stateMode: turnState.stateMode})
+        } catch (error) {
+          if (!(error instanceof ToolContractError)) throw error
+          batchErrors.push({name: String(toolCall?.function?.name || '').trim(), callIndex,
+            code: error.code, message: error.message, ...(error.issues.length ? {issues: error.issues} : {})})
+          return null
+        }
+      })
+      if (batchErrors.length) return batchFailure('rejected', batchErrors)
+      if (preparedBatch.some(item => item.tool.terminal === true)) {
+        return batchFailure('rejected', [{code: 'AGENT_TERMINAL_BATCH_UNSUPPORTED',
+          message: 'La composizione di risposte di tool terminali non è supportata.'}])
+      }
+    }
+
     messages.push(compactAssistantMessage(assistantMessage))
 
-    for (const toolCall of toolCalls) {
+    for (const [callIndex, toolCall] of toolCalls.entries()) {
       const name = String(toolCall?.function?.name || '').trim()
       const tool = toolsByName.get(name)
       let executionStarted = false
       try {
-        if (outcomeControl && toolCalls.length > 1 && toolCalls.some(call => call?.function?.name === AGENT_CONTROL)) {
-          throw new ToolContractError('AGENT_MIGRATION_CONFLICT', 'Decisione mista di migrazione e tool non consentita.')
-        }
         if (outcomeControl && name === AGENT_CONTROL) {
           if (toolCalls.length !== 1 || toolErrors.length) {
             throw new ToolContractError('AGENT_MIGRATION_CONFLICT', 'Il fallback non è consentito dopo tool, errori o decisioni miste.')
@@ -422,12 +478,15 @@ export async function executeGlobalConversation({
               capabilityNotMigrated: decision, toolCalls: [],
               agentTimings: {totalMs: Date.now() - agentStartedAt, modelPasses}}}
         }
-        if (!tool) throw new ToolContractError('TOOL_UNAVAILABLE', 'Tool non disponibile.')
-        assertAutomaticToolPolicy(tool, {credentials, principal})
-        const args = parseToolArguments(toolCall?.function?.arguments)
-        const stateMode = turnState.stateMode
-        const effectiveArgs = mergeToolStateArgs(tool, args, currentAgentState, stateMode)
-        validateToolArguments(tool, effectiveArgs)
+        const {args, stateMode, effectiveArgs} = preparedBatch?.[callIndex] ||
+          prepareApplicationToolCall(toolCall, {toolsByName, credentials, principal,
+            state: currentAgentState, stateMode: turnState.stateMode})
+        if (preparedBatch) {
+          assertAutomaticToolPolicy(tool, {credentials, principal})
+          validateToolArguments(tool, effectiveArgs)
+          if (tool.terminal === true) throw new ToolContractError('AGENT_TERMINAL_BATCH_UNSUPPORTED',
+            'La composizione di risposte di tool terminali non è supportata.')
+        }
         const toolStartedAt = Date.now()
         executionStarted = true
         const result = await tool.execute(effectiveArgs, {
@@ -508,10 +567,11 @@ export async function executeGlobalConversation({
           message: boundaryError ? error.message : 'Errore durante l’esecuzione del tool; esito non verificato.',
           ...(boundaryError && error.issues.length ? {issues: error.issues} : {}),
         }
-        toolErrors.push(toolError)
         if (executionStarted) {
           executedTools.push({name, moduleId: tool.moduleId || null, mode: tool.mode || null, error: true})
         }
+        if (preparedBatch) return batchFailure('failed', [{...toolError, callIndex}])
+        toolErrors.push(toolError)
 
         messages.push({
           role: 'tool',

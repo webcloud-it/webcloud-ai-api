@@ -40,6 +40,14 @@ function fixtureReply(request) {
   if (mode === 'bad-control') return call(AGENT_CONTROL, {capabilityIds: ['invented']})
   if (mode === 'scope-control') return call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read']})
   if (mode === 'mixed') return {tool_calls: [...call(S).tool_calls, ...call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read']}).tool_calls]}
+  if (mode === 'terminal-batch') return {tool_calls: [
+    ...call('renewals_get_plan', {plan: 'DomAssLicBase'}).tool_calls,
+    ...call('renewals_get_plan', {plan: 'Aruba-pecprem'}).tool_calls,
+  ]}
+  if (mode === 'terminal-batch-invalid') return {tool_calls: [
+    ...call('renewals_get_plan', {plan: 'DomAssLicBase'}).tool_calls, ...call(C, {latest: 'yes'}).tool_calls,
+  ]}
+  if (mode === 'nonterminal-batch-failure') return {tool_calls: [...call(S).tool_calls, ...call(C).tool_calls]}
   if (mode === 'error-then-legacy' && requests.filter(item => !item.format).length > 1) return call(AGENT_CONTROL, {capabilityIds: ['facile.webcamgo.read']})
   if (mode === 'empty') return {content: ''}
   if (mode === 'validation' || mode === 'max' || mode === 'error-then-legacy') return call(S, {limit: 0})
@@ -240,4 +248,57 @@ test('Step E: ok=false è un errore di esecuzione e conta una sola invocazione',
   assert.equal(result.response.meta.toolCalls.length, 1)
   assert.equal(result.response.meta.toolErrors[0].code, 'TOOL_EXECUTION_ERROR')
   assert.equal(result.response.data.type, 'tool-error'); assert.equal(legacy.length, 0)
+})
+
+for (const moduleId of ['facile', 'facile.renewals']) {
+  test(`F6 POST /api/chat: ${moduleId}, due dettagli terminali → ERROR, zero esecuzioni/fallback`, async () => {
+    mode = 'terminal-batch'
+    const {status, result} = await post('confronta DomAssLicBase e Aruba-pecprem', moduleId)
+    assert.equal(status, 200)
+    assert.equal(result.ok, false)
+    assert.equal(result.meta.agentOutcome, 'ERROR')
+    assert.equal(result.meta.agentHandled, false)
+    assert.equal(result.meta.toolErrors[0].code, 'AGENT_TERMINAL_BATCH_UNSUPPORTED')
+    assert.equal(result.meta.toolBatch.status, 'rejected')
+    assert.equal(result.meta.toolBatch.requested, 2)
+    assert.equal(result.meta.toolBatch.attempted, 0)
+    assert.equal(result.meta.terminalTool, undefined)
+    assert.equal(result.data.type, 'tool-error')
+    assert.equal(executions.length, 0)
+    assert.equal(legacy.length, 0)
+    assert.equal(requests.length, 1)
+    assert.notEqual(result.meta.legacyFallback, true)
+    assert.equal(result.meta.fallbackReason, undefined)
+  })
+}
+
+test('F6 POST /api/chat: terminale seguito da args invalidi → preflight, zero esecuzioni', async () => {
+  mode = 'terminal-batch-invalid'
+  const {result} = await post('due letture')
+  assert.equal(result.meta.agentOutcome, 'ERROR')
+  assert.equal(result.meta.toolErrors[0].code, 'TOOL_VALIDATION_ERROR')
+  assert.equal(result.meta.toolErrors[0].callIndex, 1)
+  assert.equal(executions.length, 0)
+  assert.equal(legacy.length, 0)
+})
+
+test('F6 POST /api/chat: secondo read fallito non presenta il primo come completo', async () => {
+  mode = 'nonterminal-batch-failure'
+  for (const tool of tools) tool.terminal = false
+  tools.find(tool => tool.name === C).execute = async () => {
+    executions.push({name: C}); throw new Error('PRIVATE_BATCH_FAILURE')
+  }
+  const {result} = await post('due letture')
+  assert.equal(result.ok, false)
+  assert.equal(result.meta.agentOutcome, 'ERROR')
+  assert.equal(result.meta.toolErrors[0].code, 'TOOL_EXECUTION_ERROR')
+  assert.equal(result.meta.toolBatch.status, 'failed')
+  assert.equal(result.meta.toolBatch.attempted, 2)
+  assert.equal(result.meta.toolBatch.completed, 1)
+  assert.deepEqual(executions.map(item => item.name), [S, C])
+  assert.equal(result.data.type, 'tool-error')
+  assert.equal(result.meta.agentState, undefined)
+  assert.equal(legacy.length, 0)
+  assert.equal(requests.length, 1)
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE_BATCH_FAILURE/)
 })

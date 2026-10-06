@@ -254,8 +254,9 @@ test('F4: ambiguous supplier is a structured successful clarification with no pl
 test('F4: catalog-list contract and protected core/routing/provider files unchanged', () => {
   const catalogTool = getRegisteredTools({credentials}).find(x => x.name === 'renewals_list_entities')
   assert.deepEqual(Object.keys(catalogTool.definition.function.parameters.properties), ['entityType', 'limit', 'offset'])
+  // Batch execution is now covered by F6; the other protected files stay fixed.
   for (const path of ['src/modules/facile/renewals/catalogEntities.js', 'src/routes/chat.js',
-    'src/core/orchestrator/globalConversation.js', 'src/core/orchestrator/globalChat.js',
+    'src/core/orchestrator/globalChat.js',
     'src/core/orchestrator/agentOutcome.js', 'src/core/tools/agentState.js', 'src/core/tools/proposalGate.js',
     'src/core/tools/toolContract.js', 'src/core/providers/ollamaProvider.js']) {
     assert.equal(readFileSync(path, 'utf8').replaceAll('\r\n', '\n'), execFileSync('git', ['show', `HEAD:${path}`], {encoding: 'utf8'}))
